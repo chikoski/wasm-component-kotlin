@@ -550,4 +550,72 @@ class WitToKotlinPoetConverterTest {
             actualOutput,
         )
     }
+
+    @Test
+    fun `all 4 examples under examples directory compile and execute cleanly`(@TempDir tempDir: Path) {
+        data class ExampleSpec(
+            val dirName: String,
+            val witFixture: String,
+            val pkg: String,
+            val generatedWorldFile: String,
+        )
+
+        val examples = listOf(
+            ExampleSpec("01-arithmetic", "arithmetic.wit", "com.example.arithmetic", "ArithmeticWorld.kt"),
+            ExampleSpec("02-host-imports", "live_calc.wit", "com.example.live", "LiveCalcWorld.kt"),
+            ExampleSpec("03-counter-resource", "counter.wit", "com.example.counter", "CounterWorldWorld.kt"),
+            ExampleSpec("04-algebraic-types-and-mock", "calculator.wit", "com.example.wasm", "CalculatorWorld.kt"),
+        )
+
+        for (ex in examples) {
+            val exOutDir = tempDir.resolve(ex.dirName)
+            val witUrl = requireNotNull(javaClass.getResource("/fixtures/${ex.witFixture}"))
+            val witPath = Paths.get(witUrl.toURI())
+
+            Wasm2KtCommand().parse(
+                listOf(
+                    "--wasm-tools-path",
+                    "/Users/chikoski/.cargo/bin/wasm-tools",
+                    "-o",
+                    exOutDir.toString(),
+                    "-p",
+                    ex.pkg,
+                    witPath.toString(),
+                ),
+            )
+
+            val pkgDir = exOutDir.resolve(ex.pkg.replace('.', '/'))
+            val exampleMainPath = Paths.get("examples/${ex.dirName}/Main.kt").toAbsolutePath()
+            val classesDir = exOutDir.resolve("classes")
+            Files.createDirectories(classesDir)
+
+            val exitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+                System.err,
+                "-Xcontext-parameters",
+                "-jvm-target",
+                "21",
+                "-no-stdlib",
+                "-classpath",
+                System.getProperty("java.class.path"),
+                "-d",
+                classesDir.toString(),
+                pkgDir.resolve("WitSupport.kt").toString(),
+                pkgDir.resolve(ex.generatedWorldFile).toString(),
+                exampleMainPath.toString(),
+            )
+            assertEquals(
+                org.jetbrains.kotlin.cli.common.ExitCode.OK,
+                exitCode,
+                "Example ${ex.dirName} must compile cleanly",
+            )
+
+            val classLoader = java.net.URLClassLoader(
+                arrayOf(classesDir.toUri().toURL()),
+                javaClass.classLoader,
+            )
+            val mainClass = classLoader.loadClass("${ex.pkg}.MainKt")
+            val mainMethod = mainClass.getDeclaredMethod("main")
+            mainMethod.invoke(null)
+        }
+    }
 }
