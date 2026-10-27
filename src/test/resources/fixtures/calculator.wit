@@ -1,0 +1,45 @@
+package example:calc@0.1.0;
+
+/// A simple calculator interface
+interface types {
+    /// 2D point
+    record point {
+        x: f32,
+        y: f32,
+    }
+
+    enum color {
+        red,
+        green,
+        blue,
+    }
+
+    flags permissions {
+        read,
+        write,
+        execute,
+    }
+
+    variant status {
+        ok,
+        err(string),
+        code(u32),
+    }
+
+    type user-id = u64;
+
+    resource counter {
+        constructor(init: u32);
+        increment: func();
+        get-value: func() -> u32;
+        merge: static func(a: borrow<counter>, b: own<counter>) -> counter;
+    }
+}
+
+world calculator {
+    use types.{point, color, permissions, status, user-id, counter};
+
+    import log: func(msg: string);
+    export add: func(a: s32, b: s32) -> s32;
+    export compute: func(p: point, opt: option<string>, list-data: list<u8>, tup: tuple<u32, string>) -> result<status, string>;
+}

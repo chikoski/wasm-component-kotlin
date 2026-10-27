@@ -1,0 +1,411 @@
+{
+  "worlds": [
+    {
+      "name": "calculator",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "point": {
+          "type": 7
+        },
+        "color": {
+          "type": 8
+        },
+        "permissions": {
+          "type": 9
+        },
+        "status": {
+          "type": 10
+        },
+        "user-id": {
+          "type": 11
+        },
+        "counter": {
+          "type": 12
+        },
+        "log": {
+          "function": {
+            "name": "log",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "msg",
+                "type": "string"
+              }
+            ],
+            "results": []
+          }
+        }
+      },
+      "exports": {
+        "add": {
+          "function": {
+            "name": "add",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "a",
+                "type": "s32"
+              },
+              {
+                "name": "b",
+                "type": "s32"
+              }
+            ],
+            "results": [
+              {
+                "type": "s32"
+              }
+            ]
+          }
+        },
+        "compute": {
+          "function": {
+            "name": "compute",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "p",
+                "type": 7
+              },
+              {
+                "name": "opt",
+                "type": 13
+              },
+              {
+                "name": "list-data",
+                "type": 14
+              },
+              {
+                "name": "tup",
+                "type": 15
+              }
+            ],
+            "results": [
+              {
+                "type": 16
+              }
+            ]
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "types",
+      "types": {
+        "point": 0,
+        "color": 1,
+        "permissions": 2,
+        "status": 3,
+        "user-id": 4,
+        "counter": 5
+      },
+      "functions": {
+        "[constructor]counter": {
+          "name": "[constructor]counter",
+          "kind": {
+            "constructor": 5
+          },
+          "params": [
+            {
+              "name": "init",
+              "type": "u32"
+            }
+          ],
+          "results": [
+            {
+              "type": 17
+            }
+          ]
+        },
+        "[method]counter.increment": {
+          "name": "[method]counter.increment",
+          "kind": {
+            "method": 5
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 6
+            }
+          ],
+          "results": []
+        },
+        "[method]counter.get-value": {
+          "name": "[method]counter.get-value",
+          "kind": {
+            "method": 5
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 6
+            }
+          ],
+          "results": [
+            {
+              "type": "u32"
+            }
+          ]
+        },
+        "[static]counter.merge": {
+          "name": "[static]counter.merge",
+          "kind": {
+            "static": 5
+          },
+          "params": [
+            {
+              "name": "a",
+              "type": 6
+            },
+            {
+              "name": "b",
+              "type": 17
+            }
+          ],
+          "results": [
+            {
+              "type": 17
+            }
+          ]
+        }
+      },
+      "docs": {
+        "contents": "A simple calculator interface"
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": "point",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "x",
+              "type": "f32"
+            },
+            {
+              "name": "y",
+              "type": "f32"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      },
+      "docs": {
+        "contents": "2D point"
+      }
+    },
+    {
+      "name": "color",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "red"
+            },
+            {
+              "name": "green"
+            },
+            {
+              "name": "blue"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "permissions",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "read"
+            },
+            {
+              "name": "write"
+            },
+            {
+              "name": "execute"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "status",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "ok",
+              "type": null
+            },
+            {
+              "name": "err",
+              "type": "string"
+            },
+            {
+              "name": "code",
+              "type": "u32"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "user-id",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "counter",
+      "kind": "resource",
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 5
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "point",
+      "kind": {
+        "type": 0
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "color",
+      "kind": {
+        "type": 1
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "permissions",
+      "kind": {
+        "type": 2
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "status",
+      "kind": {
+        "type": 3
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "user-id",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "counter",
+      "kind": {
+        "type": 5
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            "u32",
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 10,
+          "err": "string"
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 5
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:calc@0.1.0",
+      "interfaces": {
+        "types": 0
+      },
+      "worlds": {
+        "calculator": 0
+      }
+    }
+  ]
+}
