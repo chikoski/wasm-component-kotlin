@@ -360,4 +360,194 @@ class WitToKotlinPoetConverterTest {
             actualOutput,
         )
     }
+
+    @Test
+    fun `native FFM Wasmtime execution of arithmetic world (add, sub, mul, div)`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/arithmetic.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/arithmetic.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        // 1. Generate Kotlin host bindings from both arithmetic.wit (ArithmeticWorld) and arithmetic.wasm (RootWorld)
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.arithmetic",
+                witPath.toString(),
+            ),
+        )
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.arithmetic",
+                wasmPath.toString(),
+            ),
+        )
+
+        // 2. Write a Kotlin harness that calls add, sub, mul, div on ArithmeticWorld
+        val harnessPath = tempDir.resolve("com/example/arithmetic/ArithmeticHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.arithmetic
+
+            import java.nio.file.Path
+
+            fun runArithmeticComponent(wasmPath: Path): String {
+                return ArithmeticWorld.withSession(wasmPath) {
+                    val sum = ArithmeticWorld.add(20, 7)
+                    val diff = ArithmeticWorld.sub(50, 8)
+                    val prod = ArithmeticWorld.mul(-6, -7)
+                    val quot = ArithmeticWorld.div(84, 2)
+                    "add=${'$'}sum,sub=${'$'}diff,mul=${'$'}prod,div=${'$'}quot"
+                }
+            }
+            """.trimIndent(),
+        )
+
+        // 3. Compile generated bindings + ArithmeticHarness.kt with K2JVMCompiler
+        val pkgDir = tempDir.resolve("com/example/arithmetic")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("ArithmeticWorld.kt").toString(),
+            pkgDir.resolve("RootWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated ArithmeticWorld & RootWorld bindings must compile cleanly")
+
+        // 4. Execute on real Wasmtime via JVM Foreign Function & Memory (FFM) API
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.arithmetic.ArithmeticHarnessKt")
+        val method = harnessClass.getDeclaredMethod("runArithmeticComponent", Path::class.java)
+        val actualOutput = method.invoke(null, wasmPath) as String
+
+        assertEquals(
+            "add=27,sub=42,mul=42,div=42",
+            actualOutput,
+        )
+    }
+
+    @Test
+    fun `native FFM Wasmtime execution of counter resource world (constructor, methods, borrow, own, close)`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        // 1. Generate Kotlin host bindings from both counter.wit (CounterWorldWorld) and counter.wasm (RootWorld)
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.counter",
+                witPath.toString(),
+            ),
+        )
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.counter",
+                wasmPath.toString(),
+            ),
+        )
+
+        // 2. Write a Kotlin harness that exercises Counter resource creation, methods, borrow/own static merge, and AutoCloseable (.use)
+        val harnessPath = tempDir.resolve("com/example/counter/CounterHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.counter
+
+            import java.nio.file.Path
+
+            fun runCounterComponent(wasmPath: Path): String {
+                return CounterWorldWorld.withSession(wasmPath) {
+                    CounterWorldWorld.Counter(10).use { c1 ->
+                        c1.increment()
+                        c1.increment()
+                        c1.add(5)
+                        val v1 = c1.getValue() // 10 + 1 + 1 + 5 = 17
+
+                        val c2 = CounterWorldWorld.Counter(25)
+                        c2.increment() // 26
+
+                        // merge(a: borrow<counter>, b: own<counter>) -> own<counter>
+                        // c1 is borrowed (remains usable), c2's ownership is consumed
+                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                            val v1After = c1.getValue() // still 17
+                            val vMerged = merged.getValue() // 17 + 26 = 43
+                            "v1=${'$'}v1,v1After=${'$'}v1After,c2Closed=${'$'}{c2.isClosed},merged=${'$'}vMerged"
+                        }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        // 3. Compile generated bindings + CounterHarness.kt with K2JVMCompiler
+        val pkgDir = tempDir.resolve("com/example/counter")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            pkgDir.resolve("RootWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated CounterWorldWorld & RootWorld bindings must compile cleanly")
+
+        // 4. Execute on real Wasmtime via JVM Foreign Function & Memory (FFM) API
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.counter.CounterHarnessKt")
+        val method = harnessClass.getDeclaredMethod("runCounterComponent", Path::class.java)
+        val actualOutput = method.invoke(null, wasmPath) as String
+
+        assertEquals(
+            "v1=17,v1After=17,c2Closed=true,merged=43",
+            actualOutput,
+        )
+    }
 }

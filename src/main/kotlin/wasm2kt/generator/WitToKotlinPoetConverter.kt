@@ -384,7 +384,7 @@ class WitToKotlinPoetConverter(
         }
         world.exports.values.forEach { item ->
             if (item is WitWorldItem.FunctionItem) addFn(item.function)
-            if (item is WitWorldItem.InterfaceRef) {
+            if (item is WitWorldItem.InterfaceRef && item.id !in referencedInterfaceIds) {
                 resolve.interfaces.getOrNull(item.id)?.functions?.values?.forEach(::addFn)
             }
         }

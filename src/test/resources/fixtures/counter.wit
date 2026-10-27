@@ -1,0 +1,16 @@
+package example:counter@0.1.0;
+
+interface counter-api {
+    /// Stateful counter resource backed by linear memory inside the Wasm component
+    resource counter {
+        constructor(init: s32);
+        increment: func();
+        add: func(delta: s32);
+        get-value: func() -> s32;
+        merge: static func(a: borrow<counter>, b: own<counter>) -> counter;
+    }
+}
+
+world counter-world {
+    export counter-api;
+}
