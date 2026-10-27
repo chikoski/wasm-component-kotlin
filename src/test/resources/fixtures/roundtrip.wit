@@ -1,0 +1,46 @@
+package example:roundtrip@0.1.0;
+
+interface env-provider {
+    get-multiplier: func() -> s32;
+    format-tag: func(prefix: string, code: u32) -> string;
+}
+
+interface math-api {
+    scale: func(v: s32) -> s32;
+}
+
+world roundtrip {
+    import env-provider;
+    export math-api;
+
+    flags permissions {
+        read,
+        write,
+        execute,
+    }
+
+    enum priority {
+        low,
+        medium,
+        high,
+    }
+
+    record item-summary {
+        count: u32,
+        perms: permissions,
+        prio: priority,
+    }
+
+    variant action {
+        reset,
+        add-count(u32),
+        set-priority(priority),
+    }
+
+    export transform-summary: func(s: item-summary, act: action) -> item-summary;
+    export check-even: func(v: s32) -> result<u32, s32>;
+    export ping-result: func(ok: bool) -> result;
+    export nested-option: func(v: option<option<s32>>) -> option<option<s32>>;
+    export echo-u64: func(v: u64) -> u64;
+    export describe-code: func(prefix: string, code: u32) -> string;
+}

@@ -618,4 +618,418 @@ class WitToKotlinPoetConverterTest {
             mainMethod.invoke(null)
         }
     }
+
+    @Test
+    fun `native FFM Wasmtime roundtrip of records, variants, enums, flags, nested options, unit results, u64 boundaries, and named interfaces`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        // 1. Generate bindings from roundtrip.wit
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.roundtrip",
+                witPath.toString(),
+            ),
+        )
+
+        // 2. Write a Kotlin harness exercising all roundtrip types, host interface imports with return values, and exported sub-interfaces
+        val harnessPath = tempDir.resolve("com/example/roundtrip/RoundtripHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.roundtrip
+
+            import java.nio.file.Path
+
+            fun runRoundtripComponent(wasmPath: Path): String {
+                val imports = object : RoundtripWorld.Imports {
+                    override val envProvider = object : RoundtripWorld.EnvProvider {
+                        override fun getMultiplier(): Int = 6
+                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                    }
+                }
+
+                return RoundtripWorld.withSession(wasmPath, imports) {
+                    // 1. Exported named interface calling imported named interface returning s32
+                    val scaled = with(RoundtripWorld.MathApi) { scale(7) } // 7 * 6 = 42
+
+                    // 2. Exported function calling imported named interface with u32 and returning String
+                    val tag = RoundtripWorld.describeCode("ERR", 404u)
+
+                    // 3. Record + Flags + Enum + Variant roundtrip
+                    val initial = RoundtripWorld.ItemSummary(
+                        count = 10u,
+                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.EXECUTE,
+                        prio = RoundtripWorld.Priority.LOW,
+                    )
+                    val afterAdd = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(5u))
+                    val afterPrio = RoundtripWorld.transformSummary(
+                        afterAdd,
+                        RoundtripWorld.Action.SetPriority(RoundtripWorld.Priority.HIGH),
+                    )
+                    val afterReset = RoundtripWorld.transformSummary(afterPrio, RoundtripWorld.Action.Reset)
+
+                    check(afterPrio.count == 15u) { "afterPrio.count=${'$'}{afterPrio.count}" }
+                    check(afterPrio.perms.read && !afterPrio.perms.write && afterPrio.perms.execute) {
+                        "afterPrio.perms.raw=${'$'}{afterPrio.perms.raw}, initial.perms.raw=${'$'}{initial.perms.raw}, afterAdd.perms.raw=${'$'}{afterAdd.perms.raw}"
+                    }
+                    check(afterPrio.prio == RoundtripWorld.Priority.HIGH) { "afterPrio.prio=${'$'}{afterPrio.prio}" }
+                    check(afterReset.count == 0u && afterReset.perms == RoundtripWorld.Permissions.NONE && afterReset.prio == RoundtripWorld.Priority.LOW) {
+                        "afterReset=${'$'}afterReset"
+                    }
+
+                    // 4. result<u32, s32> and result (WitResult<Unit, Unit>)
+                    val evenOk = RoundtripWorld.checkEven(84)
+                    val oddErr = RoundtripWorld.checkEven(-7)
+                    val pingOk = RoundtripWorld.pingResult(true)
+                    val pingErr = RoundtripWorld.pingResult(false)
+
+                    val evenStr = (evenOk as WitResult.Ok).value.toString() + ":" + (oddErr as WitResult.Err).error.toString()
+                    val pingStr = "${'$'}{pingOk is WitResult.Ok}:${'$'}{pingErr is WitResult.Err}"
+
+                    // 5. Nested option<option<s32>> distinguishing None, Some(None), and Some(Some(v))
+                    val optNone = RoundtripWorld.nestedOption(WitOption.None)
+                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(WitOption.None))
+                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(23)))
+
+                    val optStr = listOf(
+                        optNone is WitOption.None,
+                        optSomeNone is WitOption.Some && optSomeNone.value is WitOption.None,
+                        (optSomeVal as WitOption.Some).value.getOrNull() == 123,
+                    ).joinToString(",")
+
+                    // 6. u64 boundary value (ULong.MAX_VALUE)
+                    val maxU64 = RoundtripWorld.echoU64(ULong.MAX_VALUE)
+                    check(maxU64 == ULong.MAX_VALUE)
+
+                    "scaled=${'$'}scaled,tag=${'$'}tag,count=${'$'}{afterPrio.count},prio=${'$'}{afterPrio.prio},even=${'$'}evenStr,ping=${'$'}pingStr,opt=${'$'}optStr,u64Max=${'$'}{maxU64 == ULong.MAX_VALUE}"
+                }
+            }
+            """.trimIndent(),
+        )
+
+        // 3. Compile generated bindings + RoundtripHarness.kt
+        val pkgDir = tempDir.resolve("com/example/roundtrip")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("RoundtripWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "RoundtripWorld bindings must compile cleanly")
+
+        // 4. Execute on real Wasmtime via JVM FFM API
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.roundtrip.RoundtripHarnessKt")
+        val method = harnessClass.getDeclaredMethod("runRoundtripComponent", Path::class.java)
+        val actualOutput = method.invoke(null, wasmPath) as String
+
+        assertEquals(
+            "scaled=42,tag=ERR#404,count=15,prio=HIGH,even=42:-7,ping=true:true,opt=true,true,true,u64Max=true",
+            actualOutput,
+        )
+    }
+
+    @Test
+    fun `resource use-after-close and use-after-move throw IllegalStateException on real Wasmtime`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.counter.err",
+                witPath.toString(),
+            ),
+        )
+
+        val harnessPath = tempDir.resolve("com/example/counter/err/CounterErrorHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.counter.err
+
+            import java.nio.file.Path
+
+            fun verifyResourceSafety(wasmPath: Path): String {
+                return CounterWorldWorld.withSession(wasmPath) {
+                    val c1 = CounterWorldWorld.Counter(10)
+                    c1.close()
+                    val afterCloseError = try {
+                        c1.increment()
+                        "no-error"
+                    } catch (e: IllegalStateException) {
+                        "closed-error"
+                    }
+
+                    val a = CounterWorldWorld.Counter(5)
+                    val b = CounterWorldWorld.Counter(7)
+                    val merged = CounterWorldWorld.Counter.merge(a, b)
+                    val afterMoveError = try {
+                        b.getValue()
+                        "no-error"
+                    } catch (e: IllegalStateException) {
+                        "moved-error"
+                    }
+
+                    a.close()
+                    merged.close()
+                    "${'$'}afterCloseError,${'$'}afterMoveError"
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/counter/err")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
+
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.counter.err.CounterErrorHarnessKt")
+        val method = harnessClass.getDeclaredMethod("verifyResourceSafety", Path::class.java)
+        val actualOutput = method.invoke(null, wasmPath) as String
+
+        assertEquals("closed-error,moved-error", actualOutput)
+    }
+
+    @Test
+    fun `flags with more than 32 bits use ULong backing type and compile cleanly`(@TempDir tempDir: Path) {
+        val flagNames = (0 until 40).joinToString(", ") { idx ->
+            val tens = ('a' + (idx / 10))
+            val ones = ('a' + (idx % 10))
+            "flag-$tens$ones"
+        }
+        val witText = """
+            package example:largeflags@0.1.0;
+
+            world large-flags-world {
+                flags permissions64 {
+                    $flagNames
+                }
+                export echo-flags: func(f: permissions64) -> permissions64;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("large_flags.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.flags64",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/flags64")
+        val worldFile = pkgDir.resolve("LargeFlagsWorldWorld.kt")
+        val content = Files.readString(worldFile)
+
+        assertTrue(content.contains("val raw: ULong = 0uL"), "Flags > 32 must be backed by ULong")
+        assertTrue(content.contains("val FLAG_DF: Permissions64 = Permissions64((1uL shl 35))"))
+
+        val harnessPath = pkgDir.resolve("FlagsHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.flags64
+
+            fun testLargeFlags(): Boolean {
+                val combined = LargeFlagsWorldWorld.Permissions64.FLAG_AA or LargeFlagsWorldWorld.Permissions64.FLAG_DF
+                return combined.flagAa && !combined.flagAb && combined.flagDf
+            }
+            """.trimIndent(),
+        )
+
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
+
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.flags64.FlagsHarnessKt")
+        val res = harnessClass.getDeclaredMethod("testLargeFlags").invoke(null) as Boolean
+        assertTrue(res)
+    }
+
+    @Test
+    fun `WIT escaped identifiers and Kotlin reserved keywords compile and execute cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:keywords@0.1.0;
+
+            world kw-world {
+                record %object {
+                    %type: string,
+                    val: s32,
+                    in: bool,
+                }
+                export %return: func(fun: string, is: bool, when: s32) -> %object;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("keywords.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.kw",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/kw")
+        val worldFile = pkgDir.resolve("KwWorldWorld.kt")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compilerExitCode,
+            "Kotlin reserved keywords in function, parameter, and field names must be properly escaped and compile cleanly",
+        )
+    }
+
+    @Test
+    fun `multi-world selection via --world flag and standalone interface synthesis`(@TempDir tempDir: Path) {
+        val multiWorldWit = """
+            package example:multi@0.1.0;
+
+            world alpha {
+                export ping-alpha: func() -> s32;
+            }
+
+            world beta {
+                export ping-beta: func() -> string;
+            }
+        """.trimIndent()
+        val multiWitFile = tempDir.resolve("multi.wit")
+        Files.writeString(multiWitFile, multiWorldWit)
+
+        val selectedOutDir = tempDir.resolve("selected")
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "--world",
+                "alpha",
+                "-o",
+                selectedOutDir.toString(),
+                "-p",
+                "com.example.multi",
+                multiWitFile.toString(),
+            ),
+        )
+        assertTrue(Files.exists(selectedOutDir.resolve("com/example/multi/AlphaWorld.kt")))
+        assertTrue(!Files.exists(selectedOutDir.resolve("com/example/multi/BetaWorld.kt")))
+
+        // Standalone interface file without any world definition
+        val ifaceOnlyWit = """
+            package example:standalone@0.1.0;
+
+            interface greeter {
+                greet: func(name: string) -> string;
+            }
+        """.trimIndent()
+        val ifaceWitFile = tempDir.resolve("standalone.wit")
+        Files.writeString(ifaceWitFile, ifaceOnlyWit)
+
+        val standaloneOutDir = tempDir.resolve("standalone")
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                standaloneOutDir.toString(),
+                "-p",
+                "com.example.standalone",
+                ifaceWitFile.toString(),
+            ),
+        )
+        val defaultWorldFile = standaloneOutDir.resolve("com/example/standalone/DefaultWorld.kt")
+        assertTrue(Files.exists(defaultWorldFile), "DefaultWorld.kt should be synthesized when WIT has only interfaces")
+    }
 }

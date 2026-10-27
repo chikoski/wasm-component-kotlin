@@ -4,10 +4,12 @@ object NamingConventions {
     private fun splitWords(witName: String): List<String> =
         witName
             .trim()
+            .removePrefix("%")
             .removePrefix("[constructor]")
             .removePrefix("[method]")
             .removePrefix("[static]")
             .split('-', '_', '.', '/')
+            .map { it.removePrefix("%") }
             .filter { it.isNotEmpty() }
 
     /**

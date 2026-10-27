@@ -77,25 +77,35 @@ fn json_to_val(
             j.as_i64().ok_or_else(|| anyhow!("Expected s8, got {}", j))? as i8,
         )),
         Type::U8 => Ok(Val::U8(
-            j.as_u64().ok_or_else(|| anyhow!("Expected u8, got {}", j))? as u8,
+            j.as_u64()
+                .map(|v| v as u8)
+                .or_else(|| j.as_i64().map(|v| v as u8))
+                .ok_or_else(|| anyhow!("Expected u8, got {}", j))?,
         )),
         Type::S16 => Ok(Val::S16(
             j.as_i64().ok_or_else(|| anyhow!("Expected s16, got {}", j))? as i16,
         )),
         Type::U16 => Ok(Val::U16(
-            j.as_u64().ok_or_else(|| anyhow!("Expected u16, got {}", j))? as u16,
+            j.as_u64()
+                .map(|v| v as u16)
+                .or_else(|| j.as_i64().map(|v| v as u16))
+                .ok_or_else(|| anyhow!("Expected u16, got {}", j))?,
         )),
         Type::S32 => Ok(Val::S32(
             j.as_i64().ok_or_else(|| anyhow!("Expected s32, got {}", j))? as i32,
         )),
         Type::U32 => Ok(Val::U32(
-            j.as_u64().ok_or_else(|| anyhow!("Expected u32, got {}", j))? as u32,
+            j.as_u64()
+                .map(|v| v as u32)
+                .or_else(|| j.as_i64().map(|v| v as u32))
+                .ok_or_else(|| anyhow!("Expected u32, got {}", j))?,
         )),
         Type::S64 => Ok(Val::S64(
             j.as_i64().ok_or_else(|| anyhow!("Expected s64, got {}", j))?,
         )),
         Type::U64 => Ok(Val::U64(
             j.as_u64()
+                .or_else(|| j.as_i64().map(|v| v as u64))
                 .or_else(|| j.as_str()?.parse::<u64>().ok())
                 .ok_or_else(|| anyhow!("Expected u64, got {}", j))?,
         )),
@@ -230,7 +240,7 @@ fn json_to_val(
                     })
                     .collect();
                 Ok(Val::Flags(names?))
-            } else if let Some(bits) = j.as_u64() {
+            } else if let Some(bits) = j.as_u64().or_else(|| j.as_i64().map(|v| v as u64)).or_else(|| j.as_str()?.parse::<u64>().ok()) {
                 let mut active = Vec::new();
                 for (idx, flag_name) in flags_ty.names().enumerate() {
                     if (bits & (1u64 << idx)) != 0 {
@@ -396,12 +406,13 @@ fn register_host_imports(
     // Auto-discover all imported functions and interfaces from the component type
     for (import_name, import_item) in comp_ty.imports(engine) {
         match import_item {
-            wasmtime::component::types::ComponentItem::ComponentFunc(_) => {
+            wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) => {
                 let name_owned = import_name.to_string();
+                let result_types: Vec<Type> = func_ty.results().collect();
                 linker
                     .root()
                     .func_new(import_name, move |mut ctx, params, results| {
-                        invoke_host_callback(&mut ctx, &name_owned, params, results)
+                        invoke_host_callback(&mut ctx, &name_owned, params, results, &result_types)
                     })?;
             }
             wasmtime::component::types::ComponentItem::ComponentInstance(inst_ty) => {
@@ -414,10 +425,11 @@ fn register_host_imports(
                     .map(|s| s.split('@').next().unwrap_or(s))
                     .unwrap_or(import_name);
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
-                    if let wasmtime::component::types::ComponentItem::ComponentFunc(_) = export_item {
+                    if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item {
                         let callback_key = format!("{}#{}", short_iface, export_fn_name);
+                        let result_types: Vec<Type> = func_ty.results().collect();
                         inst.func_new(export_fn_name, move |mut ctx, params, results| {
-                            invoke_host_callback(&mut ctx, &callback_key, params, results)
+                            invoke_host_callback(&mut ctx, &callback_key, params, results, &result_types)
                         })?;
                     }
                 }
@@ -435,6 +447,7 @@ fn invoke_host_callback(
     import_name: &str,
     params: &[Val],
     results: &mut [Val],
+    result_types: &[Type],
 ) -> Result<()> {
     let cb = match ctx.data().host_callback {
         Some(f) => f,
@@ -484,19 +497,16 @@ fn invoke_host_callback(
         let resp_str = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }.to_str()?;
         if !resp_str.is_empty() {
             let resp_json: JsonValue = serde_json::from_str(resp_str)?;
-            // Populate single primitive result if applicable
-            if results.len() == 1 {
-                results[0] = match &results[0] {
-                    Val::Bool(_) => Val::Bool(resp_json.as_bool().unwrap_or(false)),
-                    Val::S32(_) => Val::S32(resp_json.as_i64().unwrap_or(0) as i32),
-                    Val::U32(_) => Val::U32(resp_json.as_u64().unwrap_or(0) as u32),
-                    Val::S64(_) => Val::S64(resp_json.as_i64().unwrap_or(0)),
-                    Val::U64(_) => Val::U64(resp_json.as_u64().unwrap_or(0)),
-                    Val::Float32(_) => Val::Float32(resp_json.as_f64().unwrap_or(0.0) as f32),
-                    Val::Float64(_) => Val::Float64(resp_json.as_f64().unwrap_or(0.0)),
-                    Val::String(_) => Val::String(resp_json.as_str().unwrap_or("").to_string()),
-                    other => other.clone(),
-                };
+            if results.len() == 1 && result_types.len() == 1 {
+                results[0] = json_to_val(
+                    &resp_json,
+                    &result_types[0],
+                    &mut ctx.data_mut().resources,
+                )?;
+            } else if let Some(arr) = resp_json.as_array() {
+                for ((slot, r_ty), item_j) in results.iter_mut().zip(result_types.iter()).zip(arr.iter()) {
+                    *slot = json_to_val(item_j, r_ty, &mut ctx.data_mut().resources)?;
+                }
             }
         }
     }

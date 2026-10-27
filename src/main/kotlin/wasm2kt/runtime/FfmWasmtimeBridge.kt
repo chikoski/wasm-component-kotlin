@@ -266,7 +266,7 @@ internal class HostCallbackDispatcher(
 
         val methodName = NamingConventions.toCamelCase(witFuncName)
         val method = targetReceiver.javaClass.methods.firstOrNull {
-            it.name == methodName && it.parameterCount == argsArray.size
+            (it.name == methodName || it.name.startsWith("$methodName-")) && it.parameterCount == argsArray.size
         } ?: error("Host import method '$methodName' with ${argsArray.size} parameters not found on ${targetReceiver.javaClass.name}")
 
         method.isAccessible = true
@@ -542,6 +542,15 @@ object FfmJsonCodec {
     }
 
     private fun readProperty(instance: Any, propName: String): Any? {
+        val kProp = instance::class.declaredMemberProperties.firstOrNull { it.name == propName }
+        if (kProp != null) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                return (kProp as kotlin.reflect.KProperty1<Any, *>).get(instance)
+            } catch (_: Throwable) {
+                // Fall back to Java reflection below
+            }
+        }
         val getterName = "get${propName.replaceFirstChar { it.uppercaseChar() }}"
         val method = instance.javaClass.methods.firstOrNull {
             (it.name == getterName || it.name.startsWith("$getterName-")) && it.parameterCount == 0

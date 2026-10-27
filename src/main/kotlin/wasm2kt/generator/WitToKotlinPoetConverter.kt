@@ -690,16 +690,19 @@ class WitToKotlinPoetConverter(
                         .contextParameter("session", sessionClassName)
                         .returns(resourceClassName)
                     fn.docs?.contents?.let { invokeBuilder.addKdoc("%L\n", it.trim()) }
-                    val argNames = mutableListOf<String>()
+                    val argFormatPlaceholders = mutableListOf<String>()
+                    val formatArgs = mutableListOf<Any>(resourceWitName)
                     for (param in fn.params) {
                         val paramName = NamingConventions.toCamelCase(param.name)
                         invokeBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        argNames += paramName
+                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
+                        argFormatPlaceholders += fmt
+                        formatArgs += argVal
                     }
-                    val argsJoined = if (argNames.isEmpty()) "" else ", " + argNames.joinToString(", ")
+                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
                     invokeBuilder.addStatement(
                         "val handle = session.runtimeSession.newResource(%S$argsJoined)",
-                        resourceWitName,
+                        *formatArgs.toTypedArray(),
                     )
                     invokeBuilder.addStatement("return %T(session, handle)", resourceClassName)
                     companionBuilder.addFunction(invokeBuilder.build())
@@ -709,38 +712,35 @@ class WitToKotlinPoetConverter(
                     val methodBuilder = FunSpec.builder(methodName)
                     fn.docs?.contents?.let { methodBuilder.addKdoc("%L\n", it.trim()) }
                     val userParams = fn.params.dropWhile { it.name == "self" }
-                    val argExprs = mutableListOf<String>()
+                    val argFormatPlaceholders = mutableListOf<String>()
+                    val extraFormatArgs = mutableListOf<Any>()
                     for (param in userParams) {
                         val paramName = NamingConventions.toCamelCase(param.name)
                         methodBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        argExprs += formatArgumentExpression(paramName, param.type)
+                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
+                        argFormatPlaceholders += fmt
+                        extraFormatArgs += argVal
                     }
                     methodBuilder.addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     methodBuilder.returns(returnType)
-                    val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
+                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
                     val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
                     if (returnType == UNIT) {
                         methodBuilder.addStatement(
                             "session.runtimeSession.invokeMethod<Unit>(handle, %S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            typeOfMember,
-                            UNIT,
+                            *(listOf<Any>(fn.name, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
                         )
                     } else if (returnsOwnedResource(fn)) {
                         methodBuilder.addStatement(
                             "val resultHandle = session.runtimeSession.invokeMethod<Int>(handle, %S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            typeOfMember,
-                            INT,
+                            *(listOf<Any>(fn.name, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
                         )
                         methodBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
                         methodBuilder.addStatement(
                             "return session.runtimeSession.invokeMethod(handle, %S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            typeOfMember,
-                            returnType,
+                            *(listOf<Any>(fn.name, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
                         )
                     }
                     builder.addFunction(methodBuilder.build())
@@ -750,36 +750,34 @@ class WitToKotlinPoetConverter(
                     val staticBuilder = FunSpec.builder(staticName)
                         .contextParameter("session", sessionClassName)
                     fn.docs?.contents?.let { staticBuilder.addKdoc("%L\n", it.trim()) }
-                    val argExprs = mutableListOf<String>()
+                    val argFormatPlaceholders = mutableListOf<String>()
+                    val extraFormatArgs = mutableListOf<Any>()
                     for (param in fn.params) {
                         val paramName = NamingConventions.toCamelCase(param.name)
                         staticBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        argExprs += formatArgumentExpression(paramName, param.type)
+                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
+                        argFormatPlaceholders += fmt
+                        extraFormatArgs += argVal
                     }
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     staticBuilder.returns(returnType)
-                    val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
+                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
+                    val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
                     if (returnType == UNIT) {
                         staticBuilder.addStatement(
                             "session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
-                            UNIT,
+                            *(listOf<Any>(fn.name, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
                         )
                     } else if (returnsOwnedResource(fn)) {
                         staticBuilder.addStatement(
                             "val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
-                            INT,
+                            *(listOf<Any>(fn.name, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
                         )
                         staticBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
                         staticBuilder.addStatement(
                             "return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)",
-                            fn.name,
-                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
-                            returnType,
+                            *(listOf<Any>(fn.name, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
                         )
                     }
                     companionBuilder.addFunction(staticBuilder.build())
@@ -833,42 +831,54 @@ class WitToKotlinPoetConverter(
 
         fn.docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
-        val argExprs = mutableListOf<String>()
+        val argFormatPlaceholders = mutableListOf<String>()
+        val extraFormatArgs = mutableListOf<Any>()
         for (param in fn.params) {
             val paramName = NamingConventions.toCamelCase(param.name)
             builder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-            argExprs += formatArgumentExpression(paramName, param.type)
+            val (fmt, argVal) = formatArgumentCode(paramName, param.type)
+            argFormatPlaceholders += fmt
+            extraFormatArgs += argVal
         }
 
         val returnType = mapFunctionReturnType(fn, worldClassName)
         builder.returns(returnType)
 
         val fullExportName = "$invokeTargetPrefix${fn.name}"
-        val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
+        val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
         val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
         if (returnType == UNIT) {
-            builder.addStatement("session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, UNIT)
+            builder.addStatement(
+                "session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)",
+                *(listOf<Any>(fullExportName, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
+            )
         } else if (returnsOwnedResource(fn)) {
-            builder.addStatement("val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, INT)
+            builder.addStatement(
+                "val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)",
+                *(listOf<Any>(fullExportName, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
+            )
             builder.addStatement("return %T(session, resultHandle)", returnType)
         } else {
-            builder.addStatement("return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, returnType)
+            builder.addStatement(
+                "return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)",
+                *(listOf<Any>(fullExportName, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
+            )
         }
         return builder.build()
     }
 
-    private fun formatArgumentExpression(paramName: String, typeRef: WitTypeRef): String {
+    private fun formatArgumentCode(paramName: String, typeRef: WitTypeRef): Pair<String, String> {
         if (typeRef is WitTypeRef.Id) {
             val def = resolve.types.getOrNull(typeRef.index)
             val kind = def?.kind
             if (kind is WitTypeDefKind.Handle) {
                 return when (kind.kind) {
-                    wasm2kt.ast.HandleKind.OWN -> "$paramName.consumeOwnership()"
-                    wasm2kt.ast.HandleKind.BORROW -> "$paramName.handle"
+                    wasm2kt.ast.HandleKind.OWN -> "%N.consumeOwnership()" to paramName
+                    wasm2kt.ast.HandleKind.BORROW -> "%N.handle" to paramName
                 }
             }
         }
-        return paramName
+        return "%N" to paramName
     }
 
     private fun returnsOwnedResource(fn: WitFunction): Boolean {
