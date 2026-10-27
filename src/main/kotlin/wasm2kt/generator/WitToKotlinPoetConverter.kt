@@ -719,21 +719,28 @@ class WitToKotlinPoetConverter(
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     methodBuilder.returns(returnType)
                     val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
+                    val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
                     if (returnType == UNIT) {
                         methodBuilder.addStatement(
-                            "session.runtimeSession.invokeMethod<Unit>(handle, %S$argsJoined)",
+                            "session.runtimeSession.invokeMethod<Unit>(handle, %S, %M<%T>()$argsJoined)",
                             fn.name,
+                            typeOfMember,
+                            UNIT,
                         )
                     } else if (returnsOwnedResource(fn)) {
                         methodBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invokeMethod<Int>(handle, %S$argsJoined)",
+                            "val resultHandle = session.runtimeSession.invokeMethod<Int>(handle, %S, %M<%T>()$argsJoined)",
                             fn.name,
+                            typeOfMember,
+                            INT,
                         )
                         methodBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
                         methodBuilder.addStatement(
-                            "return session.runtimeSession.invokeMethod(handle, %S$argsJoined)",
+                            "return session.runtimeSession.invokeMethod(handle, %S, %M<%T>()$argsJoined)",
                             fn.name,
+                            typeOfMember,
+                            returnType,
                         )
                     }
                     builder.addFunction(methodBuilder.build())
@@ -754,19 +761,25 @@ class WitToKotlinPoetConverter(
                     val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
                     if (returnType == UNIT) {
                         staticBuilder.addStatement(
-                            "session.runtimeSession.invoke<Unit>(%S$argsJoined)",
+                            "session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)",
                             fn.name,
+                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
+                            UNIT,
                         )
                     } else if (returnsOwnedResource(fn)) {
                         staticBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invoke<Int>(%S$argsJoined)",
+                            "val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)",
                             fn.name,
+                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
+                            INT,
                         )
                         staticBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
                         staticBuilder.addStatement(
-                            "return session.runtimeSession.invoke(%S$argsJoined)",
+                            "return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)",
                             fn.name,
+                            com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf"),
+                            returnType,
                         )
                     }
                     companionBuilder.addFunction(staticBuilder.build())
@@ -832,13 +845,14 @@ class WitToKotlinPoetConverter(
 
         val fullExportName = "$invokeTargetPrefix${fn.name}"
         val argsJoined = if (argExprs.isEmpty()) "" else ", " + argExprs.joinToString(", ")
+        val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
         if (returnType == UNIT) {
-            builder.addStatement("session.runtimeSession.invoke<Unit>(%S$argsJoined)", fullExportName)
+            builder.addStatement("session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, UNIT)
         } else if (returnsOwnedResource(fn)) {
-            builder.addStatement("val resultHandle = session.runtimeSession.invoke<Int>(%S$argsJoined)", fullExportName)
+            builder.addStatement("val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, INT)
             builder.addStatement("return %T(session, resultHandle)", returnType)
         } else {
-            builder.addStatement("return session.runtimeSession.invoke(%S$argsJoined)", fullExportName)
+            builder.addStatement("return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)", fullExportName, typeOfMember, returnType)
         }
         return builder.build()
     }
@@ -986,8 +1000,9 @@ class WitToKotlinPoetConverter(
             fileBuilder.addType(buildTupleTypeSpec(arity))
         }
 
-        // 4. WasmtimeSession runtime bridge interface & InMemoryWasmtimeSession
+        // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession & InMemoryWasmtimeSession
         fileBuilder.addType(buildWasmtimeSessionTypeSpec())
+        fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
 
         return fileBuilder.build()
@@ -1113,7 +1128,9 @@ class WitToKotlinPoetConverter(
     private fun buildWasmtimeSessionTypeSpec(): TypeSpec {
         val autoCloseableClass = ClassName("java.lang", "AutoCloseable")
         val pathClass = ClassName("java.nio.file", "Path")
+        val kTypeClass = ClassName("kotlin.reflect", "KType")
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val typeR = TypeVariableName("R")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
 
@@ -1124,6 +1141,7 @@ class WitToKotlinPoetConverter(
                     .addModifiers(KModifier.ABSTRACT)
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
+                    .addParameter("returnType", kTypeClass)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .build(),
@@ -1142,6 +1160,7 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
+                    .addParameter("returnType", kTypeClass)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .build(),
@@ -1167,9 +1186,8 @@ class WitToKotlinPoetConverter(
                         )
                             .mutable(true)
                             .initializer(
-                                "{ wasmPath, _ -> throw %T(%S) }",
-                                ClassName("kotlin", "NotImplementedError"),
-                                "Wasmtime runtime session factory is not yet configured for \$wasmPath",
+                                "{ wasmPath, imports -> %T.open(wasmPath, imports) }",
+                                ffmSessionClass,
                             )
                             .build(),
                     )
@@ -1186,8 +1204,193 @@ class WitToKotlinPoetConverter(
             .build()
     }
 
+    private fun buildFfmWasmtimeSessionTypeSpec(): TypeSpec {
+        val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
+        val ffmBridgeClass = ClassName("wasm2kt.runtime", "FfmWasmtimeBridge")
+        val ffmCodecClass = ClassName("wasm2kt.runtime", "FfmJsonCodec")
+        val arenaClass = ClassName("java.lang.foreign", "Arena")
+        val memorySegmentClass = ClassName("java.lang.foreign", "MemorySegment")
+        val valueLayoutClass = ClassName("java.lang.foreign", "ValueLayout")
+        val standardCharsetsClass = ClassName("java.nio.charset", "StandardCharsets")
+        val pathClass = ClassName("java.nio.file", "Path")
+        val kTypeClass = ClassName("kotlin.reflect", "KType")
+        val jsonClass = ClassName("kotlinx.serialization.json", "Json")
+        val jsonArrayClass = ClassName("kotlinx.serialization.json", "JsonArray")
+        val jsonElementClass = ClassName("kotlinx.serialization.json", "JsonElement")
+        val jsonNullClass = ClassName("kotlinx.serialization.json", "JsonNull")
+        val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
+        val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
+        val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
+        val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val typeR = TypeVariableName("R")
+
+        return TypeSpec.classBuilder("FfmWasmtimeSession")
+            .addSuperinterface(runtimeSessionClass)
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addModifiers(KModifier.PRIVATE)
+                    .addParameter("bridge", ffmBridgeClass)
+                    .addParameter("sessionArena", arenaClass)
+                    .addParameter("sessionPtr", memorySegmentClass)
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("bridge", ffmBridgeClass, KModifier.PRIVATE)
+                    .initializer("bridge")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("sessionArena", arenaClass, KModifier.PRIVATE)
+                    .initializer("sessionArena")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("sessionPtr", memorySegmentClass, KModifier.PRIVATE)
+                    .initializer("sessionPtr")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("isClosed", BOOLEAN)
+                    .mutable(true)
+                    .setter(FunSpec.setterBuilder().addModifiers(KModifier.PRIVATE).build())
+                    .initializer("false")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invoke")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addAnnotation(
+                        com.squareup.kotlinpoet.AnnotationSpec.builder(Suppress::class)
+                            .addMember("%S", "UNCHECKED_CAST")
+                            .build(),
+                    )
+                    .addTypeVariable(typeR)
+                    .addParameter("functionName", STRING)
+                    .addParameter("returnType", kTypeClass)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
+                    .beginControlFlow("%T.ofConfined().use { callArena ->", arenaClass)
+                    .addStatement(
+                        "val argsJson = %T.encodeToString(%T.serializer(), %T(args.map { %T.toJsonElement(it) }))",
+                        jsonClass,
+                        jsonElementClass,
+                        jsonArrayClass,
+                        ffmCodecClass,
+                    )
+                    .addStatement("val fnPtr = %T.allocateUtf8CString(callArena, functionName)", ffmBridgeClass)
+                    .addStatement("val argsPtr = %T.allocateUtf8CString(callArena, argsJson)", ffmBridgeClass)
+                    .addStatement(
+                        "val respPtr = bridge.sessionInvokeHandle.invokeExact(sessionPtr, fnPtr, argsPtr) as %T",
+                        memorySegmentClass,
+                    )
+                    .addStatement("val respStr = bridge.readAndFreeCString(respPtr)")
+                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
+                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
+                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Unknown Wasmtime error")
+                    .addStatement("throw IllegalStateException(errMsg)")
+                    .endControlFlow()
+                    .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
+                    .addStatement("return %T.fromJsonElement(valElem, returnType) as R", ffmCodecClass)
+                    .endControlFlow()
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("newResource")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("resourceName", STRING)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(INT)
+                    .addStatement("return invoke(%P, %M<Int>(), *args)", "[constructor]\$resourceName", typeOfMember)
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invokeMethod")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addTypeVariable(typeR)
+                    .addParameter("handle", INT)
+                    .addParameter("methodName", STRING)
+                    .addParameter("returnType", kTypeClass)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("val allArgs = arrayOf<Any?>(handle, *args)")
+                    .addStatement("return invoke(methodName, returnType, *allArgs)")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("dropResource")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("handle", INT)
+                    .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
+                    .addStatement(
+                        "val respPtr = bridge.sessionDropResourceHandle.invokeExact(sessionPtr, handle) as %T",
+                        memorySegmentClass,
+                    )
+                    .addStatement("val respStr = bridge.readAndFreeCString(respPtr)")
+                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
+                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
+                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Failed to drop resource")
+                    .addStatement("throw IllegalStateException(errMsg)")
+                    .endControlFlow()
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("close")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .beginControlFlow("if (!isClosed)")
+                    .addStatement("isClosed = true")
+                    .addStatement("bridge.sessionCloseHandle.invokeExact(sessionPtr)")
+                    .addStatement("sessionArena.close()")
+                    .endControlFlow()
+                    .build(),
+            )
+            .addType(
+                TypeSpec.companionObjectBuilder()
+                    .addFunction(
+                        FunSpec.builder("open")
+                            .addParameter("wasmPath", pathClass)
+                            .addParameter("imports", anyNullable)
+                            .addParameter(
+                                ParameterSpec.builder("bridge", ffmBridgeClass)
+                                    .defaultValue("%T.getDefault()", ffmBridgeClass)
+                                    .build(),
+                            )
+                            .returns(ffmSessionClass)
+                            .addStatement("val sessionArena = %T.ofShared()", arenaClass)
+                            .beginControlFlow("try")
+                            .addStatement(
+                                "val wasmPathPtr = %T.allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())",
+                                ffmBridgeClass,
+                            )
+                            .addStatement("val importsJsonPtr = %T.allocateUtf8CString(sessionArena, %S)", ffmBridgeClass, "[]")
+                            .addStatement("val callbackStub = bridge.createHostCallbackStub(sessionArena, imports)")
+                            .addStatement("val errCap = 4096L")
+                            .addStatement("val errBuf = sessionArena.allocate(errCap)")
+                            .addStatement(
+                                "val ptr = bridge.sessionOpenHandle.invokeExact(wasmPathPtr, importsJsonPtr, callbackStub, errBuf, errCap) as %T",
+                                memorySegmentClass,
+                            )
+                            .beginControlFlow("if (ptr == %T.NULL)", memorySegmentClass)
+                            .addStatement("val errMsg = %T.readNullTerminatedUtf8(errBuf)", ffmBridgeClass)
+                            .addStatement("throw IllegalStateException(%P)", "Failed to open Wasmtime session: \$errMsg")
+                            .endControlFlow()
+                            .addStatement("return %T(bridge, sessionArena, ptr)", ffmSessionClass)
+                            .nextControlFlow("catch (t: Throwable)")
+                            .addStatement("sessionArena.close()")
+                            .addStatement("throw t")
+                            .endControlFlow()
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build()
+    }
+
     private fun buildInMemoryWasmtimeSessionTypeSpec(): TypeSpec {
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val kTypeClass = ClassName("kotlin.reflect", "KType")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val argsListType = LIST.parameterizedBy(anyNullable)
         val typeR = TypeVariableName("R")
@@ -1323,6 +1526,7 @@ class WitToKotlinPoetConverter(
                     )
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
+                    .addParameter("returnType", kTypeClass)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")
@@ -1358,6 +1562,7 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
+                    .addParameter("returnType", kTypeClass)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")

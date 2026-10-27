@@ -1,0 +1,7 @@
+package example:livecalc@0.1.0;
+
+world live-calc {
+    import record-calc: func(a: s32, b: s32);
+    export add: func(a: s32, b: s32) -> s32;
+    export multiply: func(a: s32, b: s32) -> s32;
+}

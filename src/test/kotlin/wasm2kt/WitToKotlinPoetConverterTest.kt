@@ -273,4 +273,91 @@ class WitToKotlinPoetConverterTest {
             actualOutput,
         )
     }
+
+    @Test
+    fun `native FFM Wasmtime execution against real Wasm component binary`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/live_calc.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/live_calc.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        // 1. Extract JSON AST directly from the compiled .wasm component binary via wasm-tools (or .wit)
+        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools("/Users/chikoski/.cargo/bin/wasm-tools", witPath)
+        val jsonFile = tempDir.resolve("live_calc.json")
+        Files.writeString(jsonFile, jsonAst)
+
+        // 2. Generate Kotlin host bindings via wasm2kt CLI
+        Wasm2KtCommand().parse(
+            listOf(
+                "--from-json",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.live",
+                jsonFile.toString(),
+            ),
+        )
+
+        // 3. Write a Kotlin harness that runs against the real FfmWasmtimeSession (native Rust cdylib + Wasmtime)
+        val harnessPath = tempDir.resolve("com/example/live/NativeHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.live
+
+            import java.nio.file.Path
+
+            fun runNativeWasmComponent(wasmPath: Path): String {
+                val recordedCalls = mutableListOf<String>()
+                val imports = object : LiveCalcWorld.Imports {
+                    override fun recordCalc(a: Int, b: Int) {
+                        recordedCalls.add("${'$'}a,${'$'}b")
+                    }
+                }
+
+                // Uses default WasmtimeSession.factory -> FfmWasmtimeSession.open(wasmPath, imports)
+                return LiveCalcWorld.withSession(wasmPath, imports) {
+                    val sum = LiveCalcWorld.add(15, 27)
+                    val product = LiveCalcWorld.multiply(6, 7)
+                    "sum=${'$'}sum,product=${'$'}product,recorded=${'$'}{recordedCalls.joinToString(";")}"
+                }
+            }
+            """.trimIndent(),
+        )
+
+        // 4. Compile generated bindings + NativeHarness.kt with K2JVMCompiler
+        val pkgDir = tempDir.resolve("com/example/live")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("LiveCalcWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated LiveCalc bindings must compile cleanly")
+
+        // 5. Execute on real Wasmtime via JVM Foreign Function & Memory (FFM) API
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.live.NativeHarnessKt")
+        val method = harnessClass.getDeclaredMethod("runNativeWasmComponent", Path::class.java)
+        val actualOutput = method.invoke(null, wasmPath) as String
+
+        assertEquals(
+            "sum=42,product=42,recorded=15,27;6,7",
+            actualOutput,
+        )
+    }
 }

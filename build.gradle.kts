@@ -15,6 +15,7 @@ repositories {
 
 dependencies {
     implementation(libs.kotlinpoet)
+    implementation(libs.kotlin.reflect)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.clikt)
 
@@ -27,7 +28,10 @@ kotlin {
     explicitApi = org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode.Disabled
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_21)
-        freeCompilerArgs.add("-Xcontext-parameters")
+        freeCompilerArgs.addAll(
+            "-Xcontext-parameters",
+            "-Xjdk-release=21",
+        )
     }
 }
 
@@ -39,8 +43,14 @@ java {
 application {
     mainClass.set("wasm2kt.cli.MainKt")
     applicationName = "wasm2kt"
+    applicationDefaultJvmArgs = listOf("--enable-preview", "--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("--enable-preview")
 }
 
 tasks.test {
     useJUnitPlatform()
+    jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
 }
