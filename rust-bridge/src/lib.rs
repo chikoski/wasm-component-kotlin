@@ -537,37 +537,39 @@ fn invoke_host_callback(
             .get_env()
             .or_else(|_| vm.attach_current_thread_permanently())
             .context("Failed to acquire JNIEnv for host callback")?;
-        let j_import = env.new_string(import_name)?;
-        let j_args = env.new_string(&args_json_str)?;
-        let j_import_obj: JObject = j_import.into();
-        let j_args_obj: JObject = j_args.into();
-        let call_res = env.call_method(
-            callback_ref,
-            "onHostCall",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-            &[JValue::Object(&j_import_obj), JValue::Object(&j_args_obj)],
-        );
-        if env.exception_check().unwrap_or(false) {
-            let exc_msg = extract_and_clear_jni_exception(&mut env);
-            bail!(
-                "Host import '{}' threw an exception in JVM/Android host: {}",
-                import_name,
-                exc_msg
+        env.with_local_frame(16, |env| -> Result<Option<String>> {
+            let j_import = env.new_string(import_name)?;
+            let j_args = env.new_string(&args_json_str)?;
+            let j_import_obj: JObject = j_import.into();
+            let j_args_obj: JObject = j_args.into();
+            let call_res = env.call_method(
+                callback_ref,
+                "onHostCall",
+                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&j_import_obj), JValue::Object(&j_args_obj)],
             );
-        }
-        let ret_val = call_res.with_context(|| format!("JNI call_method onHostCall failed for '{}'", import_name))?;
-        let ret_obj = ret_val.l()?;
-        if ret_obj.is_null() {
-            None
-        } else {
-            let j_str = JString::from(ret_obj);
-            let s: String = env.get_string(&j_str)?.into();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
+            if env.exception_check().unwrap_or(false) {
+                let exc_msg = extract_and_clear_jni_exception(env);
+                bail!(
+                    "Host import '{}' threw an exception in JVM/Android host: {}",
+                    import_name,
+                    exc_msg
+                );
             }
-        }
+            let ret_val = call_res.with_context(|| format!("JNI call_method onHostCall failed for '{}'", import_name))?;
+            let ret_obj = ret_val.l()?;
+            if ret_obj.is_null() {
+                Ok(None)
+            } else {
+                let j_str = JString::from(ret_obj);
+                let s: String = env.get_string(&j_str)?.into();
+                if s.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(s))
+                }
+            }
+        })?
     } else {
         None
     };
@@ -593,10 +595,103 @@ fn invoke_host_callback(
 }
 
 // ============================================================================
-// Shared Engine & Exported C ABI / JNI Functions
+// Shared Engine, Thread-Safe Session Registry & Exported C ABI / JNI Functions
 // ============================================================================
 
 static SHARED_ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+static NEXT_SESSION_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+static SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, std::sync::Arc<ManagedSession>>>> =
+    std::sync::OnceLock::new();
+
+thread_local! {
+    static ACTIVE_SESSIONS: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+struct ManagedSession {
+    closed: std::sync::atomic::AtomicBool,
+    inner: std::sync::Mutex<BridgeSession>,
+}
+
+struct ActiveSessionGuard(usize);
+
+impl Drop for ActiveSessionGuard {
+    fn drop(&mut self) {
+        ACTIVE_SESSIONS.with(|set| {
+            set.borrow_mut().remove(&self.0);
+        });
+    }
+}
+
+fn sessions_map() -> &'static std::sync::Mutex<HashMap<usize, std::sync::Arc<ManagedSession>>> {
+    SESSIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn register_session(session: BridgeSession) -> usize {
+    let mut id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if id == 0 {
+        id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    let managed = std::sync::Arc::new(ManagedSession {
+        closed: std::sync::atomic::AtomicBool::new(false),
+        inner: std::sync::Mutex::new(session),
+    });
+    if let Ok(mut map) = sessions_map().lock() {
+        map.insert(id, managed);
+    }
+    id
+}
+
+fn with_session_mut<T, F: FnOnce(&mut BridgeSession) -> Result<T>>(session_id: usize, f: F) -> Result<T> {
+    if session_id == 0 {
+        bail!("BridgeSession pointer is null");
+    }
+    let is_reentrant = ACTIVE_SESSIONS.with(|set| set.borrow().contains(&session_id));
+    if is_reentrant {
+        bail!("Reentrant operation on active WasmtimeSession is not permitted");
+    }
+    let managed = {
+        let map = sessions_map()
+            .lock()
+            .map_err(|_| anyhow!("Session registry mutex poisoned"))?;
+        map.get(&session_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("WasmtimeSession is already closed or invalid"))?
+    };
+    let mut guard = managed
+        .inner
+        .lock()
+        .map_err(|_| anyhow!("WasmtimeSession mutex poisoned"))?;
+    if managed.closed.load(std::sync::atomic::Ordering::Acquire) {
+        bail!("WasmtimeSession is already closed");
+    }
+    ACTIVE_SESSIONS.with(|set| {
+        set.borrow_mut().insert(session_id);
+    });
+    let _active_guard = ActiveSessionGuard(session_id);
+    let res = f(&mut guard);
+    if managed.closed.load(std::sync::atomic::Ordering::Acquire) {
+        bail!("WasmtimeSession was closed during host callback execution");
+    }
+    res
+}
+
+fn close_session_handle(session_id: usize) {
+    if session_id == 0 {
+        return;
+    }
+    let removed = sessions_map()
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(&session_id));
+    if let Some(managed) = removed {
+        managed.closed.store(true, std::sync::atomic::Ordering::Release);
+        let is_reentrant = ACTIVE_SESSIONS.with(|set| set.borrow().contains(&session_id));
+        if !is_reentrant {
+            drop(managed.inner.lock());
+        }
+    }
+}
 
 fn get_shared_engine() -> Result<Engine> {
     if let Some(engine) = SHARED_ENGINE.get() {
@@ -728,7 +823,7 @@ pub extern "C" fn wasm2kt_session_open(
     });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)),
+        Ok(session) => register_session(session) as *mut BridgeSession,
         Err(e) => {
             write_err_buf(&e, err_buf, err_buf_cap);
             ptr::null_mut()
@@ -759,7 +854,7 @@ pub extern "C" fn wasm2kt_session_open_bytes(
     });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)),
+        Ok(session) => register_session(session) as *mut BridgeSession,
         Err(e) => {
             write_err_buf(&e, err_buf, err_buf_cap);
             ptr::null_mut()
@@ -899,19 +994,17 @@ pub extern "C" fn wasm2kt_session_invoke(
     args_json_ptr: *const c_char,
 ) -> *mut c_char {
     let res = run_catching(|| -> Result<JsonValue> {
-        if session_ptr.is_null() {
-            bail!("BridgeSession pointer is null");
-        }
         if func_spec_ptr.is_null() {
             bail!("func_spec_ptr is null");
         }
         if args_json_ptr.is_null() {
             bail!("args_json_ptr is null");
         }
-        let session = unsafe { &mut *session_ptr };
         let func_spec = unsafe { CStr::from_ptr(func_spec_ptr) }.to_str()?;
         let args_str = unsafe { CStr::from_ptr(args_json_ptr) }.to_str()?;
-        session_invoke_internal(session, func_spec, args_str)
+        with_session_mut(session_ptr as usize, |session| {
+            session_invoke_internal(session, func_spec, args_str)
+        })
     });
 
     match res {
@@ -926,11 +1019,9 @@ pub extern "C" fn wasm2kt_session_drop_resource(
     handle: i32,
 ) -> *mut c_char {
     let res = run_catching(|| -> Result<JsonValue> {
-        if session_ptr.is_null() {
-            bail!("BridgeSession pointer is null");
-        }
-        let session = unsafe { &mut *session_ptr };
-        session_drop_resource_internal(session, handle)
+        with_session_mut(session_ptr as usize, |session| {
+            session_drop_resource_internal(session, handle)
+        })
     });
 
     match res {
@@ -942,11 +1033,7 @@ pub extern "C" fn wasm2kt_session_drop_resource(
 #[no_mangle]
 pub extern "C" fn wasm2kt_session_close(session_ptr: *mut BridgeSession) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !session_ptr.is_null() {
-            unsafe {
-                drop(Box::from_raw(session_ptr));
-            }
-        }
+        close_session_handle(session_ptr as usize);
     }));
 }
 
@@ -1014,7 +1101,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<
     });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)) as jlong,
+        Ok(session) => register_session(session) as jlong,
         Err(e) => {
             let _ = env.throw_new(
                 "java/lang/IllegalStateException",
@@ -1053,7 +1140,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenB
     });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)) as jlong,
+        Ok(session) => register_session(session) as jlong,
         Err(e) => {
             let _ = env.throw_new(
                 "java/lang/IllegalStateException",
@@ -1073,13 +1160,11 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionInvok
     args_json: JString<'local>,
 ) -> jstring {
     let res = run_catching(|| -> Result<JsonValue> {
-        if session_ptr == 0 {
-            bail!("BridgeSession pointer is null");
-        }
-        let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
         let func_spec_str: String = env.get_string(&func_spec)?.into();
         let args_str: String = env.get_string(&args_json)?.into();
-        session_invoke_internal(session, &func_spec_str, &args_str)
+        with_session_mut(session_ptr as usize, |session| {
+            session_invoke_internal(session, &func_spec_str, &args_str)
+        })
     });
     response_to_jstring(&mut env, res)
 }
@@ -1092,11 +1177,9 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionDropR
     handle: jint,
 ) -> jstring {
     let res = run_catching(|| -> Result<JsonValue> {
-        if session_ptr == 0 {
-            bail!("BridgeSession pointer is null");
-        }
-        let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
-        session_drop_resource_internal(session, handle)
+        with_session_mut(session_ptr as usize, |session| {
+            session_drop_resource_internal(session, handle)
+        })
     });
     response_to_jstring(&mut env, res)
 }
@@ -1107,7 +1190,9 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionClose
     _class: JClass<'local>,
     session_ptr: jlong,
 ) {
-    wasm2kt_session_close(session_ptr as *mut BridgeSession);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        close_session_handle(session_ptr as usize);
+    }));
 }
 
 #[no_mangle]

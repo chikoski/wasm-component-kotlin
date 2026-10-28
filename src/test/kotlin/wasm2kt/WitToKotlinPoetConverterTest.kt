@@ -1492,4 +1492,328 @@ class WitToKotlinPoetConverterTest {
         }.exceptionOrNull()
         assertTrue(emptyCharErr is IllegalArgumentException, "Empty string must fail decodeChar")
     }
+
+
+    private fun compileGenerated(classesOutDir: Path, vararg sources: Path): org.jetbrains.kotlin.cli.common.ExitCode {
+        Files.createDirectories(classesOutDir)
+        return org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            *sources.map { it.toString() }.toTypedArray(),
+        )
+    }
+
+    private fun tagEchoImports(onFormatTag: (String, Long) -> String): wasm2kt.runtime.WitHostImportDispatcher =
+        object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                return when (importSpec) {
+                    "env-provider#format-tag" -> {
+                        val prefix = wasm2kt.runtime.FfmJsonCodec.decodeString(args[0])
+                        val code = wasm2kt.runtime.FfmJsonCodec.decodeLong(args[1])
+                        kotlinx.serialization.json.JsonPrimitive(onFormatTag(prefix, code))
+                    }
+                    "env-provider#get-multiplier" -> kotlinx.serialization.json.JsonPrimitive(1)
+                    else -> error("Unexpected import: $importSpec")
+                }
+            }
+        }
+
+    @Test
+    fun `generated WitSupport does not import java lang foreign and serializes session access`(@TempDir tempDir: Path) {
+        val witPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wit")).toURI())
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.android", witPath.toString()),
+        )
+        val support = Files.readString(tempDir.resolve("com/example/android/WitSupport.kt"))
+
+        assertTrue(!support.contains("import java.lang.foreign"), "WitSupport.kt must not import java.lang.foreign (Android SDK lacks FFM)")
+        assertTrue(!Regex("""\bArena\b|\bMemorySegment\b""").containsMatchIn(support), "WitSupport.kt must not reference Arena/MemorySegment")
+        assertTrue(support.contains("bridge.sessionInvoke(sessionPtr, functionName, argsJson)"), "FfmWasmtimeSession must delegate to FfmWasmtimeBridge")
+        val ffmSection = support.substringAfter("class FfmWasmtimeSession").substringBefore("class JniWasmtimeSession")
+        val jniSection = support.substringAfter("class JniWasmtimeSession").substringBefore("class InMemoryWasmtimeSession")
+        assertEquals(3, Regex("@Synchronized").findAll(ffmSection).count(), "FfmWasmtimeSession invoke/dropResource/close must be @Synchronized")
+        assertEquals(3, Regex("@Synchronized").findAll(jniSection).count(), "JniWasmtimeSession invoke/dropResource/close must be @Synchronized")
+
+        // Consumer R8/ProGuard keep rules must be packaged with the runtime
+        val proguard = requireNotNull(javaClass.getResource("/META-INF/proguard/wasm2kt.pro")) {
+            "META-INF/proguard/wasm2kt.pro must be on the runtime classpath"
+        }.readText()
+        assertTrue(proguard.contains("-keep class wasm2kt.runtime.JniHostCallback"), "JniHostCallback must be kept")
+        assertTrue(proguard.contains("onHostCall(java.lang.String, java.lang.String)"), "JniHostCallback.onHostCall signature must be kept")
+        assertTrue(proguard.contains("wasm2kt.runtime.HostCallbackDispatcher"), "HostCallbackDispatcher must be kept")
+    }
+
+    @Test
+    fun `host imports accepting resource-containing records, variants, and borrowed handles compile and dispatch`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:hostres@0.1.0;
+
+            world host-res-world {
+                resource counter {
+                    constructor(init: s32);
+                    get-value: func() -> s32;
+                }
+
+                record counter-pair {
+                    primary: counter,
+                    label: string,
+                }
+
+                variant counter-outcome {
+                    created(counter),
+                    empty,
+                }
+
+                import inspect-pair: func(p: counter-pair) -> string;
+                import inspect-outcome: func(o: counter-outcome) -> s32;
+                import inspect-counter: func(c: borrow<counter>) -> s32;
+
+                export make-pair: func(init: s32, label: string) -> counter-pair;
+            }
+        """.trimIndent()
+        val witFile = tempDir.resolve("host_res.wit")
+        Files.writeString(witFile, witText)
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.hostres", witFile.toString()),
+        )
+        val pkgDir = tempDir.resolve("com/example/hostres")
+        val worldFile = pkgDir.resolve("HostResWorldWorld.kt")
+        val harnessPath = pkgDir.resolve("HostResHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.hostres
+
+            import kotlinx.serialization.json.JsonArray
+            import kotlinx.serialization.json.JsonObject
+            import kotlinx.serialization.json.JsonPrimitive
+            import kotlinx.serialization.json.jsonPrimitive
+
+            fun runHostResScenario(): String {
+                val imports = object : HostResWorldWorld.Imports {
+                    override fun inspectPair(p: HostResWorldWorld.CounterPair): String {
+                        val err = runCatching { p.primary.getValue() }.exceptionOrNull()
+                        return "${'$'}{p.label}:${'$'}{p.primary.handle}:${'$'}{err?.message}"
+                    }
+                    override fun inspectOutcome(o: HostResWorldWorld.CounterOutcome): Int = when (o) {
+                        is HostResWorldWorld.CounterOutcome.Created -> o.value.handle
+                        HostResWorldWorld.CounterOutcome.Empty -> -1
+                    }
+                    override fun inspectCounter(c: HostResWorldWorld.Counter): Int = c.handle
+                }
+                val pair = imports.dispatchHostImport(
+                    "inspect-pair",
+                    JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(7), "label" to JsonPrimitive("lbl"))))),
+                ).jsonPrimitive.content
+                val created = imports.dispatchHostImport(
+                    "inspect-outcome",
+                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(9))))),
+                ).jsonPrimitive.content
+                val empty = imports.dispatchHostImport(
+                    "inspect-outcome",
+                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
+                ).jsonPrimitive.content
+                val borrowed = imports.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(3)))).jsonPrimitive.content
+                return "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed"
+            }
+            """.trimIndent(),
+        )
+
+        val classesOutDir = tempDir.resolve("classes")
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compileGenerated(classesOutDir, pkgDir.resolve("WitSupport.kt"), worldFile, harnessPath),
+            "Host imports taking resource-containing records/variants/handles must compile cleanly",
+        )
+        val classLoader = java.net.URLClassLoader(arrayOf(classesOutDir.toUri().toURL()), javaClass.classLoader)
+        val output = classLoader.loadClass("com.example.hostres.HostResHarnessKt")
+            .getDeclaredMethod("runHostResScenario")
+            .invoke(null) as String
+        assertEquals(
+            "lbl:7:Resource Counter(handle=7) is not bound to an active client Session|9|-1|3",
+            output,
+        )
+    }
+
+    @Test
+    fun `secondary type name collisions after interface prefixing are resolved and compile cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:collision2@0.1.0;
+
+            interface alpha {
+                record config {
+                    port: u16,
+                }
+                get-config: func() -> config;
+            }
+
+            interface beta {
+                record config {
+                    host: string,
+                }
+                get-config: func() -> config;
+            }
+
+            interface gamma {
+                record alpha-config {
+                    enabled: bool,
+                }
+                get-alpha-config: func() -> alpha-config;
+            }
+
+            world collision2-world {
+                export alpha;
+                export beta;
+                export gamma;
+            }
+        """.trimIndent()
+        val witFile = tempDir.resolve("collision2.wit")
+        Files.writeString(witFile, witText)
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.collision2", witFile.toString()),
+        )
+        val pkgDir = tempDir.resolve("com/example/collision2")
+        val worldFile = pkgDir.resolve("Collision2WorldWorld.kt")
+        val generatedCode = Files.readString(worldFile)
+
+        assertEquals(1, Regex("""data class AlphaConfig\(""").findAll(generatedCode).count(), "Only gamma's alpha-config may claim AlphaConfig")
+        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config should be BetaConfig")
+        assertTrue(Regex("""data class AlphaConfig_\d+\(""").containsMatchIn(generatedCode), "Alpha's config must fall back to an index-suffixed name")
+
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compileGenerated(tempDir.resolve("classes"), pkgDir.resolve("WitSupport.kt"), worldFile),
+            "Secondary collisions must not cause Redeclaration errors",
+        )
+    }
+
+    @Test
+    fun `JNI bridge survives many host callbacks, concurrent invocations, and rejects reentrant invoke and close`() {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val jni = wasm2kt.runtime.JniWasmtimeBridge
+
+        // 1. Many host callbacks in one session (JNI local references must be released per callback)
+        val sessionPtr = jni.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix#$code" })
+        try {
+            repeat(3000) { i ->
+                val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["T", $i]""")
+                assertTrue(resp.contains("\"ok\":true") && resp.contains("T#$i"), "Iteration $i failed: $resp")
+            }
+
+            // 2. Concurrent invocations on the same session are serialized safely
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+            try {
+                val futures = (0 until 8).map { t ->
+                    pool.submit<Int> {
+                        var ok = 0
+                        repeat(100) { i ->
+                            val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["C", ${t * 1000 + i}]""")
+                            if (resp.contains("C#${t * 1000 + i}")) ok++
+                        }
+                        ok
+                    }
+                }
+                assertEquals(800, futures.sumOf { it.get() }, "All concurrent JNI invocations must succeed")
+            } finally {
+                pool.shutdown()
+            }
+        } finally {
+            jni.nativeSessionClose(sessionPtr)
+        }
+
+        // 3. Reentrant invoke from inside a host callback is rejected with an error instead of deadlocking
+        var reentrantPtr = 0L
+        var innerResponse = ""
+        reentrantPtr = jni.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                innerResponse = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["X", 1]""")
+                "outer"
+            },
+        )
+        try {
+            val outer = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["O", 1]""")
+            assertTrue(outer.contains("outer"), "Outer call should still complete, got: $outer")
+            assertTrue(innerResponse.contains("Reentrant"), "Reentrant invoke must be rejected, got: $innerResponse")
+        } finally {
+            jni.nativeSessionClose(reentrantPtr)
+        }
+
+        // 4. Close from inside a host callback does not free the session under the running call
+        var closingPtr = 0L
+        closingPtr = jni.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                jni.nativeSessionClose(closingPtr)
+                "closed-inside"
+            },
+        )
+        val closedResp = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 1]""")
+        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val afterClose = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 2]""")
+        assertTrue(afterClose.contains("\"ok\":false"), "Invoke after close must fail, got: $afterClose")
+        jni.nativeSessionClose(closingPtr) // double close is a no-op
+    }
+
+    @Test
+    fun `FFM bridge session API rejects reentrant invoke and defers arena release on reentrant close`() {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val bridge = wasm2kt.runtime.FfmWasmtimeBridge.getDefault()
+
+        // 1. Repeated calls through the Long-handle session API
+        val handle = bridge.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix@$code" })
+        try {
+            repeat(500) { i ->
+                val resp = bridge.sessionInvoke(handle, "describe-code", """["F", $i]""")
+                assertTrue(resp.contains("F@$i"), "Iteration $i failed: $resp")
+            }
+        } finally {
+            bridge.sessionClose(handle)
+            bridge.sessionClose(handle) // idempotent
+        }
+        val afterClose = runCatching { bridge.sessionInvoke(handle, "describe-code", """["F", 0]""") }.exceptionOrNull()
+        assertTrue(afterClose is IllegalStateException, "sessionInvoke after close must throw IllegalStateException")
+
+        // 2. Reentrant invoke is rejected by the native bridge
+        var reentrantHandle = 0L
+        var inner = ""
+        reentrantHandle = bridge.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                inner = bridge.sessionInvoke(reentrantHandle, "describe-code", """["X", 1]""")
+                "outer"
+            },
+        )
+        try {
+            val outer = bridge.sessionInvoke(reentrantHandle, "describe-code", """["O", 1]""")
+            assertTrue(outer.contains("outer"), "Outer call should complete, got: $outer")
+            assertTrue(inner.contains("Reentrant"), "Reentrant invoke must be rejected, got: $inner")
+        } finally {
+            bridge.sessionClose(reentrantHandle)
+        }
+
+        // 3. Close from inside the upcall must not free the upcall stub's Arena while it is executing
+        var closingHandle = 0L
+        closingHandle = bridge.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                bridge.sessionClose(closingHandle)
+                "closed-inside"
+            },
+        )
+        val closedResp = bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 1]""")
+        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val reuse = runCatching { bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 2]""") }.exceptionOrNull()
+        assertTrue(reuse is IllegalStateException, "Invoke after reentrant close must throw IllegalStateException")
+    }
 }

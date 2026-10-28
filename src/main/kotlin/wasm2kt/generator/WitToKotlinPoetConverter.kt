@@ -79,7 +79,7 @@ class WitToKotlinPoetConverter(
     private val targetWorldName: String? = null,
 ) {
     private val generatedTupleArities = mutableSetOf<Int>()
-    private var currentWorldCollidingNames: Set<String> = emptySet()
+    private var currentWorldTypeNames: Map<Int, String> = emptyMap()
 
     private val witJsonSerializableClass = ClassName("wasm2kt.runtime", "WitJsonSerializable")
     private val witHostImportDispatcherClass = ClassName("wasm2kt.runtime", "WitHostImportDispatcher")
@@ -162,7 +162,7 @@ class WitToKotlinPoetConverter(
             val name = resolve.types.getOrNull(rootIdx)?.name ?: continue
             byPascal.getOrPut(NamingConventions.toPascalCase(name)) { mutableSetOf() }.add(rootIdx)
         }
-        currentWorldCollidingNames = byPascal.filterValues { it.size > 1 }.keys
+        currentWorldTypeNames = allocateWorldTypeNames(byPascal)
 
         // Group resource functions by resource type index
         val resourceFunctions = collectResourceFunctions(referencedInterfaceIds, world)
@@ -530,16 +530,35 @@ class WitToKotlinPoetConverter(
         return current
     }
 
-    private fun resolveKotlinTypeSimpleName(typeIdx: Int): String {
-        val rootIdx = resolveRootTypeIndex(typeIdx)
-        val typeDef = resolve.types.getOrNull(rootIdx)
-            ?: throw IllegalArgumentException("Invalid WIT type index: $typeIdx")
-        val rawName = typeDef.name
-            ?: throw IllegalStateException("Named type at index $rootIdx has null name")
-        val basePascal = NamingConventions.toPascalCase(rawName)
-        if (basePascal !in currentWorldCollidingNames) {
-            return basePascal
+    /**
+     * Assigns a unique Kotlin simple name to every root type of the current world.
+     * Non-colliding names are reserved first; colliding names are then prefixed with their owning
+     * interface (or world) name, falling back to an index suffix when the prefixed name is itself taken.
+     */
+    private fun allocateWorldTypeNames(byPascal: Map<String, Set<Int>>): Map<Int, String> {
+        val result = mutableMapOf<Int, String>()
+        val usedNames = mutableSetOf<String>()
+        for ((pascal, indices) in byPascal) {
+            if (indices.size == 1) {
+                result[indices.single()] = pascal
+                usedNames += pascal
+            }
         }
+        for ((pascal, indices) in byPascal) {
+            if (indices.size == 1) continue
+            for (rootIdx in indices.sorted()) {
+                val candidate = qualifiedTypeNameCandidate(rootIdx, pascal)
+                var chosen = if (candidate in usedNames) "${candidate}_$rootIdx" else candidate
+                while (chosen in usedNames) chosen += "_"
+                result[rootIdx] = chosen
+                usedNames += chosen
+            }
+        }
+        return result
+    }
+
+    private fun qualifiedTypeNameCandidate(rootIdx: Int, basePascal: String): String {
+        val typeDef = resolve.types[rootIdx]
         val ifaceId = typeDef.owner?.`interface`
         if (ifaceId != null) {
             val ifaceName = resolve.interfaces.getOrNull(ifaceId)?.name
@@ -556,6 +575,16 @@ class WitToKotlinPoetConverter(
             }
         }
         return "${basePascal}_$rootIdx"
+    }
+
+    private fun resolveKotlinTypeSimpleName(typeIdx: Int): String {
+        val rootIdx = resolveRootTypeIndex(typeIdx)
+        currentWorldTypeNames[rootIdx]?.let { return it }
+        val typeDef = resolve.types.getOrNull(rootIdx)
+            ?: throw IllegalArgumentException("Invalid WIT type index: $typeIdx")
+        val rawName = typeDef.name
+            ?: throw IllegalStateException("Named type at index $rootIdx has null name")
+        return NamingConventions.toPascalCase(rawName)
     }
 
     private fun containsResource(typeRef: WitTypeRef, visited: MutableSet<Int> = mutableSetOf()): Boolean =
@@ -709,7 +738,11 @@ class WitToKotlinPoetConverter(
             .addParameter("elem", jsonElementClass)
             .apply {
                 if (hasResourceFields) {
-                    addParameter("session", sessionClassName)
+                    addParameter(
+                        ParameterSpec.builder("session", sessionClassName.copy(nullable = true))
+                            .defaultValue("null")
+                            .build(),
+                    )
                 }
             }
             .returns(recordClassName)
@@ -964,7 +997,11 @@ class WitToKotlinPoetConverter(
                         .addParameter("elem", jsonElementClass)
                         .apply {
                             if (hasResourceCases) {
-                                addParameter("session", sessionClassName)
+                                addParameter(
+                                    ParameterSpec.builder("session", sessionClassName.copy(nullable = true))
+                                        .defaultValue("null")
+                                        .build(),
+                                )
                             }
                         }
                         .returns(variantClassName)
@@ -992,13 +1029,25 @@ class WitToKotlinPoetConverter(
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addModifiers(KModifier.INTERNAL)
-                    .addParameter("session", sessionClassName)
+                    .addParameter("session", sessionClassName.copy(nullable = true))
                     .addParameter("handle", INT)
                     .build(),
             )
             .addProperty(
-                PropertySpec.builder("session", sessionClassName, KModifier.PRIVATE)
+                PropertySpec.builder("session", sessionClassName.copy(nullable = true), KModifier.PRIVATE)
                     .initializer("session")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("boundSession", sessionClassName, KModifier.PRIVATE)
+                    .getter(
+                        FunSpec.getterBuilder()
+                            .addStatement(
+                                "return checkNotNull(session) { %P }",
+                                "Resource $resourcePascalName(handle=\$handle) is not bound to an active client Session",
+                            )
+                            .build(),
+                    )
                     .build(),
             )
             .addProperty(
@@ -1081,17 +1130,18 @@ class WitToKotlinPoetConverter(
                     val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
                     if (returnType == UNIT) {
                         methodBuilder.addStatement(
-                            "session.runtimeSession.invokeMethod(handle, %S, { %T.decodeUnit(it) }$argsJoined)",
+                            "boundSession.runtimeSession.invokeMethod(handle, %S, { %T.decodeUnit(it) }$argsJoined)",
                             *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
                     } else if (returnsOwnedResource(fn)) {
                         methodBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invokeMethod(handle, %S, { %T.decodeInt(it) }$argsJoined)",
+                            "val resultHandle = boundSession.runtimeSession.invokeMethod(handle, %S, { %T.decodeInt(it) }$argsJoined)",
                             *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
-                        methodBuilder.addStatement("return %T(session, resultHandle)", returnType)
+                        methodBuilder.addStatement("return %T(boundSession, resultHandle)", returnType)
                     } else {
                         val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
+                        methodBuilder.addStatement("val session = boundSession")
                         methodBuilder.addStatement(
                             "return session.runtimeSession.invokeMethod(handle, %S, %L$argsJoined)",
                             *(listOf<Any>(fn.name, decoderLambda) + extraFormatArgs).toTypedArray(),
@@ -1145,7 +1195,7 @@ class WitToKotlinPoetConverter(
                 .addModifiers(KModifier.OVERRIDE)
                 .beginControlFlow("if (!isClosed)")
                 .addStatement("isClosed = true")
-                .addStatement("session.runtimeSession.dropResource(handle)")
+                .addStatement("session?.runtimeSession?.dropResource(handle)")
                 .endControlFlow()
                 .build(),
         )
@@ -1295,22 +1345,15 @@ class WitToKotlinPoetConverter(
                         buildDecodeExpression(kind.type, elemExpr, worldClassName, depth, sessionExpr)
                     }
                     is WitTypeDefKind.Resource -> {
-                        if (sessionExpr != null) {
-                            val pascal = resolveKotlinTypeSimpleName(typeRef.index)
-                            val resourceClass = worldClassName.nestedClass(pascal)
-                            CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr, ffmCodecClass, elemExpr)
-                        } else {
-                            CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
-                        }
+                        // Host-side decoding (no client Session) yields an unbound resource wrapper.
+                        val pascal = resolveKotlinTypeSimpleName(typeRef.index)
+                        val resourceClass = worldClassName.nestedClass(pascal)
+                        CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
                     }
                     is WitTypeDefKind.Handle -> {
-                        if (sessionExpr != null) {
-                            val pascal = resolveKotlinTypeSimpleName(kind.resourceId)
-                            val resourceClass = worldClassName.nestedClass(pascal)
-                            CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr, ffmCodecClass, elemExpr)
-                        } else {
-                            CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
-                        }
+                        val pascal = resolveKotlinTypeSimpleName(kind.resourceId)
+                        val resourceClass = worldClassName.nestedClass(pascal)
+                        CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
                     }
                     is WitTypeDefKind.OptionType -> {
                         val witOptionClass = ClassName(targetPackage, "WitOption")
@@ -1880,8 +1923,6 @@ class WitToKotlinPoetConverter(
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val ffmBridgeClass = ClassName("wasm2kt.runtime", "FfmWasmtimeBridge")
-        val arenaClass = ClassName("java.lang.foreign", "Arena")
-        val memorySegmentClass = ClassName("java.lang.foreign", "MemorySegment")
         val pathClass = ClassName("java.nio.file", "Path")
         val byteArrayClass = ClassName("kotlin", "ByteArray")
         val jsonClass = ClassName("kotlinx.serialization.json", "Json")
@@ -1889,20 +1930,23 @@ class WitToKotlinPoetConverter(
         val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
         val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
         val typeR = TypeVariableName("R")
         val decoderType = LambdaTypeName.get(
             parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
             returnType = typeR,
         )
 
+        // NOTE: This generated class intentionally does not reference `java.lang.foreign.*` directly.
+        // All FFM types (Arena / MemorySegment) are encapsulated inside FfmWasmtimeBridge so the generated
+        // WitSupport.kt also compiles against Android SDKs that lack the FFM API.
         return TypeSpec.classBuilder("FfmWasmtimeSession")
             .addSuperinterface(runtimeSessionClass)
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addModifiers(KModifier.PRIVATE)
                     .addParameter("bridge", ffmBridgeClass)
-                    .addParameter("sessionArena", arenaClass)
-                    .addParameter("sessionPtr", memorySegmentClass)
+                    .addParameter("sessionPtr", LONG)
                     .build(),
             )
             .addProperty(
@@ -1911,12 +1955,7 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .addProperty(
-                PropertySpec.builder("sessionArena", arenaClass, KModifier.PRIVATE)
-                    .initializer("sessionArena")
-                    .build(),
-            )
-            .addProperty(
-                PropertySpec.builder("sessionPtr", memorySegmentClass, KModifier.PRIVATE)
+                PropertySpec.builder("sessionPtr", LONG, KModifier.PRIVATE)
                     .initializer("sessionPtr")
                     .build(),
             )
@@ -1929,6 +1968,7 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("invoke")
+                    .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
@@ -1936,7 +1976,6 @@ class WitToKotlinPoetConverter(
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
-                    .beginControlFlow("%T.ofConfined().use { callArena ->", arenaClass)
                     .addStatement(
                         "val argsJson = %T.encodeToString(%T.serializer(), %T(args.map { %T.toJsonElement(it) }))",
                         jsonClass,
@@ -1944,13 +1983,7 @@ class WitToKotlinPoetConverter(
                         jsonArrayClass,
                         ffmCodecClass,
                     )
-                    .addStatement("val fnPtr = %T.allocateUtf8CString(callArena, functionName)", ffmBridgeClass)
-                    .addStatement("val argsPtr = %T.allocateUtf8CString(callArena, argsJson)", ffmBridgeClass)
-                    .addStatement(
-                        "val respPtr = bridge.sessionInvokeHandle.invokeExact(sessionPtr, fnPtr, argsPtr) as %T",
-                        memorySegmentClass,
-                    )
-                    .addStatement("val respStr = bridge.readAndFreeCString(respPtr)")
+                    .addStatement("val respStr = bridge.sessionInvoke(sessionPtr, functionName, argsJson)")
                     .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
                     .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
                     .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Unknown Wasmtime error")
@@ -1958,7 +1991,6 @@ class WitToKotlinPoetConverter(
                     .endControlFlow()
                     .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
                     .addStatement("return decoder(valElem)")
-                    .endControlFlow()
                     .build(),
             )
             .addFunction(
@@ -1985,14 +2017,11 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("dropResource")
+                    .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
                     .addParameter("handle", INT)
                     .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
-                    .addStatement(
-                        "val respPtr = bridge.sessionDropResourceHandle.invokeExact(sessionPtr, handle) as %T",
-                        memorySegmentClass,
-                    )
-                    .addStatement("val respStr = bridge.readAndFreeCString(respPtr)")
+                    .addStatement("val respStr = bridge.sessionDropResource(sessionPtr, handle)")
                     .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
                     .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
                     .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Failed to drop resource")
@@ -2002,11 +2031,11 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("close")
+                    .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
                     .beginControlFlow("if (!isClosed)")
                     .addStatement("isClosed = true")
-                    .addStatement("bridge.sessionCloseHandle.invokeExact(sessionPtr)")
-                    .addStatement("sessionArena.close()")
+                    .addStatement("bridge.sessionClose(sessionPtr)")
                     .endControlFlow()
                     .build(),
             )
@@ -2022,29 +2051,7 @@ class WitToKotlinPoetConverter(
                                     .build(),
                             )
                             .returns(ffmSessionClass)
-                            .addStatement("val sessionArena = %T.ofShared()", arenaClass)
-                            .beginControlFlow("try")
-                            .addStatement(
-                                "val wasmPathPtr = %T.allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())",
-                                ffmBridgeClass,
-                            )
-                            .addStatement("val importsJsonPtr = %T.allocateUtf8CString(sessionArena, %S)", ffmBridgeClass, "[]")
-                            .addStatement("val callbackStub = bridge.createHostCallbackStub(sessionArena, imports)")
-                            .addStatement("val errCap = 4096L")
-                            .addStatement("val errBuf = sessionArena.allocate(errCap)")
-                            .addStatement(
-                                "val ptr = bridge.sessionOpenHandle.invokeExact(wasmPathPtr, importsJsonPtr, callbackStub, errBuf, errCap) as %T",
-                                memorySegmentClass,
-                            )
-                            .beginControlFlow("if (ptr == %T.NULL)", memorySegmentClass)
-                            .addStatement("val errMsg = %T.readNullTerminatedUtf8(errBuf)", ffmBridgeClass)
-                            .addStatement("throw IllegalStateException(%P)", "Failed to open Wasmtime session: \$errMsg")
-                            .endControlFlow()
-                            .addStatement("return %T(bridge, sessionArena, ptr)", ffmSessionClass)
-                            .nextControlFlow("catch (t: Throwable)")
-                            .addStatement("sessionArena.close()")
-                            .addStatement("throw t")
-                            .endControlFlow()
+                            .addStatement("return %T(bridge, bridge.openSession(wasmPath, imports))", ffmSessionClass)
                             .build(),
                     )
                     .addFunction(
@@ -2057,29 +2064,7 @@ class WitToKotlinPoetConverter(
                                     .build(),
                             )
                             .returns(ffmSessionClass)
-                            .addStatement("val sessionArena = %T.ofShared()", arenaClass)
-                            .beginControlFlow("try")
-                            .addStatement(
-                                "val wasmBytesPtr = %T.allocateBytes(sessionArena, wasmBytes)",
-                                ffmBridgeClass,
-                            )
-                            .addStatement("val importsJsonPtr = %T.allocateUtf8CString(sessionArena, %S)", ffmBridgeClass, "[]")
-                            .addStatement("val callbackStub = bridge.createHostCallbackStub(sessionArena, imports)")
-                            .addStatement("val errCap = 4096L")
-                            .addStatement("val errBuf = sessionArena.allocate(errCap)")
-                            .addStatement(
-                                "val ptr = bridge.sessionOpenBytesHandle.invokeExact(wasmBytesPtr, wasmBytes.size.toLong(), importsJsonPtr, callbackStub, errBuf, errCap) as %T",
-                                memorySegmentClass,
-                            )
-                            .beginControlFlow("if (ptr == %T.NULL)", memorySegmentClass)
-                            .addStatement("val errMsg = %T.readNullTerminatedUtf8(errBuf)", ffmBridgeClass)
-                            .addStatement("throw IllegalStateException(%P)", "Failed to open Wasmtime session from bytes: \$errMsg")
-                            .endControlFlow()
-                            .addStatement("return %T(bridge, sessionArena, ptr)", ffmSessionClass)
-                            .nextControlFlow("catch (t: Throwable)")
-                            .addStatement("sessionArena.close()")
-                            .addStatement("throw t")
-                            .endControlFlow()
+                            .addStatement("return %T(bridge, bridge.openSessionBytes(wasmBytes, imports))", ffmSessionClass)
                             .build(),
                     )
                     .build(),
@@ -2126,6 +2111,7 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("invoke")
+                    .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
                     .addModifiers(KModifier.OVERRIDE)
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
@@ -2174,6 +2160,7 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("dropResource")
+                    .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
                     .addModifiers(KModifier.OVERRIDE)
                     .addParameter("handle", INT)
                     .addStatement("check(!isClosed) { %S }", "JniWasmtimeSession is already closed")
@@ -2187,6 +2174,7 @@ class WitToKotlinPoetConverter(
             )
             .addFunction(
                 FunSpec.builder("close")
+                    .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
                     .addModifiers(KModifier.OVERRIDE)
                     .beginControlFlow("if (!isClosed)")
                     .addStatement("isClosed = true")

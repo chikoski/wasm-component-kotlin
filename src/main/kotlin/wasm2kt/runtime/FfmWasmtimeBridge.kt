@@ -164,6 +164,149 @@ class FfmWasmtimeBridge private constructor(
         FunctionDescriptor.ofVoid(ValueLayout.ADDRESS),
     )
 
+    /**
+     * Per-session FFM state. The [sessionArena] owns the host-callback upcall stub, so it must not be
+     * closed while a native call (and therefore possibly an upcall) is in flight. Closing is deferred
+     * until the last active call returns.
+     */
+    private class FfmSessionState(
+        val sessionArena: Arena,
+        val sessionPtr: MemorySegment,
+    ) {
+        var activeCalls: Int = 0
+        var closeRequested: Boolean = false
+        var arenaClosed: Boolean = false
+    }
+
+    private fun acquireSession(sessionHandle: Long): FfmSessionState {
+        val state = activeSessions[sessionHandle]
+            ?: throw IllegalStateException("FfmWasmtimeSession ($sessionHandle) is not active or already closed")
+        synchronized(state) {
+            check(!state.closeRequested) { "FfmWasmtimeSession ($sessionHandle) is already closed" }
+            state.activeCalls++
+        }
+        return state
+    }
+
+    private fun releaseSession(state: FfmSessionState) {
+        val shouldCloseArena = synchronized(state) {
+            state.activeCalls--
+            if (state.activeCalls == 0 && state.closeRequested && !state.arenaClosed) {
+                state.arenaClosed = true
+                true
+            } else {
+                false
+            }
+        }
+        if (shouldCloseArena) state.sessionArena.close()
+    }
+
+    private val activeSessions = java.util.concurrent.ConcurrentHashMap<Long, FfmSessionState>()
+
+    fun openSession(wasmPath: Path, imports: Any?): Long {
+        val sessionArena = Arena.ofShared()
+        try {
+            val wasmPathPtr = allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())
+            val importsJsonPtr = allocateUtf8CString(sessionArena, "[]")
+            val callbackStub = createHostCallbackStub(sessionArena, imports)
+            val errCap = 4096L
+            val errBuf = sessionArena.allocate(errCap)
+            val ptr = sessionOpenHandle.invokeExact(
+                wasmPathPtr,
+                importsJsonPtr,
+                callbackStub,
+                errBuf,
+                errCap,
+            ) as MemorySegment
+            if (ptr == MemorySegment.NULL) {
+                val errMsg = readNullTerminatedUtf8(errBuf)
+                throw IllegalStateException("Failed to open Wasmtime session: $errMsg")
+            }
+            val handle = ptr.address()
+            activeSessions[handle] = FfmSessionState(sessionArena, ptr)
+            return handle
+        } catch (t: Throwable) {
+            sessionArena.close()
+            throw t
+        }
+    }
+
+    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long {
+        val sessionArena = Arena.ofShared()
+        try {
+            val wasmBytesPtr = allocateBytes(sessionArena, wasmBytes)
+            val importsJsonPtr = allocateUtf8CString(sessionArena, "[]")
+            val callbackStub = createHostCallbackStub(sessionArena, imports)
+            val errCap = 4096L
+            val errBuf = sessionArena.allocate(errCap)
+            val ptr = sessionOpenBytesHandle.invokeExact(
+                wasmBytesPtr,
+                wasmBytes.size.toLong(),
+                importsJsonPtr,
+                callbackStub,
+                errBuf,
+                errCap,
+            ) as MemorySegment
+            if (ptr == MemorySegment.NULL) {
+                val errMsg = readNullTerminatedUtf8(errBuf)
+                throw IllegalStateException("Failed to open Wasmtime session from bytes: $errMsg")
+            }
+            val handle = ptr.address()
+            activeSessions[handle] = FfmSessionState(sessionArena, ptr)
+            return handle
+        } catch (t: Throwable) {
+            sessionArena.close()
+            throw t
+        }
+    }
+
+    fun sessionInvoke(sessionHandle: Long, functionName: String, argsJson: String): String {
+        val state = acquireSession(sessionHandle)
+        try {
+            Arena.ofConfined().use { callArena ->
+                val fnPtr = allocateUtf8CString(callArena, functionName)
+                val argsPtr = allocateUtf8CString(callArena, argsJson)
+                val respPtr = sessionInvokeHandle.invokeExact(state.sessionPtr, fnPtr, argsPtr) as MemorySegment
+                return readAndFreeCString(respPtr)
+            }
+        } finally {
+            releaseSession(state)
+        }
+    }
+
+    fun sessionDropResource(sessionHandle: Long, handle: Int): String {
+        val state = acquireSession(sessionHandle)
+        try {
+            val respPtr = sessionDropResourceHandle.invokeExact(state.sessionPtr, handle) as MemorySegment
+            return readAndFreeCString(respPtr)
+        } finally {
+            releaseSession(state)
+        }
+    }
+
+    /**
+     * Closes the native session. Safe to call multiple times. When invoked re-entrantly from a host
+     * callback, the native session is marked closed immediately but the Arena (which owns the upcall
+     * stub currently executing) is released only after the outer call returns.
+     */
+    fun sessionClose(sessionHandle: Long) {
+        val state = activeSessions.remove(sessionHandle) ?: return
+        val closeArenaNow = synchronized(state) {
+            state.closeRequested = true
+            if (state.activeCalls == 0 && !state.arenaClosed) {
+                state.arenaClosed = true
+                true
+            } else {
+                false
+            }
+        }
+        try {
+            sessionCloseHandle.invokeExact(state.sessionPtr)
+        } finally {
+            if (closeArenaNow) state.sessionArena.close()
+        }
+    }
+
     fun createHostCallbackStub(sessionArena: Arena, importsInstance: Any?): MemorySegment {
         if (importsInstance == null) return MemorySegment.NULL
         val handler = HostCallbackDispatcher(importsInstance)
