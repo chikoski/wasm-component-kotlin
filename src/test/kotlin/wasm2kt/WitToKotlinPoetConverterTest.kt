@@ -49,6 +49,7 @@ class WitToKotlinPoetConverterTest {
         assertTrue(supportFile.contains("sealed interface WitResult<out T, out E>"))
         assertTrue(supportFile.contains("data class Tuple2<out T0, out T1>"))
         assertTrue(supportFile.contains("interface WasmtimeSession : AutoCloseable"))
+        assertTrue(supportFile.contains("class JniWasmtimeSession"))
 
         // Verify World singleton object and nested types
         assertTrue(worldFile.contains("object CalculatorWorld"))
@@ -1144,6 +1145,138 @@ class WitToKotlinPoetConverterTest {
 
         assertEquals(
             "rawBytes=42:RAW#200|cwasmBytes=48:AOT_BYTES#201|cwasmPath=54:AOT_PATH#202",
+            actualOutput,
+        )
+    }
+
+    @Test
+    fun `native JNI Wasmtime execution with JniWasmtimeSession across Path, ByteArray, AOT cwasm, host imports, and resources`(@TempDir tempDir: Path) {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val roundtripWitPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wit")).toURI())
+        val counterWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wasm")).toURI())
+        val counterWitPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wit")).toURI())
+
+        // Precompile roundtrip.wasm into AOT .cwasm via JNI bridge (JniWasmtimeBridge)
+        val rawRoundtripBytes = Files.readAllBytes(roundtripWasmPath)
+        val cwasmBytes = wasm2kt.runtime.JniWasmtimeBridge.precompileComponent(rawRoundtripBytes)
+        assertTrue(cwasmBytes.isNotEmpty(), "JNI precompiled .cwasm bytes must not be empty")
+
+        // Generate bindings for both roundtrip and counter in the same package
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.jni",
+                roundtripWitPath.toString(),
+            ),
+        )
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.jni",
+                counterWitPath.toString(),
+            ),
+        )
+
+        val harnessPath = tempDir.resolve("com/example/jni/JniHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.jni
+
+            import java.nio.file.Path
+
+            fun runJniScenario(roundtripWasmPath: Path, cwasmBytes: ByteArray, counterWasmPath: Path): String {
+                // Switch WasmtimeSession to JNI backend (Android ART compatible, zero java.lang.foreign usage)
+                WasmtimeSession.useJniBackend()
+
+                val imports = object : RoundtripWorld.Imports {
+                    override val envProvider = object : RoundtripWorld.EnvProvider {
+                        override fun getMultiplier(): Int = 7
+                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix@${'$'}code"
+                    }
+                }
+
+                // 1. Roundtrip over JNI from Path + Host Callbacks
+                val pathSummary = RoundtripWorld.withSession(roundtripWasmPath, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(6) } // 6 * 7 = 42
+                    val tag = RoundtripWorld.describeCode("JNI", 777u)
+                    val initial = RoundtripWorld.ItemSummary(
+                        count = 20u,
+                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.WRITE,
+                        prio = RoundtripWorld.Priority.MEDIUM,
+                    )
+                    val updated = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(22u))
+                    "${'$'}scaled:${'$'}tag:${'$'}{updated.count}:${'$'}{updated.perms.write}"
+                }
+
+                // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
+                val aotBytesSummary = RoundtripWorld.withSession(cwasmBytes, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(5) } // 5 * 7 = 35
+                    val optVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(10)))
+                    val unwrapped = (optVal as WitOption.Some).value.getOrNull()
+                    "${'$'}scaled:${'$'}unwrapped"
+                }
+
+                // 3. Counter resource lifecycle over JNI
+                val counterSummary = CounterWorldWorld.withSession(counterWasmPath) {
+                    CounterWorldWorld.Counter(10).use { c1 ->
+                        c1.add(5)
+                        val c2 = CounterWorldWorld.Counter(27)
+                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                            "${'$'}{c1.getValue()}:${'$'}{c2.isClosed}:${'$'}{merged.getValue()}"
+                        }
+                    }
+                }
+
+                return "path=${'$'}pathSummary|aot=${'$'}aotBytesSummary|counter=${'$'}counterSummary"
+            }
+            """.trimIndent(),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/jni")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("RoundtripWorld.kt").toString(),
+            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "JniHarness must compile cleanly")
+
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.jni.JniHarnessKt")
+        val method = harnessClass.getDeclaredMethod(
+            "runJniScenario",
+            Path::class.java,
+            ByteArray::class.java,
+            Path::class.java,
+        )
+        val actualOutput = method.invoke(null, roundtripWasmPath, cwasmBytes, counterWasmPath) as String
+
+        assertEquals(
+            "path=42:JNI@777:42:true|aot=35:110|counter=15:true:42",
             actualOutput,
         )
     }

@@ -1392,9 +1392,10 @@ class WitToKotlinPoetConverter(
             fileBuilder.addType(buildTupleTypeSpec(arity))
         }
 
-        // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession & InMemoryWasmtimeSession
+        // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
         fileBuilder.addType(buildWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
+        fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
 
         return fileBuilder.build()
@@ -1628,6 +1629,7 @@ class WitToKotlinPoetConverter(
         val byteArrayClass = ClassName("kotlin", "ByteArray")
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
+        val jniSessionClass = ClassName(targetPackage, "JniWasmtimeSession")
         val typeR = TypeVariableName("R")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val decoderType = LambdaTypeName.get(
@@ -1675,6 +1677,14 @@ class WitToKotlinPoetConverter(
             .addType(
                 TypeSpec.companionObjectBuilder()
                     .addProperty(
+                        PropertySpec.builder("isFfmAvailable", BOOLEAN, KModifier.PRIVATE)
+                            .initializer(
+                                "try { Class.forName(%S); true } catch (_: Throwable) { false }",
+                                "java.lang.foreign.Linker",
+                            )
+                            .build(),
+                    )
+                    .addProperty(
                         PropertySpec.builder(
                             "factory",
                             LambdaTypeName.get(
@@ -1687,8 +1697,9 @@ class WitToKotlinPoetConverter(
                         )
                             .mutable(true)
                             .initializer(
-                                "{ wasmPath, imports -> %T.open(wasmPath, imports) }",
+                                "{ wasmPath, imports -> if (isFfmAvailable) %T.open(wasmPath, imports) else %T.open(wasmPath, imports) }",
                                 ffmSessionClass,
+                                jniSessionClass,
                             )
                             .build(),
                     )
@@ -1705,9 +1716,22 @@ class WitToKotlinPoetConverter(
                         )
                             .mutable(true)
                             .initializer(
-                                "{ wasmBytes, imports -> %T.open(wasmBytes, imports) }",
+                                "{ wasmBytes, imports -> if (isFfmAvailable) %T.open(wasmBytes, imports) else %T.open(wasmBytes, imports) }",
                                 ffmSessionClass,
+                                jniSessionClass,
                             )
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("useJniBackend")
+                            .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", jniSessionClass)
+                            .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", jniSessionClass)
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("useFfmBackend")
+                            .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", ffmSessionClass)
+                            .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", ffmSessionClass)
                             .build(),
                     )
                     .addFunction(
@@ -1935,6 +1959,136 @@ class WitToKotlinPoetConverter(
                             .addStatement("sessionArena.close()")
                             .addStatement("throw t")
                             .endControlFlow()
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build()
+    }
+
+    private fun buildJniWasmtimeSessionTypeSpec(): TypeSpec {
+        val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val jniSessionClass = ClassName(targetPackage, "JniWasmtimeSession")
+        val jniBridgeClass = ClassName("wasm2kt.runtime", "JniWasmtimeBridge")
+        val pathClass = ClassName("java.nio.file", "Path")
+        val byteArrayClass = ClassName("kotlin", "ByteArray")
+        val jsonClass = ClassName("kotlinx.serialization.json", "Json")
+        val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
+        val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
+        val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val typeR = TypeVariableName("R")
+        val decoderType = LambdaTypeName.get(
+            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+            returnType = typeR,
+        )
+
+        return TypeSpec.classBuilder("JniWasmtimeSession")
+            .addSuperinterface(runtimeSessionClass)
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addModifiers(KModifier.PRIVATE)
+                    .addParameter("sessionPtr", LONG)
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("sessionPtr", LONG, KModifier.PRIVATE)
+                    .initializer("sessionPtr")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("isClosed", BOOLEAN)
+                    .mutable(true)
+                    .setter(FunSpec.setterBuilder().addModifiers(KModifier.PRIVATE).build())
+                    .initializer("false")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invoke")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addTypeVariable(typeR)
+                    .addParameter("functionName", STRING)
+                    .addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("check(!isClosed) { %S }", "JniWasmtimeSession is already closed")
+                    .addStatement(
+                        "val argsJson = %T.encodeToString(%T.serializer(), %T(args.map { %T.toJsonElement(it) }))",
+                        jsonClass,
+                        jsonElementClass,
+                        jsonArrayClass,
+                        ffmCodecClass,
+                    )
+                    .addStatement("val respStr = %T.nativeSessionInvoke(sessionPtr, functionName, argsJson)", jniBridgeClass)
+                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
+                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
+                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Unknown Wasmtime error")
+                    .addStatement("throw IllegalStateException(errMsg)")
+                    .endControlFlow()
+                    .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
+                    .addStatement("return decoder(valElem)")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("newResource")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("resourceName", STRING)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(INT)
+                    .addStatement("return invoke(%P, { %T.decodeInt(it) }, *args)", "[constructor]\$resourceName", ffmCodecClass)
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invokeMethod")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addTypeVariable(typeR)
+                    .addParameter("handle", INT)
+                    .addParameter("methodName", STRING)
+                    .addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("val allArgs = arrayOf<Any?>(handle, *args)")
+                    .addStatement("return invoke(methodName, decoder, *allArgs)")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("dropResource")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("handle", INT)
+                    .addStatement("check(!isClosed) { %S }", "JniWasmtimeSession is already closed")
+                    .addStatement("val respStr = %T.nativeSessionDropResource(sessionPtr, handle)", jniBridgeClass)
+                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
+                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
+                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Failed to drop resource")
+                    .addStatement("throw IllegalStateException(errMsg)")
+                    .endControlFlow()
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("close")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .beginControlFlow("if (!isClosed)")
+                    .addStatement("isClosed = true")
+                    .addStatement("%T.nativeSessionClose(sessionPtr)", jniBridgeClass)
+                    .endControlFlow()
+                    .build(),
+            )
+            .addType(
+                TypeSpec.companionObjectBuilder()
+                    .addFunction(
+                        FunSpec.builder("open")
+                            .addParameter("wasmPath", pathClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(jniSessionClass)
+                            .addStatement("return %T(%T.openSession(wasmPath, imports))", jniSessionClass, jniBridgeClass)
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("open")
+                            .addParameter("wasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(jniSessionClass)
+                            .addStatement("return %T(%T.openSessionBytes(wasmBytes, imports))", jniSessionClass, jniBridgeClass)
                             .build(),
                     )
                     .build(),
