@@ -15,7 +15,6 @@ repositories {
 
 dependencies {
     implementation(libs.kotlinpoet)
-    implementation(libs.kotlin.reflect)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.clikt)
 

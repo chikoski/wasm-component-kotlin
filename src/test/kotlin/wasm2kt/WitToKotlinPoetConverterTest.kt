@@ -38,9 +38,11 @@ class WitToKotlinPoetConverterTest {
         val supportFile = files.first { it.name == "WitSupport" }.toString()
         val worldFile = files.first { it.name == "CalculatorWorld" }.toString()
 
-        // Verify idiomatic Kotlin: no redundant `public` visibility modifiers
+        // Verify idiomatic Kotlin: no redundant `public` visibility modifiers and zero kotlin-reflect usage
         assertTrue(!supportFile.contains("public "), "Support file must omit redundant public modifiers")
         assertTrue(!worldFile.contains("public "), "World file must omit redundant public modifiers")
+        assertTrue(!supportFile.contains("kotlin.reflect"), "Support file must not depend on kotlin.reflect")
+        assertTrue(!worldFile.contains("kotlin.reflect"), "World file must not depend on kotlin.reflect")
 
         // Verify WitSupport contains sealed interfaces WitOption, WitResult, Tuple2, and WasmtimeSession
         assertTrue(supportFile.contains("sealed interface WitOption<out T>"))
