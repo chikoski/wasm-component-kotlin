@@ -30,6 +30,7 @@ import com.squareup.kotlinpoet.U_INT
 import com.squareup.kotlinpoet.U_LONG
 import com.squareup.kotlinpoet.U_SHORT
 import com.squareup.kotlinpoet.UNIT
+import com.squareup.kotlinpoet.joinToCode
 import wasm2kt.ast.WitDocs
 import wasm2kt.ast.WitEnumCase
 import wasm2kt.ast.WitField
@@ -80,6 +81,13 @@ class WitToKotlinPoetConverter(
     private val generatedTupleArities = mutableSetOf<Int>()
     private var needsWitOption = false
     private var needsWitResult = false
+
+    private val witJsonSerializableClass = ClassName("wasm2kt.runtime", "WitJsonSerializable")
+    private val witHostImportDispatcherClass = ClassName("wasm2kt.runtime", "WitHostImportDispatcher")
+    private val ffmCodecClass = ClassName("wasm2kt.runtime", "FfmJsonCodec")
+    private val jsonElementClass = ClassName("kotlinx.serialization.json", "JsonElement")
+    private val jsonArrayClass = ClassName("kotlinx.serialization.json", "JsonArray")
+    private val jsonNullClass = ClassName("kotlinx.serialization.json", "JsonNull")
 
     fun generate(): List<GeneratedKotlinFile> {
         val fileSpecs = mutableListOf<FileSpec>()
@@ -179,33 +187,50 @@ class WitToKotlinPoetConverter(
             }
         }
 
-        // 2. Build Imports interface
+        // 2. Build Imports interface with static reflection-free dispatchHostImport
         val importsBuilder = TypeSpec.interfaceBuilder("Imports")
+            .addSuperinterface(witHostImportDispatcherClass)
+        val dispatchBranches = mutableListOf<CodeBlock>()
         var hasImports = false
         for ((importKey, item) in world.imports) {
             when (item) {
                 is WitWorldItem.FunctionItem -> {
-                    if (item.function.kind is WitFunctionKind.Freestanding) {
-                        importsBuilder.addFunction(buildInterfaceFunctionSpec(item.function, worldClassName))
+                    val fn = item.function
+                    if (fn.kind is WitFunctionKind.Freestanding) {
+                        importsBuilder.addFunction(buildInterfaceFunctionSpec(fn, worldClassName))
+                        dispatchBranches += buildHostImportBranchCode(
+                            importSpecKey = fn.name,
+                            receiverProperty = null,
+                            fn = fn,
+                            worldClassName = worldClassName,
+                        )
                         hasImports = true
                     }
                 }
                 is WitWorldItem.InterfaceRef -> {
                     val iface = resolve.interfaces.getOrNull(item.id) ?: continue
-                    val ifaceName = iface.name ?: importKey
+                    val rawIfaceName = iface.name ?: importKey
+                    val shortIfaceName = rawIfaceName.substringAfter('/').substringBefore('@')
                     if (iface.functions.values.any { it.kind is WitFunctionKind.Freestanding }) {
-                        val subIfacePascal = NamingConventions.toPascalCase(ifaceName)
+                        val subIfacePascal = NamingConventions.toPascalCase(shortIfaceName)
+                        val subIfacePropName = NamingConventions.toCamelCase(shortIfaceName)
                         val subIfaceBuilder = TypeSpec.interfaceBuilder(subIfacePascal)
                         iface.docs?.contents?.let { subIfaceBuilder.addKdoc("%L\n", it.trim()) }
                         for (fn in iface.functions.values) {
                             if (fn.kind is WitFunctionKind.Freestanding) {
                                 subIfaceBuilder.addFunction(buildInterfaceFunctionSpec(fn, worldClassName))
+                                dispatchBranches += buildHostImportBranchCode(
+                                    importSpecKey = "$shortIfaceName#${fn.name}",
+                                    receiverProperty = subIfacePropName,
+                                    fn = fn,
+                                    worldClassName = worldClassName,
+                                )
                             }
                         }
                         worldObjBuilder.addType(subIfaceBuilder.build())
                         importsBuilder.addProperty(
                             PropertySpec.builder(
-                                NamingConventions.toCamelCase(ifaceName),
+                                subIfacePropName,
                                 worldClassName.nestedClass(subIfacePascal),
                             ).build(),
                         )
@@ -218,6 +243,7 @@ class WitToKotlinPoetConverter(
         if (!hasImports) {
             worldObjBuilder.addType(
                 TypeSpec.interfaceBuilder("Imports")
+                    .addSuperinterface(witHostImportDispatcherClass)
                     .addType(
                         TypeSpec.companionObjectBuilder().addProperty(
                             PropertySpec.builder("EMPTY", importsClassName)
@@ -228,6 +254,23 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
         } else {
+            val dispatchCode = CodeBlock.builder()
+                .beginControlFlow("return when (importSpec)")
+            for (branch in dispatchBranches) {
+                dispatchCode.add(branch)
+            }
+            dispatchCode.addStatement("else -> error(%P)", "Unknown host import: \$importSpec")
+            dispatchCode.endControlFlow()
+
+            importsBuilder.addFunction(
+                FunSpec.builder("dispatchHostImport")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("importSpec", STRING)
+                    .addParameter("args", jsonArrayClass)
+                    .returns(jsonElementClass)
+                    .addCode(dispatchCode.build())
+                    .build(),
+            )
             worldObjBuilder.addType(importsBuilder.build())
         }
 
@@ -351,6 +394,36 @@ class WitToKotlinPoetConverter(
         return fileBuilder.build()
     }
 
+    private fun buildHostImportBranchCode(
+        importSpecKey: String,
+        receiverProperty: String?,
+        fn: WitFunction,
+        worldClassName: ClassName,
+    ): CodeBlock {
+        val fnCamelName = NamingConventions.toCamelCase(fn.name)
+        val decodedArgs = fn.params.mapIndexed { idx, param ->
+            buildDecodeExpression(param.type, CodeBlock.of("args[$idx]"), worldClassName)
+        }
+        val callExpr = if (receiverProperty != null) {
+            CodeBlock.of("%N.%N(%L)", receiverProperty, fnCamelName, decodedArgs.joinToCode(", "))
+        } else {
+            CodeBlock.of("%N(%L)", fnCamelName, decodedArgs.joinToCode(", "))
+        }
+
+        return if (fn.results.isEmpty()) {
+            CodeBlock.builder()
+                .beginControlFlow("%S ->", importSpecKey)
+                .addStatement("%L", callExpr)
+                .addStatement("%T", jsonNullClass)
+                .endControlFlow()
+                .build()
+        } else {
+            CodeBlock.builder()
+                .addStatement("%S -> %T.toJsonElement(%L)", importSpecKey, ffmCodecClass, callExpr)
+                .build()
+        }
+    }
+
     private fun generateStandaloneInterfacesFile(): FileSpec {
         val syntheticWorld = WitWorld(
             name = "default",
@@ -431,7 +504,7 @@ class WitToKotlinPoetConverter(
                 ownerContainer.addType(buildRecordTypeSpec(typePascalName, kind.fields, typeDef.docs, worldClassName))
             }
             is WitTypeDefKind.Enum -> {
-                ownerContainer.addType(buildEnumTypeSpec(typePascalName, kind.cases, typeDef.docs))
+                ownerContainer.addType(buildEnumTypeSpec(typePascalName, kind.cases, typeDef.docs, worldClassName.nestedClass(typePascalName)))
             }
             is WitTypeDefKind.Flags -> {
                 ownerContainer.addType(buildFlagsTypeSpec(typePascalName, kind.flags, typeDef.docs, worldClassName.nestedClass(typePascalName)))
@@ -474,7 +547,9 @@ class WitToKotlinPoetConverter(
         docs: WitDocs?,
         worldClassName: ClassName,
     ): TypeSpec {
+        val recordClassName = worldClassName.nestedClass(name)
         val builder = TypeSpec.classBuilder(name)
+            .addSuperinterface(witJsonSerializableClass)
         if (fields.isNotEmpty()) {
             builder.addModifiers(KModifier.DATA)
         }
@@ -491,6 +566,42 @@ class WitToKotlinPoetConverter(
             builder.addProperty(propBuilder.build())
         }
         builder.primaryConstructor(ctorBuilder.build())
+
+        val toWitJsonBuilder = FunSpec.builder("toWitJson")
+            .addModifiers(KModifier.OVERRIDE)
+            .returns(jsonElementClass)
+        if (fields.isEmpty()) {
+            toWitJsonBuilder.addStatement("return %T.encodeRecord()", ffmCodecClass)
+        } else {
+            val pairs = fields.map { field ->
+                val propName = NamingConventions.toCamelCase(field.name)
+                CodeBlock.of("%S to %N", field.name, propName)
+            }
+            toWitJsonBuilder.addStatement("return %T.encodeRecord(%L)", ffmCodecClass, pairs.joinToCode(", "))
+        }
+        builder.addFunction(toWitJsonBuilder.build())
+
+        val fromWitJsonBuilder = FunSpec.builder("fromWitJson")
+            .addParameter("elem", jsonElementClass)
+            .returns(recordClassName)
+        if (fields.isEmpty()) {
+            fromWitJsonBuilder.addStatement("return %T()", recordClassName)
+        } else {
+            fromWitJsonBuilder.addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
+            val ctorArgs = fields.map { field ->
+                val propName = NamingConventions.toCamelCase(field.name)
+                val fieldElemExpr = CodeBlock.of("%T.field(obj, %S)", ffmCodecClass, field.name)
+                val decodedExpr = buildDecodeExpression(field.type, fieldElemExpr, worldClassName)
+                CodeBlock.of("%N = %L", propName, decodedExpr)
+            }
+            fromWitJsonBuilder.addStatement("return %T(%L)", recordClassName, ctorArgs.joinToCode(", "))
+        }
+        builder.addType(
+            TypeSpec.companionObjectBuilder()
+                .addFunction(fromWitJsonBuilder.build())
+                .build(),
+        )
+
         return builder.build()
     }
 
@@ -498,8 +609,10 @@ class WitToKotlinPoetConverter(
         name: String,
         cases: List<WitEnumCase>,
         docs: WitDocs?,
+        selfClassName: ClassName,
     ): TypeSpec {
         val builder = TypeSpec.enumBuilder(name)
+            .addSuperinterface(witJsonSerializableClass)
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
         for (case in cases) {
             val entryName = NamingConventions.toUpperSnakeCase(case.name)
@@ -508,6 +621,42 @@ class WitToKotlinPoetConverter(
                 .build()
             builder.addEnumConstant(entryName, entrySpec)
         }
+
+        val toJsonCode = CodeBlock.builder()
+            .beginControlFlow("return when (this)")
+        for (case in cases) {
+            val entryName = NamingConventions.toUpperSnakeCase(case.name)
+            toJsonCode.addStatement("%N -> %T.toJsonElement(%S)", entryName, ffmCodecClass, case.name)
+        }
+        toJsonCode.endControlFlow()
+        builder.addFunction(
+            FunSpec.builder("toWitJson")
+                .addModifiers(KModifier.OVERRIDE)
+                .returns(jsonElementClass)
+                .addCode(toJsonCode.build())
+                .build(),
+        )
+
+        val fromJsonCode = CodeBlock.builder()
+            .beginControlFlow("return when (val tag = %T.decodeString(elem))", ffmCodecClass)
+        for (case in cases) {
+            val entryName = NamingConventions.toUpperSnakeCase(case.name)
+            fromJsonCode.addStatement("%S -> %N", case.name, entryName)
+        }
+        fromJsonCode.addStatement("else -> error(%P)", "Unknown $name enum case: \$tag")
+        fromJsonCode.endControlFlow()
+        builder.addType(
+            TypeSpec.companionObjectBuilder()
+                .addFunction(
+                    FunSpec.builder("fromWitJson")
+                        .addParameter("elem", jsonElementClass)
+                        .returns(selfClassName)
+                        .addCode(fromJsonCode.build())
+                        .build(),
+                )
+                .build(),
+        )
+
         return builder.build()
     }
 
@@ -525,6 +674,7 @@ class WitToKotlinPoetConverter(
         val builder = TypeSpec.classBuilder(name)
             .addModifiers(KModifier.VALUE)
             .addAnnotation(JvmInline::class)
+            .addSuperinterface(witJsonSerializableClass)
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addParameter(
@@ -570,6 +720,15 @@ class WitToKotlinPoetConverter(
             )
         }
 
+        val decodeMethod = if (useULong) "decodeULong" else "decodeUInt"
+        companionBuilder.addFunction(
+            FunSpec.builder("fromWitJson")
+                .addParameter("elem", jsonElementClass)
+                .returns(selfClassName)
+                .addStatement("return %T(%T.$decodeMethod(elem))", selfClassName, ffmCodecClass)
+                .build(),
+        )
+
         builder.addFunction(
             FunSpec.builder("or")
                 .addModifiers(KModifier.INFIX)
@@ -586,6 +745,13 @@ class WitToKotlinPoetConverter(
                 .addStatement("return %T(raw and other.raw)", selfClassName)
                 .build(),
         )
+        builder.addFunction(
+            FunSpec.builder("toWitJson")
+                .addModifiers(KModifier.OVERRIDE)
+                .returns(jsonElementClass)
+                .addStatement("return %T.toJsonElement(raw)", ffmCodecClass)
+                .build(),
+        )
         builder.addType(companionBuilder.build())
         return builder.build()
     }
@@ -599,6 +765,7 @@ class WitToKotlinPoetConverter(
         val variantClassName = worldClassName.nestedClass(name)
         val builder = TypeSpec.interfaceBuilder(name)
             .addModifiers(KModifier.SEALED)
+            .addSuperinterface(witJsonSerializableClass)
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
         for (case in cases) {
@@ -607,6 +774,13 @@ class WitToKotlinPoetConverter(
                 val objBuilder = TypeSpec.objectBuilder(caseName)
                     .addModifiers(KModifier.DATA)
                     .addSuperinterface(variantClassName)
+                    .addFunction(
+                        FunSpec.builder("toWitJson")
+                            .addModifiers(KModifier.OVERRIDE)
+                            .returns(jsonElementClass)
+                            .addStatement("return %T.encodeVariant(%S)", ffmCodecClass, case.name)
+                            .build(),
+                    )
                 case.docs?.contents?.let { objBuilder.addKdoc("%L\n", it.trim()) }
                 builder.addType(objBuilder.build())
             } else {
@@ -624,10 +798,45 @@ class WitToKotlinPoetConverter(
                             .initializer("value")
                             .build(),
                     )
+                    .addFunction(
+                        FunSpec.builder("toWitJson")
+                            .addModifiers(KModifier.OVERRIDE)
+                            .returns(jsonElementClass)
+                            .addStatement("return %T.encodeVariant(%S, value)", ffmCodecClass, case.name)
+                            .build(),
+                    )
                 case.docs?.contents?.let { classBuilder.addKdoc("%L\n", it.trim()) }
                 builder.addType(classBuilder.build())
             }
         }
+
+        val fromJsonCode = CodeBlock.builder()
+            .addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
+            .beginControlFlow("return when (val caseTag = %T.variantCase(obj))", ffmCodecClass)
+        for (case in cases) {
+            val caseName = NamingConventions.toPascalCase(case.name)
+            if (case.type == null) {
+                fromJsonCode.addStatement("%S -> %N", case.name, caseName)
+            } else {
+                val payloadElem = CodeBlock.of("%T.variantPayload(obj)", ffmCodecClass)
+                val decodedPayload = buildDecodeExpression(case.type, payloadElem, worldClassName)
+                fromJsonCode.addStatement("%S -> %N(%L)", case.name, caseName, decodedPayload)
+            }
+        }
+        fromJsonCode.addStatement("else -> error(%P)", "Unknown $name variant case: \$caseTag")
+        fromJsonCode.endControlFlow()
+        builder.addType(
+            TypeSpec.companionObjectBuilder()
+                .addFunction(
+                    FunSpec.builder("fromWitJson")
+                        .addParameter("elem", jsonElementClass)
+                        .returns(variantClassName)
+                        .addCode(fromJsonCode.build())
+                        .build(),
+                )
+                .build(),
+        )
+
         return builder.build()
     }
 
@@ -668,6 +877,7 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .addSuperinterface(autoCloseableClass)
+            .addSuperinterface(witJsonSerializableClass)
             .addFunction(
                 FunSpec.builder("consumeOwnership")
                     .addModifiers(KModifier.INTERNAL)
@@ -675,6 +885,13 @@ class WitToKotlinPoetConverter(
                     .addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
                     .addStatement("isClosed = true")
                     .addStatement("return handle")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("toWitJson")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .returns(jsonElementClass)
+                    .addStatement("return %T.toJsonElement(handle)", ffmCodecClass)
                     .build(),
             )
 
@@ -708,8 +925,8 @@ class WitToKotlinPoetConverter(
                     companionBuilder.addFunction(invokeBuilder.build())
                 }
                 is WitFunctionKind.Method -> {
-                    val methodName = NamingConventions.extractResourceMemberName(fn.name)
-                    val methodBuilder = FunSpec.builder(methodName)
+                    val cleanMethodName = NamingConventions.extractResourceMemberName(fn.name)
+                    val methodBuilder = FunSpec.builder(cleanMethodName)
                     fn.docs?.contents?.let { methodBuilder.addKdoc("%L\n", it.trim()) }
                     val userParams = fn.params.dropWhile { it.name == "self" }
                     val argFormatPlaceholders = mutableListOf<String>()
@@ -725,22 +942,22 @@ class WitToKotlinPoetConverter(
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     methodBuilder.returns(returnType)
                     val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-                    val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
                     if (returnType == UNIT) {
                         methodBuilder.addStatement(
-                            "session.runtimeSession.invokeMethod<Unit>(handle, %S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
+                            "session.runtimeSession.invokeMethod(handle, %S, { %T.decodeUnit(it) }$argsJoined)",
+                            *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
                     } else if (returnsOwnedResource(fn)) {
                         methodBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invokeMethod<Int>(handle, %S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
+                            "val resultHandle = session.runtimeSession.invokeMethod(handle, %S, { %T.decodeInt(it) }$argsJoined)",
+                            *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
                         methodBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
+                        val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
                         methodBuilder.addStatement(
-                            "return session.runtimeSession.invokeMethod(handle, %S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
+                            "return session.runtimeSession.invokeMethod(handle, %S, %L$argsJoined)",
+                            *(listOf<Any>(fn.name, decoderLambda) + extraFormatArgs).toTypedArray(),
                         )
                     }
                     builder.addFunction(methodBuilder.build())
@@ -762,22 +979,22 @@ class WitToKotlinPoetConverter(
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     staticBuilder.returns(returnType)
                     val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-                    val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
                     if (returnType == UNIT) {
                         staticBuilder.addStatement(
-                            "session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
+                            "session.runtimeSession.invoke(%S, { %T.decodeUnit(it) }$argsJoined)",
+                            *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
                     } else if (returnsOwnedResource(fn)) {
                         staticBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
+                            "val resultHandle = session.runtimeSession.invoke(%S, { %T.decodeInt(it) }$argsJoined)",
+                            *(listOf<Any>(fn.name, ffmCodecClass) + extraFormatArgs).toTypedArray(),
                         )
                         staticBuilder.addStatement("return %T(session, resultHandle)", returnType)
                     } else {
+                        val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
                         staticBuilder.addStatement(
-                            "return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)",
-                            *(listOf<Any>(fn.name, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
+                            "return session.runtimeSession.invoke(%S, %L$argsJoined)",
+                            *(listOf<Any>(fn.name, decoderLambda) + extraFormatArgs).toTypedArray(),
                         )
                     }
                     companionBuilder.addFunction(staticBuilder.build())
@@ -846,25 +1063,164 @@ class WitToKotlinPoetConverter(
 
         val fullExportName = "$invokeTargetPrefix${fn.name}"
         val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-        val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
         if (returnType == UNIT) {
             builder.addStatement(
-                "session.runtimeSession.invoke<Unit>(%S, %M<%T>()$argsJoined)",
-                *(listOf<Any>(fullExportName, typeOfMember, UNIT) + extraFormatArgs).toTypedArray(),
+                "session.runtimeSession.invoke(%S, { %T.decodeUnit(it) }$argsJoined)",
+                *(listOf<Any>(fullExportName, ffmCodecClass) + extraFormatArgs).toTypedArray(),
             )
         } else if (returnsOwnedResource(fn)) {
             builder.addStatement(
-                "val resultHandle = session.runtimeSession.invoke<Int>(%S, %M<%T>()$argsJoined)",
-                *(listOf<Any>(fullExportName, typeOfMember, INT) + extraFormatArgs).toTypedArray(),
+                "val resultHandle = session.runtimeSession.invoke(%S, { %T.decodeInt(it) }$argsJoined)",
+                *(listOf<Any>(fullExportName, ffmCodecClass) + extraFormatArgs).toTypedArray(),
             )
             builder.addStatement("return %T(session, resultHandle)", returnType)
         } else {
+            val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
             builder.addStatement(
-                "return session.runtimeSession.invoke(%S, %M<%T>()$argsJoined)",
-                *(listOf<Any>(fullExportName, typeOfMember, returnType) + extraFormatArgs).toTypedArray(),
+                "return session.runtimeSession.invoke(%S, %L$argsJoined)",
+                *(listOf<Any>(fullExportName, decoderLambda) + extraFormatArgs).toTypedArray(),
             )
         }
         return builder.build()
+    }
+
+    private fun buildFunctionReturnDecoderLambda(
+        fn: WitFunction,
+        worldClassName: ClassName,
+    ): CodeBlock {
+        return when (fn.results.size) {
+            0 -> CodeBlock.of("{ %T.decodeUnit(it) }", ffmCodecClass)
+            1 -> {
+                val body = buildDecodeExpression(fn.results.first().type, CodeBlock.of("elem"), worldClassName)
+                CodeBlock.of("{ elem -> %L }", body)
+            }
+            else -> {
+                val arity = fn.results.size
+                generatedTupleArities += arity
+                val tupleClass = ClassName(targetPackage, "Tuple$arity")
+                val elemDecoders = fn.results.mapIndexed { idx, res ->
+                    buildDecodeExpression(res.type, CodeBlock.of("arr[$idx]"), worldClassName)
+                }
+                CodeBlock.of(
+                    "{ elem -> %T.asJsonArray(elem).let { arr -> %T(%L) } }",
+                    ffmCodecClass,
+                    tupleClass,
+                    elemDecoders.joinToCode(", "),
+                )
+            }
+        }
+    }
+
+    private fun buildDecodeExpression(
+        typeRef: WitTypeRef,
+        elemExpr: CodeBlock,
+        worldClassName: ClassName,
+        depth: Int = 0,
+    ): CodeBlock {
+        return when (typeRef) {
+            is WitTypeRef.Primitive -> when (typeRef.name) {
+                "bool" -> CodeBlock.of("%T.decodeBoolean(%L)", ffmCodecClass, elemExpr)
+                "u8" -> CodeBlock.of("%T.decodeUByte(%L)", ffmCodecClass, elemExpr)
+                "s8" -> CodeBlock.of("%T.decodeByte(%L)", ffmCodecClass, elemExpr)
+                "u16" -> CodeBlock.of("%T.decodeUShort(%L)", ffmCodecClass, elemExpr)
+                "s16" -> CodeBlock.of("%T.decodeShort(%L)", ffmCodecClass, elemExpr)
+                "u32" -> CodeBlock.of("%T.decodeUInt(%L)", ffmCodecClass, elemExpr)
+                "s32" -> CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
+                "u64" -> CodeBlock.of("%T.decodeULong(%L)", ffmCodecClass, elemExpr)
+                "s64" -> CodeBlock.of("%T.decodeLong(%L)", ffmCodecClass, elemExpr)
+                "f32", "float32" -> CodeBlock.of("%T.decodeFloat(%L)", ffmCodecClass, elemExpr)
+                "f64", "float64" -> CodeBlock.of("%T.decodeDouble(%L)", ffmCodecClass, elemExpr)
+                "char" -> CodeBlock.of("%T.decodeChar(%L)", ffmCodecClass, elemExpr)
+                "string" -> CodeBlock.of("%T.decodeString(%L)", ffmCodecClass, elemExpr)
+                "_" -> CodeBlock.of("%T.decodeUnit(%L)", ffmCodecClass, elemExpr)
+                else -> throw IllegalArgumentException("Unknown WIT primitive type: ${typeRef.name}")
+            }
+            is WitTypeRef.Id -> {
+                val typeDef = resolve.types.getOrNull(typeRef.index)
+                    ?: throw IllegalArgumentException("Invalid WIT type index: ${typeRef.index}")
+                val name = typeDef.name
+                when (val kind = typeDef.kind) {
+                    is WitTypeDefKind.Record,
+                    is WitTypeDefKind.Enum,
+                    is WitTypeDefKind.Flags,
+                    is WitTypeDefKind.Variant,
+                    -> {
+                        val pascal = NamingConventions.toPascalCase(
+                            name ?: throw IllegalStateException("Named type at index ${typeRef.index} has null name"),
+                        )
+                        val typeClass = worldClassName.nestedClass(pascal)
+                        CodeBlock.of("%T.fromWitJson(%L)", typeClass, elemExpr)
+                    }
+                    is WitTypeDefKind.TypeAlias -> {
+                        buildDecodeExpression(kind.type, elemExpr, worldClassName, depth)
+                    }
+                    is WitTypeDefKind.Resource,
+                    is WitTypeDefKind.Handle,
+                    -> {
+                        CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
+                    }
+                    is WitTypeDefKind.OptionType -> {
+                        needsWitOption = true
+                        val witOptionClass = ClassName(targetPackage, "WitOption")
+                        val varName = "optElem$depth"
+                        val innerDecode = buildDecodeExpression(kind.type, CodeBlock.of(varName), worldClassName, depth + 1)
+                        CodeBlock.of("%T.fromWitJson(%L) { %L -> %L }", witOptionClass, elemExpr, varName, innerDecode)
+                    }
+                    is WitTypeDefKind.ResultType -> {
+                        needsWitResult = true
+                        val witResultClass = ClassName(targetPackage, "WitResult")
+                        val okVar = "okElem$depth"
+                        val errVar = "errElem$depth"
+                        val okDecode = kind.ok?.let { buildDecodeExpression(it, CodeBlock.of(okVar), worldClassName, depth + 1) }
+                            ?: CodeBlock.of("Unit")
+                        val errDecode = kind.err?.let { buildDecodeExpression(it, CodeBlock.of(errVar), worldClassName, depth + 1) }
+                            ?: CodeBlock.of("Unit")
+                        CodeBlock.of(
+                            "%T.fromWitJson(%L, { %L -> %L }, { %L -> %L })",
+                            witResultClass,
+                            elemExpr,
+                            okVar,
+                            okDecode,
+                            errVar,
+                            errDecode,
+                        )
+                    }
+                    is WitTypeDefKind.ListType -> {
+                        val itemVar = "itemElem$depth"
+                        val itemDecode = buildDecodeExpression(kind.type, CodeBlock.of(itemVar), worldClassName, depth + 1)
+                        CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
+                    }
+                    is WitTypeDefKind.Tuple -> {
+                        val arity = kind.types.size
+                        generatedTupleArities += arity
+                        val arrVar = "tupArr$depth"
+                        val tupleClass = ClassName(targetPackage, "Tuple$arity")
+                        val elemDecoders = kind.types.mapIndexed { idx, t ->
+                            buildDecodeExpression(t, CodeBlock.of("$arrVar[$idx]"), worldClassName, depth + 1)
+                        }
+                        CodeBlock.of(
+                            "%T.asJsonArray(%L).let { %L -> %T(%L) }",
+                            ffmCodecClass,
+                            elemExpr,
+                            arrVar,
+                            tupleClass,
+                            elemDecoders.joinToCode(", "),
+                        )
+                    }
+                    is WitTypeDefKind.FutureType -> {
+                        val futDecode = kind.type?.let { buildDecodeExpression(it, elemExpr, worldClassName, depth + 1) }
+                            ?: CodeBlock.of("Unit")
+                        CodeBlock.of("%T.completedFuture(%L)", ClassName("java.util.concurrent", "CompletableFuture"), futDecode)
+                    }
+                    is WitTypeDefKind.StreamType -> {
+                        val itemVar = "streamElem$depth"
+                        val itemDecode = kind.element?.let { buildDecodeExpression(it, CodeBlock.of(itemVar), worldClassName, depth + 1) }
+                            ?: CodeBlock.of("Unit")
+                        CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
+                    }
+                }
+            }
+        }
     }
 
     private fun formatArgumentCode(paramName: String, typeRef: WitTypeRef): Pair<String, String> {
@@ -1037,11 +1393,25 @@ class WitToKotlinPoetConverter(
                     .initializer("value")
                     .build(),
             )
+            .addFunction(
+                FunSpec.builder("toWitJson")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .returns(jsonElementClass)
+                    .addStatement("return %T.encodeOptionSome(value)", ffmCodecClass)
+                    .build(),
+            )
             .build()
 
         val noneObject = TypeSpec.objectBuilder("None")
             .addModifiers(KModifier.DATA)
             .addSuperinterface(witOptionClass.parameterizedBy(NOTHING))
+            .addFunction(
+                FunSpec.builder("toWitJson")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .returns(jsonElementClass)
+                    .addStatement("return %T.encodeOptionNone()", ffmCodecClass)
+                    .build(),
+            )
             .build()
 
         val getOrNullFn = FunSpec.builder("getOrNull")
@@ -1056,12 +1426,41 @@ class WitToKotlinPoetConverter(
             )
             .build()
 
+        val fromWitJsonFn = FunSpec.builder("fromWitJson")
+            .addModifiers(KModifier.INLINE)
+            .addTypeVariable(typeTInvariant)
+            .addParameter("elem", jsonElementClass)
+            .addParameter(
+                "decodeValue",
+                LambdaTypeName.get(
+                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+                    returnType = typeTInvariant,
+                ),
+            )
+            .returns(witOptionClass.parameterizedBy(typeTInvariant))
+            .addCode(
+                CodeBlock.builder()
+                    .beginControlFlow("return if (%T.isOptionNone(elem))", ffmCodecClass)
+                    .addStatement("None")
+                    .nextControlFlow("else")
+                    .addStatement("Some(decodeValue(%T.optionValue(elem)))", ffmCodecClass)
+                    .endControlFlow()
+                    .build(),
+            )
+            .build()
+
         return TypeSpec.interfaceBuilder("WitOption")
             .addModifiers(KModifier.SEALED)
             .addTypeVariable(typeT)
+            .addSuperinterface(witJsonSerializableClass)
             .addType(someClass)
             .addType(noneObject)
             .addFunction(getOrNullFn)
+            .addType(
+                TypeSpec.companionObjectBuilder()
+                    .addFunction(fromWitJsonFn)
+                    .build(),
+            )
             .build()
     }
 
@@ -1086,6 +1485,13 @@ class WitToKotlinPoetConverter(
                     .initializer("value")
                     .build(),
             )
+            .addFunction(
+                FunSpec.builder("toWitJson")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .returns(jsonElementClass)
+                    .addStatement("return %T.encodeResultOk(value)", ffmCodecClass)
+                    .build(),
+            )
             .build()
 
         val errClass = TypeSpec.classBuilder("Err")
@@ -1102,28 +1508,75 @@ class WitToKotlinPoetConverter(
                     .initializer("error")
                     .build(),
             )
+            .addFunction(
+                FunSpec.builder("toWitJson")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .returns(jsonElementClass)
+                    .addStatement("return %T.encodeResultErr(error)", ffmCodecClass)
+                    .build(),
+            )
+            .build()
+
+        val fromWitJsonFn = FunSpec.builder("fromWitJson")
+            .addModifiers(KModifier.INLINE)
+            .addTypeVariable(typeTInvariant)
+            .addTypeVariable(typeEInvariant)
+            .addParameter("elem", jsonElementClass)
+            .addParameter(
+                "decodeOk",
+                LambdaTypeName.get(
+                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+                    returnType = typeTInvariant,
+                ),
+            )
+            .addParameter(
+                "decodeErr",
+                LambdaTypeName.get(
+                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+                    returnType = typeEInvariant,
+                ),
+            )
+            .returns(witResultClass.parameterizedBy(typeTInvariant, typeEInvariant))
+            .addCode(
+                CodeBlock.builder()
+                    .beginControlFlow("return if (%T.isResultOk(elem))", ffmCodecClass)
+                    .addStatement("Ok(decodeOk(%T.resultOkValue(elem)))", ffmCodecClass)
+                    .nextControlFlow("else")
+                    .addStatement("Err(decodeErr(%T.resultErrValue(elem)))", ffmCodecClass)
+                    .endControlFlow()
+                    .build(),
+            )
             .build()
 
         return TypeSpec.interfaceBuilder("WitResult")
             .addModifiers(KModifier.SEALED)
             .addTypeVariable(typeT)
             .addTypeVariable(typeE)
+            .addSuperinterface(witJsonSerializableClass)
             .addType(okClass)
             .addType(errClass)
+            .addType(
+                TypeSpec.companionObjectBuilder()
+                    .addFunction(fromWitJsonFn)
+                    .build(),
+            )
             .build()
     }
 
     private fun buildTupleTypeSpec(arity: Int): TypeSpec {
         val builder = TypeSpec.classBuilder("Tuple$arity")
+            .addSuperinterface(witJsonSerializableClass)
         if (arity > 0) {
             builder.addModifiers(KModifier.DATA)
         }
         val ctorBuilder = FunSpec.constructorBuilder()
+        val fieldNames = mutableListOf<String>()
         for (i in 0 until arity) {
             val typeVarOut = TypeVariableName("T$i", KModifier.OUT)
             val typeVar = TypeVariableName("T$i")
             builder.addTypeVariable(typeVarOut)
             val fieldName = "f$i"
+            fieldNames += fieldName
             ctorBuilder.addParameter(fieldName, typeVar)
             builder.addProperty(
                 PropertySpec.builder(fieldName, typeVar)
@@ -1132,17 +1585,28 @@ class WitToKotlinPoetConverter(
             )
         }
         builder.primaryConstructor(ctorBuilder.build())
+        val tupleArgs = fieldNames.joinToString(", ")
+        builder.addFunction(
+            FunSpec.builder("toWitJson")
+                .addModifiers(KModifier.OVERRIDE)
+                .returns(jsonElementClass)
+                .addStatement("return %T.encodeTuple($tupleArgs)", ffmCodecClass)
+                .build(),
+        )
         return builder.build()
     }
 
     private fun buildWasmtimeSessionTypeSpec(): TypeSpec {
         val autoCloseableClass = ClassName("java.lang", "AutoCloseable")
         val pathClass = ClassName("java.nio.file", "Path")
-        val kTypeClass = ClassName("kotlin.reflect", "KType")
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val typeR = TypeVariableName("R")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val decoderType = LambdaTypeName.get(
+            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+            returnType = typeR,
+        )
 
         return TypeSpec.interfaceBuilder("WasmtimeSession")
             .addSuperinterface(autoCloseableClass)
@@ -1151,7 +1615,7 @@ class WitToKotlinPoetConverter(
                     .addModifiers(KModifier.ABSTRACT)
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .build(),
@@ -1170,7 +1634,7 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .build(),
@@ -1218,23 +1682,19 @@ class WitToKotlinPoetConverter(
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val ffmBridgeClass = ClassName("wasm2kt.runtime", "FfmWasmtimeBridge")
-        val ffmCodecClass = ClassName("wasm2kt.runtime", "FfmJsonCodec")
         val arenaClass = ClassName("java.lang.foreign", "Arena")
         val memorySegmentClass = ClassName("java.lang.foreign", "MemorySegment")
-        val valueLayoutClass = ClassName("java.lang.foreign", "ValueLayout")
-        val standardCharsetsClass = ClassName("java.nio.charset", "StandardCharsets")
         val pathClass = ClassName("java.nio.file", "Path")
-        val kTypeClass = ClassName("kotlin.reflect", "KType")
         val jsonClass = ClassName("kotlinx.serialization.json", "Json")
-        val jsonArrayClass = ClassName("kotlinx.serialization.json", "JsonArray")
-        val jsonElementClass = ClassName("kotlinx.serialization.json", "JsonElement")
-        val jsonNullClass = ClassName("kotlinx.serialization.json", "JsonNull")
         val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
         val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
         val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
-        val typeOfMember = com.squareup.kotlinpoet.MemberName("kotlin.reflect", "typeOf")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val typeR = TypeVariableName("R")
+        val decoderType = LambdaTypeName.get(
+            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+            returnType = typeR,
+        )
 
         return TypeSpec.classBuilder("FfmWasmtimeSession")
             .addSuperinterface(runtimeSessionClass)
@@ -1271,14 +1731,9 @@ class WitToKotlinPoetConverter(
             .addFunction(
                 FunSpec.builder("invoke")
                     .addModifiers(KModifier.OVERRIDE)
-                    .addAnnotation(
-                        com.squareup.kotlinpoet.AnnotationSpec.builder(Suppress::class)
-                            .addMember("%S", "UNCHECKED_CAST")
-                            .build(),
-                    )
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
@@ -1303,7 +1758,7 @@ class WitToKotlinPoetConverter(
                     .addStatement("throw IllegalStateException(errMsg)")
                     .endControlFlow()
                     .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
-                    .addStatement("return %T.fromJsonElement(valElem, returnType) as R", ffmCodecClass)
+                    .addStatement("return decoder(valElem)")
                     .endControlFlow()
                     .build(),
             )
@@ -1313,7 +1768,7 @@ class WitToKotlinPoetConverter(
                     .addParameter("resourceName", STRING)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(INT)
-                    .addStatement("return invoke(%P, %M<Int>(), *args)", "[constructor]\$resourceName", typeOfMember)
+                    .addStatement("return invoke(%P, { %T.decodeInt(it) }, *args)", "[constructor]\$resourceName", ffmCodecClass)
                     .build(),
             )
             .addFunction(
@@ -1322,11 +1777,11 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("val allArgs = arrayOf<Any?>(handle, *args)")
-                    .addStatement("return invoke(methodName, returnType, *allArgs)")
+                    .addStatement("return invoke(methodName, decoder, *allArgs)")
                     .build(),
             )
             .addFunction(
@@ -1400,10 +1855,13 @@ class WitToKotlinPoetConverter(
 
     private fun buildInMemoryWasmtimeSessionTypeSpec(): TypeSpec {
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
-        val kTypeClass = ClassName("kotlin.reflect", "KType")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val argsListType = LIST.parameterizedBy(anyNullable)
         val typeR = TypeVariableName("R")
+        val decoderType = LambdaTypeName.get(
+            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+            returnType = typeR,
+        )
         val fnHandlerType = LambdaTypeName.get(
             parameters = listOf(ParameterSpec.builder("args", argsListType).build()),
             returnType = anyNullable,
@@ -1536,7 +1994,7 @@ class WitToKotlinPoetConverter(
                     )
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")
@@ -1572,7 +2030,7 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("returnType", kTypeClass)
+                    .addParameter("decoder", decoderType)
                     .addParameter("args", anyNullable, KModifier.VARARG)
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")

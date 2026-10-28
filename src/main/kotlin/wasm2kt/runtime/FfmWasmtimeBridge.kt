@@ -7,17 +7,13 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
-import kotlinx.serialization.json.longOrNull
-import wasm2kt.generator.NamingConventions
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
@@ -31,11 +27,23 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.reflect.KClass
-import kotlin.reflect.KType
-import kotlin.reflect.full.companionObjectInstance
-import kotlin.reflect.full.declaredMemberProperties
-import kotlin.reflect.full.primaryConstructor
+
+/**
+ * Implemented by generated WIT composite types (`Record`, `Variant`, `Enum`, `Flags`, `Resource`,
+ * `WitOption`, `WitResult`, `TupleN`) to serialize directly to JSON without reflection.
+ */
+interface WitJsonSerializable {
+    fun toWitJson(): JsonElement
+}
+
+/**
+ * Implemented by generated `<World>.Imports` interfaces to dispatch host import calls from Wasmtime
+ * to Kotlin methods without reflection.
+ */
+interface WitHostImportDispatcher {
+    fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement =
+        error("Unknown host import: $importSpec")
+}
 
 /**
  * Native Wasmtime Component Model runtime bridge using Java 22+ / 21 Foreign Function & Memory (FFM) API
@@ -161,6 +169,7 @@ class FfmWasmtimeBridge private constructor(
             MemorySegment.copy(unbounded, ValueLayout.JAVA_BYTE, 0L, bytes, 0, len.toInt())
             return String(bytes, StandardCharsets.UTF_8)
         }
+
         @Volatile
         private var defaultInstance: FfmWasmtimeBridge? = null
 
@@ -221,9 +230,11 @@ internal class HostCallbackDispatcher(
             val argsJsonStr = FfmWasmtimeBridge.readNullTerminatedUtf8(argsJsonPtr)
             val argsArray = Json.parseToJsonElement(argsJsonStr).jsonArray
 
-            val result = dispatchToKotlinImports(importsInstance, importName, argsArray)
-            if (result != null && result != Unit && outBufCap > 1) {
-                val jsonElem = FfmJsonCodec.toJsonElement(result)
+            val dispatcher = importsInstance as? WitHostImportDispatcher
+                ?: error("Host imports object ${importsInstance::class.qualifiedName} does not implement WitHostImportDispatcher")
+            val jsonElem = dispatcher.dispatchHostImport(importName, argsArray)
+
+            if (jsonElem !is JsonNull && outBufCap > 1) {
                 val bytes = Json.encodeToString(JsonElement.serializer(), jsonElem).toByteArray(StandardCharsets.UTF_8)
                 val outSlice = outBufPtr.reinterpret(outBufCap)
                 val len = minOf(bytes.size, (outBufCap - 1).toInt())
@@ -244,43 +255,12 @@ internal class HostCallbackDispatcher(
             1
         }
     }
-
-    private fun dispatchToKotlinImports(
-        rootImports: Any,
-        importSpec: String,
-        argsArray: JsonArray,
-    ): Any? {
-        val (targetReceiver, witFuncName) = if ('#' in importSpec) {
-            val ifaceName = importSpec.substringBefore('#')
-            val fnName = importSpec.substringAfter('#')
-            val propName = NamingConventions.toCamelCase(ifaceName)
-            val propGetter = rootImports.javaClass.methods.firstOrNull {
-                it.name == "get${propName.replaceFirstChar { c -> c.uppercaseChar() }}" && it.parameterCount == 0
-            } ?: error("Import interface property '$propName' not found on ${rootImports.javaClass.name}")
-            propGetter.isAccessible = true
-            val subReceiver = propGetter.invoke(rootImports)
-            subReceiver to fnName
-        } else {
-            rootImports to importSpec
-        }
-
-        val methodName = NamingConventions.toCamelCase(witFuncName)
-        val method = targetReceiver.javaClass.methods.firstOrNull {
-            (it.name == methodName || it.name.startsWith("$methodName-")) && it.parameterCount == argsArray.size
-        } ?: error("Host import method '$methodName' with ${argsArray.size} parameters not found on ${targetReceiver.javaClass.name}")
-
-        method.isAccessible = true
-        val convertedArgs = method.parameterTypes.mapIndexed { idx, paramClass ->
-            FfmJsonCodec.fromJsonElementToClass(argsArray[idx], paramClass)
-        }.toTypedArray()
-
-        return method.invoke(targetReceiver, *convertedArgs)
-    }
 }
 
 /**
- * Serializes Kotlin values (primitives, unsigned types, data classes, sealed interfaces, value classes,
- * WitOption, WitResult, TupleN, resource handles) to and from the JSON protocol expected by the Rust Wasmtime bridge.
+ * Reflection-free JSON codec for WIT values.
+ * Composite WIT types implement [WitJsonSerializable] for encoding and generate static `fromWitJson`
+ * companion methods for decoding.
  */
 object FfmJsonCodec {
     private fun toKebabCase(name: String): String =
@@ -291,6 +271,8 @@ object FfmJsonCodec {
     fun toJsonElement(value: Any?): JsonElement {
         if (value == null || value == Unit) return JsonNull
         return when (value) {
+            is JsonElement -> value
+            is WitJsonSerializable -> value.toWitJson()
             is Boolean -> JsonPrimitive(value)
             is Byte -> JsonPrimitive(value)
             is Short -> JsonPrimitive(value)
@@ -306,264 +288,109 @@ object FfmJsonCodec {
             is String -> JsonPrimitive(value)
             is Enum<*> -> JsonPrimitive(toKebabCase(value.name))
             is List<*> -> JsonArray(value.map { toJsonElement(it) })
-            else -> {
-                val kClass = value::class
-                val simpleName = kClass.simpleName ?: ""
-
-                // 1. WitOption.Some / WitOption.None
-                if (simpleName == "Some" && kClass.supertypes.any { it.toString().contains("WitOption") }) {
-                    val innerVal = readProperty(value, "value")
-                    return JsonObject(
-                        mapOf(
-                            "option" to JsonPrimitive("some"),
-                            "value" to toJsonElement(innerVal),
-                        ),
-                    )
-                }
-                if (simpleName == "None" && kClass.supertypes.any { it.toString().contains("WitOption") }) {
-                    return JsonObject(mapOf("option" to JsonPrimitive("none")))
-                }
-
-                // 2. WitResult.Ok / WitResult.Err
-                if (simpleName == "Ok" && kClass.supertypes.any { it.toString().contains("WitResult") }) {
-                    val innerVal = readProperty(value, "value")
-                    return JsonObject(
-                        mapOf(
-                            "result" to JsonPrimitive("ok"),
-                            "value" to toJsonElement(innerVal),
-                        ),
-                    )
-                }
-                if (simpleName == "Err" && kClass.supertypes.any { it.toString().contains("WitResult") }) {
-                    val errVal = readProperty(value, "error")
-                    return JsonObject(
-                        mapOf(
-                            "result" to JsonPrimitive("err"),
-                            "error" to toJsonElement(errVal),
-                        ),
-                    )
-                }
-
-                // 3. TupleN -> JSON Array [f0, f1, ...]
-                if (simpleName.startsWith("Tuple")) {
-                    val ctorParams = kClass.primaryConstructor?.parameters.orEmpty()
-                    val elements = ctorParams.map { p -> toJsonElement(readProperty(value, p.name!!)) }
-                    return JsonArray(elements)
-                }
-
-                // 4. Value class (Flags) -> raw bitmask
-                if (kClass.isValue) {
-                    val rawVal = readProperty(value, "raw")
-                    return toJsonElement(rawVal)
-                }
-
-                // 5. Resource class (has `handle: Int`)
-                val handleProp = kClass.declaredMemberProperties.firstOrNull { it.name == "handle" }
-                if (handleProp != null && AutoCloseable::class.java.isAssignableFrom(kClass.java)) {
-                    return toJsonElement(readProperty(value, "handle"))
-                }
-
-                // 6. Variant case (implements a sealed interface)
-                val sealedParent = kClass.java.interfaces.firstOrNull { it.isInterface && it.isSealed }
-                if (sealedParent != null) {
-                    val caseTag = toKebabCase(simpleName)
-                    val valueProp = kClass.declaredMemberProperties.firstOrNull { it.name == "value" }
-                    val payloadElem = if (valueProp != null) toJsonElement(readProperty(value, "value")) else JsonNull
-                    return JsonObject(
-                        mapOf(
-                            "case" to JsonPrimitive(caseTag),
-                            "value" to payloadElem,
-                        ),
-                    )
-                }
-
-                // 7. Data class (Record) -> JSON Object with kebab-case WIT field names
-                val ctorParams = kClass.primaryConstructor?.parameters.orEmpty()
-                val map = linkedMapOf<String, JsonElement>()
-                for (param in ctorParams) {
-                    val propName = param.name ?: continue
-                    val witFieldName = toKebabCase(propName)
-                    map[witFieldName] = toJsonElement(readProperty(value, propName))
-                }
-                JsonObject(map)
-            }
+            else -> error("Unsupported WIT value for JSON serialization: ${value::class.qualifiedName}")
         }
     }
 
-    fun fromJsonElement(element: JsonElement, targetType: KType): Any? {
-        val classifier = targetType.classifier as? KClass<*>
-            ?: return fromJsonElementDynamic(element)
+    fun encodeOptionSome(value: Any?): JsonElement =
+        JsonObject(
+            mapOf(
+                "option" to JsonPrimitive("some"),
+                "value" to toJsonElement(value),
+            ),
+        )
 
-        if (classifier == Unit::class) return Unit
-        if (element is JsonNull && targetType.isMarkedNullable) return null
+    fun encodeOptionNone(): JsonElement =
+        JsonObject(mapOf("option" to JsonPrimitive("none")))
 
-        val qName = classifier.qualifiedName ?: ""
-        return when (classifier) {
-            Boolean::class -> element.jsonPrimitive.boolean
-            Byte::class -> element.jsonPrimitive.int.toByte()
-            UByte::class -> element.jsonPrimitive.int.toUByte()
-            Short::class -> element.jsonPrimitive.int.toShort()
-            UShort::class -> element.jsonPrimitive.int.toUShort()
-            Int::class -> element.jsonPrimitive.int
-            UInt::class -> element.jsonPrimitive.long.toUInt()
-            Long::class -> element.jsonPrimitive.long
-            ULong::class -> element.jsonPrimitive.content.toULong()
-            Float::class -> element.jsonPrimitive.float
-            Double::class -> element.jsonPrimitive.double
-            Char::class -> element.jsonPrimitive.content.first()
-            String::class -> element.jsonPrimitive.content
-            List::class -> {
-                val elemType = targetType.arguments.firstOrNull()?.type
-                element.jsonArray.map { item ->
-                    if (elemType != null) fromJsonElement(item, elemType) else fromJsonElementDynamic(item)
-                }
-            }
-            else -> {
-                val simpleName = classifier.simpleName ?: ""
+    fun encodeResultOk(value: Any?): JsonElement =
+        JsonObject(
+            mapOf(
+                "result" to JsonPrimitive("ok"),
+                "value" to toJsonElement(value),
+            ),
+        )
 
-                // 1. WitOption<T>
-                if (simpleName == "WitOption") {
-                    val obj = element.jsonObject
-                    val optTag = obj["option"]?.jsonPrimitive?.content
-                    val someClass = classifier.nestedClasses.first { it.simpleName == "Some" }
-                    val noneClass = classifier.nestedClasses.first { it.simpleName == "None" }
-                    return if (optTag == "none") {
-                        noneClass.objectInstance
-                    } else {
-                        val innerType = targetType.arguments.first().type!!
-                        val innerVal = fromJsonElement(obj["value"] ?: JsonNull, innerType)
-                        someClass.primaryConstructor!!.call(innerVal)
-                    }
-                }
+    fun encodeResultErr(error: Any?): JsonElement =
+        JsonObject(
+            mapOf(
+                "result" to JsonPrimitive("err"),
+                "error" to toJsonElement(error),
+            ),
+        )
 
-                // 2. WitResult<T, E>
-                if (simpleName == "WitResult") {
-                    val obj = element.jsonObject
-                    val resTag = obj["result"]?.jsonPrimitive?.content
-                    val okClass = classifier.nestedClasses.first { it.simpleName == "Ok" }
-                    val errClass = classifier.nestedClasses.first { it.simpleName == "Err" }
-                    return if (resTag == "ok") {
-                        val okType = targetType.arguments.getOrNull(0)?.type!!
-                        val okVal = fromJsonElement(obj["value"] ?: JsonNull, okType)
-                        okClass.primaryConstructor!!.call(okVal)
-                    } else {
-                        val errType = targetType.arguments.getOrNull(1)?.type!!
-                        val errVal = fromJsonElement(obj["error"] ?: JsonNull, errType)
-                        errClass.primaryConstructor!!.call(errVal)
-                    }
-                }
+    fun encodeTuple(vararg elements: Any?): JsonElement =
+        JsonArray(elements.map { toJsonElement(it) })
 
-                // 3. TupleN<T0, T1, ...>
-                if (simpleName.startsWith("Tuple")) {
-                    val arr = element.jsonArray
-                    val ctor = classifier.primaryConstructor!!
-                    val args = ctor.parameters.mapIndexed { idx, _ ->
-                        val argType = targetType.arguments[idx].type!!
-                        fromJsonElement(arr[idx], argType)
-                    }.toTypedArray()
-                    return ctor.call(*args)
-                }
+    fun encodeRecord(vararg fields: Pair<String, Any?>): JsonElement =
+        JsonObject(fields.associate { (k, v) -> k to toJsonElement(v) })
 
-                // 4. Enum class
-                if (classifier.java.isEnum) {
-                    val constName = NamingConventions.toUpperSnakeCase(element.jsonPrimitive.content)
-                    return classifier.java.enumConstants.first { (it as Enum<*>).name == constName }
-                }
+    fun encodeVariant(caseName: String, payload: Any? = null): JsonElement =
+        JsonObject(
+            mapOf(
+                "case" to JsonPrimitive(caseName),
+                "value" to toJsonElement(payload),
+            ),
+        )
 
-                // 5. Value class (Flags)
-                if (classifier.isValue) {
-                    val ctor = classifier.primaryConstructor!!
-                    val rawParamType = ctor.parameters.first().type
-                    val rawVal = fromJsonElement(element, rawParamType)
-                    return ctor.call(rawVal)
-                }
+    fun decodeUnit(element: JsonElement): Unit = Unit
 
-                // 6. Variant (Sealed interface)
-                if (classifier.isSealed) {
-                    val obj = element.jsonObject
-                    val caseTag = obj["case"]?.jsonPrimitive?.content
-                        ?: error("Missing 'case' field in variant JSON: $obj")
-                    val casePascal = NamingConventions.toPascalCase(caseTag)
-                    val subClass = classifier.nestedClasses.firstOrNull { it.simpleName == casePascal }
-                        ?: error("Unknown variant case '$casePascal' in ${classifier.qualifiedName}")
-                    subClass.objectInstance?.let { return it }
-                    val ctor = subClass.primaryConstructor!!
-                    val payloadType = ctor.parameters.first().type
-                    val payloadVal = fromJsonElement(obj["value"] ?: JsonNull, payloadType)
-                    return ctor.call(payloadVal)
-                }
+    fun decodeBoolean(element: JsonElement): Boolean = element.jsonPrimitive.boolean
 
-                // 7. Data class (Record)
-                val obj = element.jsonObject
-                val ctor = classifier.primaryConstructor
-                    ?: error("No primary constructor for record ${classifier.qualifiedName}")
-                val args = ctor.parameters.map { param ->
-                    val propName = param.name!!
-                    val witKey = toKebabCase(propName)
-                    val fieldElem = obj[witKey] ?: obj[propName] ?: JsonNull
-                    fromJsonElement(fieldElem, param.type)
-                }.toTypedArray()
-                ctor.call(*args)
-            }
+    fun decodeByte(element: JsonElement): Byte = element.jsonPrimitive.int.toByte()
+
+    fun decodeUByte(element: JsonElement): UByte = element.jsonPrimitive.int.toUByte()
+
+    fun decodeShort(element: JsonElement): Short = element.jsonPrimitive.int.toShort()
+
+    fun decodeUShort(element: JsonElement): UShort = element.jsonPrimitive.int.toUShort()
+
+    fun decodeInt(element: JsonElement): Int = element.jsonPrimitive.int
+
+    fun decodeUInt(element: JsonElement): UInt = element.jsonPrimitive.long.toUInt()
+
+    fun decodeLong(element: JsonElement): Long = element.jsonPrimitive.long
+
+    fun decodeULong(element: JsonElement): ULong = element.jsonPrimitive.content.toULong()
+
+    fun decodeFloat(element: JsonElement): Float = element.jsonPrimitive.float
+
+    fun decodeDouble(element: JsonElement): Double = element.jsonPrimitive.double
+
+    fun decodeChar(element: JsonElement): Char = element.jsonPrimitive.content.first()
+
+    fun decodeString(element: JsonElement): String = element.jsonPrimitive.content
+
+    inline fun <T> decodeList(element: JsonElement, itemDecoder: (JsonElement) -> T): List<T> =
+        element.jsonArray.map(itemDecoder)
+
+    fun asJsonObject(element: JsonElement): JsonObject = element.jsonObject
+
+    fun asJsonArray(element: JsonElement): JsonArray = element.jsonArray
+
+    fun field(obj: JsonObject, witName: String): JsonElement = obj[witName] ?: JsonNull
+
+    fun variantCase(obj: JsonObject): String =
+        obj["case"]?.jsonPrimitive?.content ?: error("Missing 'case' field in variant JSON: $obj")
+
+    fun variantPayload(obj: JsonObject): JsonElement = obj["value"] ?: JsonNull
+
+    fun isOptionNone(element: JsonElement): Boolean =
+        element is JsonNull || (element is JsonObject && element["option"]?.jsonPrimitive?.content == "none")
+
+    fun optionValue(element: JsonElement): JsonElement =
+        if (element is JsonObject && "option" in element) {
+            element["value"] ?: JsonNull
+        } else {
+            element
         }
-    }
 
-    fun fromJsonElementToClass(element: JsonElement, paramClass: Class<*>): Any? {
-        return when (paramClass) {
-            Boolean::class.javaPrimitiveType, Boolean::class.javaObjectType -> element.jsonPrimitive.boolean
-            Byte::class.javaPrimitiveType, Byte::class.javaObjectType -> element.jsonPrimitive.int.toByte()
-            Short::class.javaPrimitiveType, Short::class.javaObjectType -> element.jsonPrimitive.int.toShort()
-            Int::class.javaPrimitiveType, Int::class.javaObjectType -> element.jsonPrimitive.int
-            Long::class.javaPrimitiveType, Long::class.javaObjectType -> element.jsonPrimitive.long
-            Float::class.javaPrimitiveType, Float::class.javaObjectType -> element.jsonPrimitive.float
-            Double::class.javaPrimitiveType, Double::class.javaObjectType -> element.jsonPrimitive.double
-            Char::class.javaPrimitiveType, Char::class.javaObjectType -> element.jsonPrimitive.content.first()
-            String::class.java -> element.jsonPrimitive.content
-            else -> fromJsonElementDynamic(element)
-        }
-    }
+    fun isResultOk(element: JsonElement): Boolean =
+        element.jsonObject["result"]?.jsonPrimitive?.content == "ok"
 
-    fun fromJsonElementDynamic(element: JsonElement): Any? {
-        return when (element) {
-            is JsonNull -> null
-            is JsonPrimitive -> {
-                if (element.isString) {
-                    element.content
-                } else {
-                    element.booleanOrNull
-                        ?: element.intOrNull
-                        ?: element.longOrNull
-                        ?: element.double
-                }
-            }
-            is JsonArray -> element.map { fromJsonElementDynamic(it) }
-            is JsonObject -> element.mapValues { (_, v) -> fromJsonElementDynamic(v) }
-        }
-    }
+    fun resultOkValue(element: JsonElement): JsonElement =
+        element.jsonObject["value"] ?: JsonNull
 
-    private fun readProperty(instance: Any, propName: String): Any? {
-        val kProp = instance::class.declaredMemberProperties.firstOrNull { it.name == propName }
-        if (kProp != null) {
-            try {
-                @Suppress("UNCHECKED_CAST")
-                return (kProp as kotlin.reflect.KProperty1<Any, *>).get(instance)
-            } catch (_: Throwable) {
-                // Fall back to Java reflection below
-            }
-        }
-        val getterName = "get${propName.replaceFirstChar { it.uppercaseChar() }}"
-        val method = instance.javaClass.methods.firstOrNull {
-            (it.name == getterName || it.name.startsWith("$getterName-")) && it.parameterCount == 0
-        }
-        if (method != null) {
-            method.isAccessible = true
-            return method.invoke(instance)
-        }
-        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propName }
-        if (field != null) {
-            field.isAccessible = true
-            return field.get(instance)
-        }
-        error("Property '$propName' not found on ${instance.javaClass.name}")
-    }
+    fun resultErrValue(element: JsonElement): JsonElement =
+        element.jsonObject["error"] ?: JsonNull
 }
