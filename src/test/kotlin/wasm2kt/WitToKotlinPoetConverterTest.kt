@@ -13,6 +13,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class WitToKotlinPoetConverterTest {
+    private val wasmToolsBin: String = resolveWasmToolsBinary()
+
+    private fun resolveWasmToolsBinary(): String {
+        System.getenv("WASM_TOOLS_BIN")?.takeIf { it.isNotBlank() }?.let { return it }
+        val homeCargo = Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools")
+        if (Files.isExecutable(homeCargo)) return homeCargo.toString()
+        val pathEnv = System.getenv("PATH").orEmpty()
+        for (dir in pathEnv.split(java.io.File.pathSeparator)) {
+            if (dir.isBlank()) continue
+            val candidate = Paths.get(dir, "wasm-tools")
+            if (Files.isExecutable(candidate)) return candidate.toString()
+        }
+        return "wasm-tools"
+    }
+
     private fun loadFixture(name: String): String =
         requireNotNull(javaClass.getResourceAsStream("/fixtures/$name")) {
             "Fixture not found: $name"
@@ -285,7 +300,7 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Extract JSON AST directly from the compiled .wasm component binary via wasm-tools (or .wit)
-        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools("/Users/chikoski/.cargo/bin/wasm-tools", witPath)
+        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools(wasmToolsBin, witPath)
         val jsonFile = tempDir.resolve("live_calc.json")
         Files.writeString(jsonFile, jsonAst)
 
@@ -375,7 +390,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -386,7 +401,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -464,7 +479,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -475,7 +490,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -578,7 +593,7 @@ class WitToKotlinPoetConverterTest {
             Wasm2KtCommand().parse(
                 listOf(
                     "--wasm-tools-path",
-                    "/Users/chikoski/.cargo/bin/wasm-tools",
+                    wasmToolsBin,
                     "-o",
                     exOutDir.toString(),
                     "-p",
@@ -633,7 +648,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -764,7 +779,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -865,7 +880,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -942,7 +957,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -996,7 +1011,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "--world",
                 "alpha",
                 "-o",
@@ -1024,7 +1039,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 standaloneOutDir.toString(),
                 "-p",
@@ -1055,7 +1070,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -1165,7 +1180,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -1176,7 +1191,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -1279,5 +1294,202 @@ class WitToKotlinPoetConverterTest {
             "path=42:JNI@777:42:true|aot=35:110|counter=15:true:42",
             actualOutput,
         )
+    }
+
+    @Test
+    fun `nested resource handles inside result, option, list, tuple, record, and variant compile and decode cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:nestedres@0.1.0;
+
+            world nested-res-world {
+                resource counter {
+                    constructor(init: s32);
+                    get-value: func() -> s32;
+                    try-create: static func(init: s32) -> result<counter, string>;
+                    find-counter: static func(found: bool) -> option<counter>;
+                }
+
+                record counter-pair {
+                    primary: counter,
+                    label: string,
+                }
+
+                variant counter-outcome {
+                    created(counter),
+                    empty,
+                }
+
+                export make-pair: func(init: s32, label: string) -> counter-pair;
+                export make-outcome: func(init: s32) -> counter-outcome;
+                export make-list: func(a: s32, b: s32) -> list<counter>;
+                export make-tuple: func(init: s32) -> tuple<counter, string>;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("nested_res.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.nestedres",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/nestedres")
+        val worldFile = pkgDir.resolve("NestedResWorldWorld.kt")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compilerExitCode,
+            "WIT definitions with nested resource handles in result/option/list/tuple/record/variant must compile cleanly",
+        )
+    }
+
+    @Test
+    fun `colliding type names across multiple interfaces in the same world are disambiguated and compile cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:collision@0.1.0;
+
+            interface alpha {
+                record config {
+                    port: u16,
+                }
+                get-config: func() -> config;
+            }
+
+            interface beta {
+                record config {
+                    host: string,
+                }
+                get-config: func() -> config;
+            }
+
+            world collision-world {
+                export alpha;
+                export beta;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("collision.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.collision",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/collision")
+        val worldFile = pkgDir.resolve("CollisionWorldWorld.kt")
+        val generatedCode = Files.readString(worldFile)
+
+        assertTrue(generatedCode.contains("data class AlphaConfig("), "Alpha's config record should be disambiguated as AlphaConfig")
+        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config record should be disambiguated as BetaConfig")
+
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compilerExitCode,
+            "Disambiguated interface types must compile cleanly without Redeclaration errors",
+        )
+    }
+
+    @Test
+    fun `JNI host callback exception preserves Kotlin exception message and FFM buffer overflow or invalid char throws descriptive error`(@TempDir tempDir: Path) {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+
+        // 1. Verify JNI host callback exception preserves the Kotlin exception message
+        val failingImports = object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                throw IllegalArgumentException("custom-host-failure-for-$importSpec")
+            }
+        }
+        val jniSessionPtr = wasm2kt.runtime.JniWasmtimeBridge.openSession(roundtripWasmPath, failingImports)
+        try {
+            val respJson = wasm2kt.runtime.JniWasmtimeBridge.nativeSessionInvoke(
+                jniSessionPtr,
+                "describe-code",
+                """["WARN", 500]""",
+            )
+            assertTrue(
+                respJson.contains("custom-host-failure-for-env-provider#format-tag"),
+                "JNI host callback failure must preserve Kotlin exception details, got: $respJson",
+            )
+        } finally {
+            wasm2kt.runtime.JniWasmtimeBridge.nativeSessionClose(jniSessionPtr)
+        }
+
+        // 2. Verify FFM HostCallbackDispatcher detects buffer capacity overflow instead of truncating JSON
+        val largeImports = object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                return kotlinx.serialization.json.JsonPrimitive("x".repeat(200))
+            }
+        }
+        java.lang.foreign.Arena.ofConfined().use { arena ->
+            val dispatcher = wasm2kt.runtime.HostCallbackDispatcher(largeImports)
+            val importPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "env-provider#format-tag")
+            val argsPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "[]")
+            val tinyCap = 128L
+            val outBuf = arena.allocate(tinyCap)
+            val status = dispatcher.onHostCall(importPtr, argsPtr, outBuf, tinyCap)
+            assertEquals(1, status, "Buffer overflow in HostCallbackDispatcher must return non-zero error status")
+            val errMsg = wasm2kt.runtime.FfmWasmtimeBridge.readNullTerminatedUtf8(outBuf)
+            assertTrue(errMsg.contains("exceeds callback buffer capacity"), "Expected overflow message, got: $errMsg")
+        }
+
+        // 3. Verify FfmJsonCodec.decodeChar validates single BMP code point
+        assertEquals('A', wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive("A")))
+        val emptyCharErr = runCatching {
+            wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive(""))
+        }.exceptionOrNull()
+        assertTrue(emptyCharErr is IllegalArgumentException, "Empty string must fail decodeChar")
     }
 }

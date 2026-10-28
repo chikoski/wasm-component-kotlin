@@ -93,8 +93,11 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
                 .redirectErrorStream(false)
                 .start()
 
-            val stdout = process.inputStream.bufferedReader().readText()
-            val stderr = process.errorStream.bufferedReader().readText()
+            val stderrFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+                process.errorStream.bufferedReader().use { it.readText() }
+            }
+            val stdout = process.inputStream.bufferedReader().use { it.readText() }
+            val stderr = stderrFuture.join()
             val exitCode = process.waitFor()
             if (exitCode != 0) {
                 throw IllegalStateException(

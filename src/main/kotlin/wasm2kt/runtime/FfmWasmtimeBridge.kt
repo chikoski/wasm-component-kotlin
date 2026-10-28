@@ -332,12 +332,16 @@ internal class HostCallbackDispatcher(
                 ?: error("Host imports object ${importsInstance::class.qualifiedName} does not implement WitHostImportDispatcher")
             val jsonElem = dispatcher.dispatchHostImport(importName, argsArray)
 
-            if (jsonElem !is JsonNull && outBufCap > 1) {
+            if (jsonElem !is JsonNull) {
                 val bytes = Json.encodeToString(JsonElement.serializer(), jsonElem).toByteArray(StandardCharsets.UTF_8)
+                if (bytes.size >= outBufCap) {
+                    error(
+                        "Host import '$importName' response size (${bytes.size} bytes) exceeds callback buffer capacity ($outBufCap bytes)",
+                    )
+                }
                 val outSlice = outBufPtr.reinterpret(outBufCap)
-                val len = minOf(bytes.size, (outBufCap - 1).toInt())
-                MemorySegment.copy(bytes, 0, outSlice, ValueLayout.JAVA_BYTE, 0, len)
-                outSlice.set(ValueLayout.JAVA_BYTE, len.toLong(), 0.toByte())
+                MemorySegment.copy(bytes, 0, outSlice, ValueLayout.JAVA_BYTE, 0, bytes.size)
+                outSlice.set(ValueLayout.JAVA_BYTE, bytes.size.toLong(), 0.toByte())
             } else if (outBufCap > 0) {
                 outBufPtr.reinterpret(outBufCap).set(ValueLayout.JAVA_BYTE, 0L, 0.toByte())
             }
@@ -455,7 +459,18 @@ object FfmJsonCodec {
 
     fun decodeDouble(element: JsonElement): Double = element.jsonPrimitive.double
 
-    fun decodeChar(element: JsonElement): Char = element.jsonPrimitive.content.first()
+    fun decodeChar(element: JsonElement): Char {
+        val str = element.jsonPrimitive.content
+        require(str.isNotEmpty()) { "Cannot decode empty string as WIT char" }
+        val codePoint = str.codePointAt(0)
+        require(Character.charCount(codePoint) == str.length) {
+            "Expected single Unicode scalar value for WIT char, got: $str"
+        }
+        require(codePoint <= Char.MAX_VALUE.code) {
+            "Supplementary Unicode scalar value U+${codePoint.toString(16).uppercase()} exceeds Kotlin 16-bit Char range"
+        }
+        return codePoint.toChar()
+    }
 
     fun decodeString(element: JsonElement): String = element.jsonPrimitive.content
 

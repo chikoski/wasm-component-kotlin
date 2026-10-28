@@ -412,11 +412,19 @@ fn register_host_imports(
         match import_item {
             wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) => {
                 let name_owned = import_name.to_string();
+                let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                 let result_types: Vec<Type> = func_ty.results().collect();
                 linker
                     .root()
                     .func_new(import_name, move |mut ctx, params, results| {
-                        invoke_host_callback(&mut ctx, &name_owned, params, results, &result_types)
+                        invoke_host_callback(
+                            &mut ctx,
+                            &name_owned,
+                            params,
+                            &param_types,
+                            results,
+                            &result_types,
+                        )
                     })?;
             }
             wasmtime::component::types::ComponentItem::ComponentInstance(inst_ty) => {
@@ -431,9 +439,17 @@ fn register_host_imports(
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
                     if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item {
                         let callback_key = format!("{}#{}", short_iface, export_fn_name);
+                        let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                         let result_types: Vec<Type> = func_ty.results().collect();
                         inst.func_new(export_fn_name, move |mut ctx, params, results| {
-                            invoke_host_callback(&mut ctx, &callback_key, params, results, &result_types)
+                            invoke_host_callback(
+                                &mut ctx,
+                                &callback_key,
+                                params,
+                                &param_types,
+                                results,
+                                &result_types,
+                            )
                         })?;
                     }
                 }
@@ -446,10 +462,32 @@ fn register_host_imports(
     Ok(())
 }
 
+fn extract_and_clear_jni_exception(env: &mut JNIEnv<'_>) -> String {
+    if let Ok(throwable) = env.exception_occurred() {
+        let _ = env.exception_clear();
+        if !throwable.is_null() {
+            if let Ok(msg_val) = env.call_method(&throwable, "toString", "()Ljava/lang/String;", &[]) {
+                if let Ok(msg_obj) = msg_val.l() {
+                    if !msg_obj.is_null() {
+                        let j_str = JString::from(msg_obj);
+                        if let Ok(rust_str) = env.get_string(&j_str) {
+                            return rust_str.into();
+                        };
+                    }
+                }
+            }
+        }
+    } else {
+        let _ = env.exception_clear();
+    }
+    "Unknown JVM exception".to_string()
+}
+
 fn invoke_host_callback(
     ctx: &mut wasmtime::StoreContextMut<'_, StoreData>,
     import_name: &str,
     params: &[Val],
+    param_types: &[Type],
     results: &mut [Val],
     result_types: &[Type],
 ) -> Result<()> {
@@ -457,26 +495,14 @@ fn invoke_host_callback(
         return Ok(());
     }
 
-    // Serialize primitive/simple Val params into JSON array for the host callback
+    // Serialize all Val params (including records, variants, enums, flags, options, results, lists, tuples, and resources) into JSON array
     let mut json_params = Vec::with_capacity(params.len());
-    for p in params {
-        let j = match p {
-            Val::Bool(b) => json!(*b),
-            Val::S8(v) => json!(*v),
-            Val::U8(v) => json!(*v),
-            Val::S16(v) => json!(*v),
-            Val::U16(v) => json!(*v),
-            Val::S32(v) => json!(*v),
-            Val::U32(v) => json!(*v),
-            Val::S64(v) => json!(*v),
-            Val::U64(v) => json!(*v),
-            Val::Float32(v) => json!(*v),
-            Val::Float64(v) => json!(*v),
-            Val::Char(c) => json!(c.to_string()),
-            Val::String(s) => json!(s),
-            _ => json!(format!("{:?}", p)),
-        };
-        json_params.push(j);
+    {
+        let data = ctx.data_mut();
+        for (p, p_ty) in params.iter().zip(param_types.iter()) {
+            let j = val_to_json(p, p_ty, &mut data.resources, &mut data.next_handle)?;
+            json_params.push(j);
+        }
     }
 
     let args_json_str = serde_json::to_string(&json_params)?;
@@ -522,8 +548,12 @@ fn invoke_host_callback(
             &[JValue::Object(&j_import_obj), JValue::Object(&j_args_obj)],
         );
         if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-            bail!("Host import '{}' threw an exception in JVM/Android host", import_name);
+            let exc_msg = extract_and_clear_jni_exception(&mut env);
+            bail!(
+                "Host import '{}' threw an exception in JVM/Android host: {}",
+                import_name,
+                exc_msg
+            );
         }
         let ret_val = call_res.with_context(|| format!("JNI call_method onHostCall failed for '{}'", import_name))?;
         let ret_obj = ret_val.l()?;
@@ -563,8 +593,38 @@ fn invoke_host_callback(
 }
 
 // ============================================================================
-// Exported C ABI Functions for JVM Foreign Function & Memory (FFM) API
+// Shared Engine & Exported C ABI / JNI Functions
 // ============================================================================
+
+static SHARED_ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+
+fn get_shared_engine() -> Result<Engine> {
+    if let Some(engine) = SHARED_ENGINE.get() {
+        return Ok(engine.clone());
+    }
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let _ = SHARED_ENGINE.set(engine.clone());
+    Ok(engine)
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown Rust panic in wasm2kt bridge".to_string()
+    }
+}
+
+fn run_catching<T, F: FnOnce() -> Result<T>>(f: F) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(payload) => Err(anyhow!("Rust panic across FFI boundary: {}", panic_payload_to_string(payload))),
+    }
+}
 
 fn parse_imports_json_str(s: &str) -> Result<Vec<String>> {
     if s.trim().is_empty() {
@@ -652,19 +712,20 @@ pub extern "C" fn wasm2kt_session_open(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
+        if wasm_path_ptr.is_null() {
+            bail!("wasm_path_ptr is null");
+        }
         let wasm_path = unsafe { CStr::from_ptr(wasm_path_ptr) }
             .to_str()
             .context("Invalid UTF-8 in wasm_path")?;
         let imports_list = parse_imports_json(imports_json_ptr)?;
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         let component = load_component_from_path(&engine, wasm_path)?;
 
         create_session_from_component(engine, component, imports_list, host_callback, None)
-    })();
+    });
 
     match res {
         Ok(session) => Box::into_raw(Box::new(session)),
@@ -684,20 +745,18 @@ pub extern "C" fn wasm2kt_session_open_bytes(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
         if wasm_bytes_ptr.is_null() {
             bail!("wasm_bytes_ptr is null");
         }
         let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
         let imports_list = parse_imports_json(imports_json_ptr)?;
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         let component = load_component_from_bytes(&engine, wasm_bytes)?;
 
         create_session_from_component(engine, component, imports_list, host_callback, None)
-    })();
+    });
 
     match res {
         Ok(session) => Box::into_raw(Box::new(session)),
@@ -716,7 +775,7 @@ pub extern "C" fn wasm2kt_precompile_component(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut u8 {
-    let res = (|| -> Result<Vec<u8>> {
+    let res = run_catching(|| -> Result<Vec<u8>> {
         if wasm_bytes_ptr.is_null() {
             bail!("wasm_bytes_ptr is null");
         }
@@ -724,13 +783,11 @@ pub extern "C" fn wasm2kt_precompile_component(
             bail!("out_len_ptr is null");
         }
         let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         engine
             .precompile_component(wasm_bytes)
             .context("Failed to precompile Wasm component into .cwasm")
-    })();
+    });
 
     match res {
         Ok(cwasm_vec) => {
@@ -750,12 +807,14 @@ pub extern "C" fn wasm2kt_precompile_component(
 
 #[no_mangle]
 pub extern "C" fn wasm2kt_free_bytes(ptr: *mut u8, len: usize) {
-    if !ptr.is_null() {
-        unsafe {
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr, len);
-            drop(Box::from_raw(slice_ptr));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !ptr.is_null() {
+            unsafe {
+                let slice_ptr = ptr::slice_from_raw_parts_mut(ptr, len);
+                drop(Box::from_raw(slice_ptr));
+            }
         }
-    }
+    }));
 }
 
 fn session_invoke_internal(
@@ -839,16 +898,21 @@ pub extern "C" fn wasm2kt_session_invoke(
     func_spec_ptr: *const c_char,
     args_json_ptr: *const c_char,
 ) -> *mut c_char {
-    if session_ptr.is_null() {
-        return err_response("BridgeSession pointer is null");
-    }
-    let session = unsafe { &mut *session_ptr };
-
-    let res = (|| -> Result<JsonValue> {
+    let res = run_catching(|| -> Result<JsonValue> {
+        if session_ptr.is_null() {
+            bail!("BridgeSession pointer is null");
+        }
+        if func_spec_ptr.is_null() {
+            bail!("func_spec_ptr is null");
+        }
+        if args_json_ptr.is_null() {
+            bail!("args_json_ptr is null");
+        }
+        let session = unsafe { &mut *session_ptr };
         let func_spec = unsafe { CStr::from_ptr(func_spec_ptr) }.to_str()?;
         let args_str = unsafe { CStr::from_ptr(args_json_ptr) }.to_str()?;
         session_invoke_internal(session, func_spec, args_str)
-    })();
+    });
 
     match res {
         Ok(val) => ok_response(val),
@@ -861,12 +925,15 @@ pub extern "C" fn wasm2kt_session_drop_resource(
     session_ptr: *mut BridgeSession,
     handle: i32,
 ) -> *mut c_char {
-    if session_ptr.is_null() {
-        return err_response("BridgeSession pointer is null");
-    }
-    let session = unsafe { &mut *session_ptr };
+    let res = run_catching(|| -> Result<JsonValue> {
+        if session_ptr.is_null() {
+            bail!("BridgeSession pointer is null");
+        }
+        let session = unsafe { &mut *session_ptr };
+        session_drop_resource_internal(session, handle)
+    });
 
-    match session_drop_resource_internal(session, handle) {
+    match res {
         Ok(val) => ok_response(val),
         Err(e) => err_response(format!("{:#}", e)),
     }
@@ -874,20 +941,24 @@ pub extern "C" fn wasm2kt_session_drop_resource(
 
 #[no_mangle]
 pub extern "C" fn wasm2kt_session_close(session_ptr: *mut BridgeSession) {
-    if !session_ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(session_ptr));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !session_ptr.is_null() {
+            unsafe {
+                drop(Box::from_raw(session_ptr));
+            }
         }
-    }
+    }));
 }
 
 #[no_mangle]
 pub extern "C" fn wasm2kt_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe {
-            drop(CString::from_raw(ptr));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !ptr.is_null() {
+            unsafe {
+                drop(CString::from_raw(ptr));
+            }
         }
-    }
+    }));
 }
 
 // ============================================================================
@@ -923,7 +994,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<
     imports_json: JString<'local>,
     host_callback: JObject<'local>,
 ) -> jlong {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
         let wasm_path_str: String = env.get_string(&wasm_path)?.into();
         let imports_json_str: String = env.get_string(&imports_json)?.into();
         let imports_list = parse_imports_json_str(&imports_json_str)?;
@@ -936,13 +1007,11 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<
             Some((vm, global_ref))
         };
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         let component = load_component_from_path(&engine, &wasm_path_str)?;
 
         create_session_from_component(engine, component, imports_list, None, jni_cb)
-    })();
+    });
 
     match res {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
@@ -964,7 +1033,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenB
     imports_json: JString<'local>,
     host_callback: JObject<'local>,
 ) -> jlong {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
         let bytes = env.convert_byte_array(&wasm_bytes)?;
         let imports_json_str: String = env.get_string(&imports_json)?.into();
         let imports_list = parse_imports_json_str(&imports_json_str)?;
@@ -977,13 +1046,11 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenB
             Some((vm, global_ref))
         };
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         let component = load_component_from_bytes(&engine, &bytes)?;
 
         create_session_from_component(engine, component, imports_list, None, jni_cb)
-    })();
+    });
 
     match res {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
@@ -1005,15 +1072,15 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionInvok
     func_spec: JString<'local>,
     args_json: JString<'local>,
 ) -> jstring {
-    if session_ptr == 0 {
-        return response_to_jstring(&mut env, Err(anyhow!("BridgeSession pointer is null")));
-    }
-    let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
-    let res = (|| -> Result<JsonValue> {
+    let res = run_catching(|| -> Result<JsonValue> {
+        if session_ptr == 0 {
+            bail!("BridgeSession pointer is null");
+        }
+        let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
         let func_spec_str: String = env.get_string(&func_spec)?.into();
         let args_str: String = env.get_string(&args_json)?.into();
         session_invoke_internal(session, &func_spec_str, &args_str)
-    })();
+    });
     response_to_jstring(&mut env, res)
 }
 
@@ -1024,11 +1091,13 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionDropR
     session_ptr: jlong,
     handle: jint,
 ) -> jstring {
-    if session_ptr == 0 {
-        return response_to_jstring(&mut env, Err(anyhow!("BridgeSession pointer is null")));
-    }
-    let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
-    let res = session_drop_resource_internal(session, handle);
+    let res = run_catching(|| -> Result<JsonValue> {
+        if session_ptr == 0 {
+            bail!("BridgeSession pointer is null");
+        }
+        let session = unsafe { &mut *(session_ptr as *mut BridgeSession) };
+        session_drop_resource_internal(session, handle)
+    });
     response_to_jstring(&mut env, res)
 }
 
@@ -1047,15 +1116,13 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativePrecompileCo
     _class: JClass<'local>,
     wasm_bytes: JByteArray<'local>,
 ) -> jbyteArray {
-    let res = (|| -> Result<Vec<u8>> {
+    let res = run_catching(|| -> Result<Vec<u8>> {
         let bytes = env.convert_byte_array(&wasm_bytes)?;
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         engine
             .precompile_component(&bytes)
             .context("Failed to precompile Wasm component into .cwasm")
-    })();
+    });
 
     match res {
         Ok(cwasm_vec) => env

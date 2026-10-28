@@ -79,8 +79,7 @@ class WitToKotlinPoetConverter(
     private val targetWorldName: String? = null,
 ) {
     private val generatedTupleArities = mutableSetOf<Int>()
-    private var needsWitOption = false
-    private var needsWitResult = false
+    private var currentWorldCollidingNames: Set<String> = emptySet()
 
     private val witJsonSerializableClass = ClassName("wasm2kt.runtime", "WitJsonSerializable")
     private val witHostImportDispatcherClass = ClassName("wasm2kt.runtime", "WitHostImportDispatcher")
@@ -145,6 +144,26 @@ class WitToKotlinPoetConverter(
             if (item is WitWorldItem.InterfaceRef) referencedInterfaceIds += item.id
         }
 
+        // Detect colliding type names across interfaces in this world so they can be disambiguated cleanly
+        val candidateRootTypeIndices = linkedSetOf<Int>()
+        for (ifaceId in referencedInterfaceIds) {
+            val iface = resolve.interfaces.getOrNull(ifaceId) ?: continue
+            for ((_, typeIdx) in iface.types) {
+                candidateRootTypeIndices += resolveRootTypeIndex(typeIdx)
+            }
+        }
+        resolve.types.forEachIndexed { idx, typeDef ->
+            if (typeDef.owner?.world == worldId) {
+                candidateRootTypeIndices += resolveRootTypeIndex(idx)
+            }
+        }
+        val byPascal = mutableMapOf<String, MutableSet<Int>>()
+        for (rootIdx in candidateRootTypeIndices) {
+            val name = resolve.types.getOrNull(rootIdx)?.name ?: continue
+            byPascal.getOrPut(NamingConventions.toPascalCase(name)) { mutableSetOf() }.add(rootIdx)
+        }
+        currentWorldCollidingNames = byPascal.filterValues { it.size > 1 }.keys
+
         // Group resource functions by resource type index
         val resourceFunctions = collectResourceFunctions(referencedInterfaceIds, world)
 
@@ -158,7 +177,7 @@ class WitToKotlinPoetConverter(
                     fileBuilder = fileBuilder,
                     worldClassName = worldClassName,
                     sessionClassName = sessionClassName,
-                    resourceFunctions = resourceFunctions[typeIdx].orEmpty(),
+                    resourceFunctions = resourceFunctions,
                     emittedTypeIndices = emittedTypeIndices,
                 )
             }
@@ -181,7 +200,7 @@ class WitToKotlinPoetConverter(
                     fileBuilder = fileBuilder,
                     worldClassName = worldClassName,
                     sessionClassName = sessionClassName,
-                    resourceFunctions = resourceFunctions[idx].orEmpty(),
+                    resourceFunctions = resourceFunctions,
                     emittedTypeIndices = emittedTypeIndices,
                 )
             }
@@ -391,7 +410,7 @@ class WitToKotlinPoetConverter(
                             fileBuilder = fileBuilder,
                             worldClassName = worldClassName,
                             sessionClassName = sessionClassName,
-                            resourceFunctions = resourceFunctions[typeIdx].orEmpty(),
+                            resourceFunctions = resourceFunctions,
                             emittedTypeIndices = emittedTypeIndices,
                         )
                     }
@@ -511,34 +530,100 @@ class WitToKotlinPoetConverter(
         return current
     }
 
+    private fun resolveKotlinTypeSimpleName(typeIdx: Int): String {
+        val rootIdx = resolveRootTypeIndex(typeIdx)
+        val typeDef = resolve.types.getOrNull(rootIdx)
+            ?: throw IllegalArgumentException("Invalid WIT type index: $typeIdx")
+        val rawName = typeDef.name
+            ?: throw IllegalStateException("Named type at index $rootIdx has null name")
+        val basePascal = NamingConventions.toPascalCase(rawName)
+        if (basePascal !in currentWorldCollidingNames) {
+            return basePascal
+        }
+        val ifaceId = typeDef.owner?.`interface`
+        if (ifaceId != null) {
+            val ifaceName = resolve.interfaces.getOrNull(ifaceId)?.name
+            if (!ifaceName.isNullOrBlank()) {
+                val shortIface = ifaceName.substringAfter('/').substringBefore('@')
+                return NamingConventions.toPascalCase(shortIface) + basePascal
+            }
+        }
+        val worldId = typeDef.owner?.world
+        if (worldId != null) {
+            val worldName = resolve.worlds.getOrNull(worldId)?.name
+            if (!worldName.isNullOrBlank()) {
+                return NamingConventions.toPascalCase(worldName) + basePascal
+            }
+        }
+        return "${basePascal}_$rootIdx"
+    }
+
+    private fun containsResource(typeRef: WitTypeRef, visited: MutableSet<Int> = mutableSetOf()): Boolean =
+        when (typeRef) {
+            is WitTypeRef.Primitive -> false
+            is WitTypeRef.Id -> {
+                if (!visited.add(typeRef.index)) {
+                    false
+                } else {
+                    when (val kind = resolve.types.getOrNull(typeRef.index)?.kind) {
+                        is WitTypeDefKind.Resource, is WitTypeDefKind.Handle -> true
+                        is WitTypeDefKind.TypeAlias -> containsResource(kind.type, visited)
+                        is WitTypeDefKind.OptionType -> containsResource(kind.type, visited)
+                        is WitTypeDefKind.ResultType ->
+                            (kind.ok?.let { containsResource(it, visited) } ?: false) ||
+                                (kind.err?.let { containsResource(it, visited) } ?: false)
+                        is WitTypeDefKind.ListType -> containsResource(kind.type, visited)
+                        is WitTypeDefKind.Tuple -> kind.types.any { containsResource(it, visited) }
+                        is WitTypeDefKind.Record -> kind.fields.any { containsResource(it.type, visited) }
+                        is WitTypeDefKind.Variant -> kind.cases.any { it.type != null && containsResource(it.type, visited) }
+                        is WitTypeDefKind.FutureType -> kind.type?.let { containsResource(it, visited) } ?: false
+                        is WitTypeDefKind.StreamType -> kind.element?.let { containsResource(it, visited) } ?: false
+                        else -> false
+                    }
+                }
+            }
+        }
+
     private fun emitTypeDefinitionIfNeeded(
         typeIdx: Int,
         ownerContainer: TypeSpec.Builder,
         fileBuilder: FileSpec.Builder,
         worldClassName: ClassName,
         sessionClassName: ClassName,
-        resourceFunctions: List<WitFunction>,
+        resourceFunctions: Map<Int, List<WitFunction>>,
         emittedTypeIndices: MutableSet<Int>,
     ) {
         if (!emittedTypeIndices.add(typeIdx)) return
         val typeDef = resolve.types.getOrNull(typeIdx) ?: return
         val rawName = typeDef.name ?: return
-        val typePascalName = NamingConventions.toPascalCase(rawName)
 
         when (val kind = typeDef.kind) {
             is WitTypeDefKind.Record -> {
-                ownerContainer.addType(buildRecordTypeSpec(typePascalName, kind.fields, typeDef.docs, worldClassName))
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
+                ownerContainer.addType(
+                    buildRecordTypeSpec(typePascalName, kind.fields, typeDef.docs, worldClassName, sessionClassName),
+                )
             }
             is WitTypeDefKind.Enum -> {
-                ownerContainer.addType(buildEnumTypeSpec(typePascalName, kind.cases, typeDef.docs, worldClassName.nestedClass(typePascalName)))
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
+                ownerContainer.addType(
+                    buildEnumTypeSpec(typePascalName, kind.cases, typeDef.docs, worldClassName.nestedClass(typePascalName)),
+                )
             }
             is WitTypeDefKind.Flags -> {
-                ownerContainer.addType(buildFlagsTypeSpec(typePascalName, kind.flags, typeDef.docs, worldClassName.nestedClass(typePascalName)))
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
+                ownerContainer.addType(
+                    buildFlagsTypeSpec(typePascalName, kind.flags, typeDef.docs, worldClassName.nestedClass(typePascalName)),
+                )
             }
             is WitTypeDefKind.Variant -> {
-                ownerContainer.addType(buildVariantTypeSpec(typePascalName, kind.cases, typeDef.docs, worldClassName))
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
+                ownerContainer.addType(
+                    buildVariantTypeSpec(typePascalName, kind.cases, typeDef.docs, worldClassName, sessionClassName),
+                )
             }
             is WitTypeDefKind.Resource -> {
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
                 ownerContainer.addType(
                     buildResourceTypeSpec(
                         resourceWitName = rawName,
@@ -546,7 +631,7 @@ class WitToKotlinPoetConverter(
                         docs = typeDef.docs,
                         worldClassName = worldClassName,
                         sessionClassName = sessionClassName,
-                        functions = resourceFunctions,
+                        functions = resourceFunctions[typeIdx].orEmpty(),
                     ),
                 )
             }
@@ -554,9 +639,19 @@ class WitToKotlinPoetConverter(
                 if (kind.type is WitTypeRef.Id) {
                     val targetDef = resolve.types.getOrNull(kind.type.index)
                     if (targetDef?.name == rawName) {
+                        emitTypeDefinitionIfNeeded(
+                            typeIdx = kind.type.index,
+                            ownerContainer = ownerContainer,
+                            fileBuilder = fileBuilder,
+                            worldClassName = worldClassName,
+                            sessionClassName = sessionClassName,
+                            resourceFunctions = resourceFunctions,
+                            emittedTypeIndices = emittedTypeIndices,
+                        )
                         return
                     }
                 }
+                val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
                 val aliasedType = mapTypeRef(kind.type, worldClassName)
                 val aliasSpec = TypeAliasSpec.builder(typePascalName, aliasedType)
                     .apply { typeDef.docs?.contents?.let { addKdoc("%L\n", it.trim()) } }
@@ -572,6 +667,7 @@ class WitToKotlinPoetConverter(
         fields: List<WitField>,
         docs: WitDocs?,
         worldClassName: ClassName,
+        sessionClassName: ClassName,
     ): TypeSpec {
         val recordClassName = worldClassName.nestedClass(name)
         val builder = TypeSpec.classBuilder(name)
@@ -607,8 +703,15 @@ class WitToKotlinPoetConverter(
         }
         builder.addFunction(toWitJsonBuilder.build())
 
+        val hasResourceFields = fields.any { containsResource(it.type) }
+        val sessionExpr = if (hasResourceFields) CodeBlock.of("session") else null
         val fromWitJsonBuilder = FunSpec.builder("fromWitJson")
             .addParameter("elem", jsonElementClass)
+            .apply {
+                if (hasResourceFields) {
+                    addParameter("session", sessionClassName)
+                }
+            }
             .returns(recordClassName)
         if (fields.isEmpty()) {
             fromWitJsonBuilder.addStatement("return %T()", recordClassName)
@@ -617,7 +720,7 @@ class WitToKotlinPoetConverter(
             val ctorArgs = fields.map { field ->
                 val propName = NamingConventions.toCamelCase(field.name)
                 val fieldElemExpr = CodeBlock.of("%T.field(obj, %S)", ffmCodecClass, field.name)
-                val decodedExpr = buildDecodeExpression(field.type, fieldElemExpr, worldClassName)
+                val decodedExpr = buildDecodeExpression(field.type, fieldElemExpr, worldClassName, sessionExpr = sessionExpr)
                 CodeBlock.of("%N = %L", propName, decodedExpr)
             }
             fromWitJsonBuilder.addStatement("return %T(%L)", recordClassName, ctorArgs.joinToCode(", "))
@@ -787,6 +890,7 @@ class WitToKotlinPoetConverter(
         cases: List<WitVariantCase>,
         docs: WitDocs?,
         worldClassName: ClassName,
+        sessionClassName: ClassName,
     ): TypeSpec {
         val variantClassName = worldClassName.nestedClass(name)
         val builder = TypeSpec.interfaceBuilder(name)
@@ -836,6 +940,8 @@ class WitToKotlinPoetConverter(
             }
         }
 
+        val hasResourceCases = cases.any { it.type != null && containsResource(it.type) }
+        val sessionExpr = if (hasResourceCases) CodeBlock.of("session") else null
         val fromJsonCode = CodeBlock.builder()
             .addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
             .beginControlFlow("return when (val caseTag = %T.variantCase(obj))", ffmCodecClass)
@@ -845,7 +951,7 @@ class WitToKotlinPoetConverter(
                 fromJsonCode.addStatement("%S -> %N", case.name, caseName)
             } else {
                 val payloadElem = CodeBlock.of("%T.variantPayload(obj)", ffmCodecClass)
-                val decodedPayload = buildDecodeExpression(case.type, payloadElem, worldClassName)
+                val decodedPayload = buildDecodeExpression(case.type, payloadElem, worldClassName, sessionExpr = sessionExpr)
                 fromJsonCode.addStatement("%S -> %N(%L)", case.name, caseName, decodedPayload)
             }
         }
@@ -856,6 +962,11 @@ class WitToKotlinPoetConverter(
                 .addFunction(
                     FunSpec.builder("fromWitJson")
                         .addParameter("elem", jsonElementClass)
+                        .apply {
+                            if (hasResourceCases) {
+                                addParameter("session", sessionClassName)
+                            }
+                        }
                         .returns(variantClassName)
                         .addCode(fromJsonCode.build())
                         .build(),
@@ -1114,10 +1225,11 @@ class WitToKotlinPoetConverter(
         fn: WitFunction,
         worldClassName: ClassName,
     ): CodeBlock {
+        val sessionExpr = CodeBlock.of("session")
         return when (fn.results.size) {
             0 -> CodeBlock.of("{ %T.decodeUnit(it) }", ffmCodecClass)
             1 -> {
-                val body = buildDecodeExpression(fn.results.first().type, CodeBlock.of("elem"), worldClassName)
+                val body = buildDecodeExpression(fn.results.first().type, CodeBlock.of("elem"), worldClassName, sessionExpr = sessionExpr)
                 CodeBlock.of("{ elem -> %L }", body)
             }
             else -> {
@@ -1125,7 +1237,7 @@ class WitToKotlinPoetConverter(
                 generatedTupleArities += arity
                 val tupleClass = ClassName(targetPackage, "Tuple$arity")
                 val elemDecoders = fn.results.mapIndexed { idx, res ->
-                    buildDecodeExpression(res.type, CodeBlock.of("arr[$idx]"), worldClassName)
+                    buildDecodeExpression(res.type, CodeBlock.of("arr[$idx]"), worldClassName, sessionExpr = sessionExpr)
                 }
                 CodeBlock.of(
                     "{ elem -> %T.asJsonArray(elem).let { arr -> %T(%L) } }",
@@ -1142,6 +1254,7 @@ class WitToKotlinPoetConverter(
         elemExpr: CodeBlock,
         worldClassName: ClassName,
         depth: Int = 0,
+        sessionExpr: CodeBlock? = null,
     ): CodeBlock {
         return when (typeRef) {
             is WitTypeRef.Primitive -> when (typeRef.name) {
@@ -1164,42 +1277,54 @@ class WitToKotlinPoetConverter(
             is WitTypeRef.Id -> {
                 val typeDef = resolve.types.getOrNull(typeRef.index)
                     ?: throw IllegalArgumentException("Invalid WIT type index: ${typeRef.index}")
-                val name = typeDef.name
                 when (val kind = typeDef.kind) {
                     is WitTypeDefKind.Record,
                     is WitTypeDefKind.Enum,
                     is WitTypeDefKind.Flags,
                     is WitTypeDefKind.Variant,
                     -> {
-                        val pascal = NamingConventions.toPascalCase(
-                            name ?: throw IllegalStateException("Named type at index ${typeRef.index} has null name"),
-                        )
+                        val pascal = resolveKotlinTypeSimpleName(typeRef.index)
                         val typeClass = worldClassName.nestedClass(pascal)
-                        CodeBlock.of("%T.fromWitJson(%L)", typeClass, elemExpr)
+                        if (sessionExpr != null && containsResource(typeRef)) {
+                            CodeBlock.of("%T.fromWitJson(%L, %L)", typeClass, elemExpr, sessionExpr)
+                        } else {
+                            CodeBlock.of("%T.fromWitJson(%L)", typeClass, elemExpr)
+                        }
                     }
                     is WitTypeDefKind.TypeAlias -> {
-                        buildDecodeExpression(kind.type, elemExpr, worldClassName, depth)
+                        buildDecodeExpression(kind.type, elemExpr, worldClassName, depth, sessionExpr)
                     }
-                    is WitTypeDefKind.Resource,
-                    is WitTypeDefKind.Handle,
-                    -> {
-                        CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
+                    is WitTypeDefKind.Resource -> {
+                        if (sessionExpr != null) {
+                            val pascal = resolveKotlinTypeSimpleName(typeRef.index)
+                            val resourceClass = worldClassName.nestedClass(pascal)
+                            CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr, ffmCodecClass, elemExpr)
+                        } else {
+                            CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
+                        }
+                    }
+                    is WitTypeDefKind.Handle -> {
+                        if (sessionExpr != null) {
+                            val pascal = resolveKotlinTypeSimpleName(kind.resourceId)
+                            val resourceClass = worldClassName.nestedClass(pascal)
+                            CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr, ffmCodecClass, elemExpr)
+                        } else {
+                            CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
+                        }
                     }
                     is WitTypeDefKind.OptionType -> {
-                        needsWitOption = true
                         val witOptionClass = ClassName(targetPackage, "WitOption")
                         val varName = "optElem$depth"
-                        val innerDecode = buildDecodeExpression(kind.type, CodeBlock.of(varName), worldClassName, depth + 1)
+                        val innerDecode = buildDecodeExpression(kind.type, CodeBlock.of(varName), worldClassName, depth + 1, sessionExpr)
                         CodeBlock.of("%T.fromWitJson(%L) { %L -> %L }", witOptionClass, elemExpr, varName, innerDecode)
                     }
                     is WitTypeDefKind.ResultType -> {
-                        needsWitResult = true
                         val witResultClass = ClassName(targetPackage, "WitResult")
                         val okVar = "okElem$depth"
                         val errVar = "errElem$depth"
-                        val okDecode = kind.ok?.let { buildDecodeExpression(it, CodeBlock.of(okVar), worldClassName, depth + 1) }
+                        val okDecode = kind.ok?.let { buildDecodeExpression(it, CodeBlock.of(okVar), worldClassName, depth + 1, sessionExpr) }
                             ?: CodeBlock.of("Unit")
-                        val errDecode = kind.err?.let { buildDecodeExpression(it, CodeBlock.of(errVar), worldClassName, depth + 1) }
+                        val errDecode = kind.err?.let { buildDecodeExpression(it, CodeBlock.of(errVar), worldClassName, depth + 1, sessionExpr) }
                             ?: CodeBlock.of("Unit")
                         CodeBlock.of(
                             "%T.fromWitJson(%L, { %L -> %L }, { %L -> %L })",
@@ -1213,7 +1338,7 @@ class WitToKotlinPoetConverter(
                     }
                     is WitTypeDefKind.ListType -> {
                         val itemVar = "itemElem$depth"
-                        val itemDecode = buildDecodeExpression(kind.type, CodeBlock.of(itemVar), worldClassName, depth + 1)
+                        val itemDecode = buildDecodeExpression(kind.type, CodeBlock.of(itemVar), worldClassName, depth + 1, sessionExpr)
                         CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
                     }
                     is WitTypeDefKind.Tuple -> {
@@ -1222,7 +1347,7 @@ class WitToKotlinPoetConverter(
                         val arrVar = "tupArr$depth"
                         val tupleClass = ClassName(targetPackage, "Tuple$arity")
                         val elemDecoders = kind.types.mapIndexed { idx, t ->
-                            buildDecodeExpression(t, CodeBlock.of("$arrVar[$idx]"), worldClassName, depth + 1)
+                            buildDecodeExpression(t, CodeBlock.of("$arrVar[$idx]"), worldClassName, depth + 1, sessionExpr)
                         }
                         CodeBlock.of(
                             "%T.asJsonArray(%L).let { %L -> %T(%L) }",
@@ -1234,13 +1359,13 @@ class WitToKotlinPoetConverter(
                         )
                     }
                     is WitTypeDefKind.FutureType -> {
-                        val futDecode = kind.type?.let { buildDecodeExpression(it, elemExpr, worldClassName, depth + 1) }
+                        val futDecode = kind.type?.let { buildDecodeExpression(it, elemExpr, worldClassName, depth + 1, sessionExpr) }
                             ?: CodeBlock.of("Unit")
                         CodeBlock.of("%T.completedFuture(%L)", ClassName("java.util.concurrent", "CompletableFuture"), futDecode)
                     }
                     is WitTypeDefKind.StreamType -> {
                         val itemVar = "streamElem$depth"
-                        val itemDecode = kind.element?.let { buildDecodeExpression(it, CodeBlock.of(itemVar), worldClassName, depth + 1) }
+                        val itemDecode = kind.element?.let { buildDecodeExpression(it, CodeBlock.of(itemVar), worldClassName, depth + 1, sessionExpr) }
                             ?: CodeBlock.of("Unit")
                         CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
                     }
@@ -1325,9 +1450,7 @@ class WitToKotlinPoetConverter(
             is WitTypeDefKind.Variant,
             is WitTypeDefKind.Resource,
             -> {
-                val pascal = NamingConventions.toPascalCase(
-                    name ?: throw IllegalStateException("Named type at index $index has null name"),
-                )
+                val pascal = resolveKotlinTypeSimpleName(index)
                 worldClassName.nestedClass(pascal)
             }
             is WitTypeDefKind.TypeAlias -> {
@@ -1338,7 +1461,7 @@ class WitToKotlinPoetConverter(
                             return mapTypeDefByIndex(kind.type.index, worldClassName)
                         }
                     }
-                    ClassName(targetPackage, NamingConventions.toPascalCase(name))
+                    ClassName(targetPackage, resolveKotlinTypeSimpleName(index))
                 } else {
                     mapTypeRef(kind.type, worldClassName)
                 }
@@ -1347,12 +1470,10 @@ class WitToKotlinPoetConverter(
                 mapTypeDefByIndex(kind.resourceId, worldClassName)
             }
             is WitTypeDefKind.OptionType -> {
-                needsWitOption = true
                 val innerType = mapTypeRef(kind.type, worldClassName)
                 ClassName(targetPackage, "WitOption").parameterizedBy(innerType)
             }
             is WitTypeDefKind.ResultType -> {
-                needsWitResult = true
                 val okType = kind.ok?.let { mapTypeRef(it, worldClassName) } ?: UNIT
                 val errType = kind.err?.let { mapTypeRef(it, worldClassName) } ?: UNIT
                 ClassName(targetPackage, "WitResult").parameterizedBy(okType, errType)
