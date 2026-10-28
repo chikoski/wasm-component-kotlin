@@ -75,6 +75,55 @@ class FfmWasmtimeBridge private constructor(
         ),
     )
 
+    // extern "C" fn wasm2kt_session_open_bytes(
+    //     wasm_bytes_ptr: *const u8,
+    //     wasm_bytes_len: usize,
+    //     imports_json_ptr: *const c_char,
+    //     host_callback: Option<HostCallbackFn>,
+    //     err_buf: *mut c_char,
+    //     err_buf_cap: usize,
+    // ) -> *mut BridgeSession
+    val sessionOpenBytesHandle: MethodHandle = linker.downcallHandle(
+        lookup.find("wasm2kt_session_open_bytes").orElseThrow(),
+        FunctionDescriptor.of(
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+        ),
+    )
+
+    // extern "C" fn wasm2kt_precompile_component(
+    //     wasm_bytes_ptr: *const u8,
+    //     wasm_bytes_len: usize,
+    //     out_len_ptr: *mut usize,
+    //     err_buf: *mut c_char,
+    //     err_buf_cap: usize,
+    // ) -> *mut u8
+    val precompileComponentHandle: MethodHandle = linker.downcallHandle(
+        lookup.find("wasm2kt_precompile_component").orElseThrow(),
+        FunctionDescriptor.of(
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+        ),
+    )
+
+    // extern "C" fn wasm2kt_free_bytes(ptr: *mut u8, len: usize)
+    val freeBytesHandle: MethodHandle = linker.downcallHandle(
+        lookup.find("wasm2kt_free_bytes").orElseThrow(),
+        FunctionDescriptor.ofVoid(
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
+        ),
+    )
+
     // extern "C" fn wasm2kt_session_invoke(
     //     session_ptr: *mut BridgeSession,
     //     func_spec_ptr: *const c_char,
@@ -148,7 +197,56 @@ class FfmWasmtimeBridge private constructor(
         }
     }
 
+    /**
+     * Precompiles a raw `.wasm` component binary into a serialized AOT `.cwasm` image (`ByteArray`)
+     * that can be loaded with zero JIT compilation overhead via `openSession(cwasmBytes)` or `openSession(cwasmPath)`.
+     */
+    fun precompileComponent(wasmBytes: ByteArray): ByteArray {
+        Arena.ofConfined().use { arena ->
+            val inPtr = allocateBytes(arena, wasmBytes)
+            val outLenSeg = arena.allocate(ValueLayout.JAVA_LONG)
+            val errCap = 4096L
+            val errBuf = arena.allocate(errCap)
+            val outPtr = precompileComponentHandle.invokeExact(
+                inPtr,
+                wasmBytes.size.toLong(),
+                outLenSeg,
+                errBuf,
+                errCap,
+            ) as MemorySegment
+            if (outPtr == MemorySegment.NULL) {
+                val errMsg = readNullTerminatedUtf8(errBuf)
+                throw IllegalStateException("Failed to precompile Wasm component: $errMsg")
+            }
+            val outLen = outLenSeg.get(ValueLayout.JAVA_LONG, 0L)
+            try {
+                val slice = outPtr.reinterpret(outLen)
+                val outBytes = ByteArray(outLen.toInt())
+                MemorySegment.copy(slice, ValueLayout.JAVA_BYTE, 0L, outBytes, 0, outLen.toInt())
+                return outBytes
+            } finally {
+                freeBytesHandle.invokeExact(outPtr, outLen)
+            }
+        }
+    }
+
+    fun precompileComponent(wasmPath: Path): ByteArray =
+        precompileComponent(Files.readAllBytes(wasmPath))
+
+    fun precompileComponentToFile(wasmPath: Path, outputCwasmPath: Path): Path {
+        val cwasmBytes = precompileComponent(wasmPath)
+        Files.write(outputCwasmPath, cwasmBytes)
+        return outputCwasmPath
+    }
+
     companion object {
+        fun allocateBytes(arena: Arena, bytes: ByteArray): MemorySegment {
+            if (bytes.isEmpty()) return arena.allocate(1L)
+            val seg = arena.allocate(bytes.size.toLong())
+            MemorySegment.copy(bytes, 0, seg, ValueLayout.JAVA_BYTE, 0L, bytes.size)
+            return seg
+        }
+
         fun allocateUtf8CString(arena: Arena, text: String): MemorySegment {
             val bytes = text.toByteArray(StandardCharsets.UTF_8)
             val seg = arena.allocate((bytes.size + 1).toLong())

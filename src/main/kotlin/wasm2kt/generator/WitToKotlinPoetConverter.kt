@@ -299,8 +299,9 @@ class WitToKotlinPoetConverter(
             .build()
         worldObjBuilder.addType(sessionTypeSpec)
 
-        // 4. Add openSession & withSession on World object
+        // 4. Add openSession & withSession on World object (Path and ByteArray overloads)
         val pathClass = ClassName("java.nio.file", "Path")
+        val byteArrayClass = ClassName("kotlin", "ByteArray")
         val openSessionBuilder = FunSpec.builder("openSession")
             .addParameter("wasmPath", pathClass)
             .addParameter(
@@ -311,6 +312,17 @@ class WitToKotlinPoetConverter(
             .returns(sessionClassName)
             .addStatement("return Session(%T.open(wasmPath, imports))", runtimeSessionClass)
         worldObjBuilder.addFunction(openSessionBuilder.build())
+
+        val openSessionBytesBuilder = FunSpec.builder("openSession")
+            .addParameter("wasmBytes", byteArrayClass)
+            .addParameter(
+                ParameterSpec.builder("imports", importsClassName)
+                    .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                    .build(),
+            )
+            .returns(sessionClassName)
+            .addStatement("return Session(%T.open(wasmBytes, imports))", runtimeSessionClass)
+        worldObjBuilder.addFunction(openSessionBytesBuilder.build())
 
         val typeVarR = TypeVariableName("R")
         val contextLambdaType = LambdaTypeName.get(
@@ -332,6 +344,20 @@ class WitToKotlinPoetConverter(
             .returns(typeVarR)
             .addStatement("return openSession(wasmPath, imports).use { session -> context(session) { block() } }")
         worldObjBuilder.addFunction(withSessionBuilder.build())
+
+        val withSessionBytesBuilder = FunSpec.builder("withSession")
+            .addModifiers(KModifier.INLINE)
+            .addTypeVariable(typeVarR)
+            .addParameter("wasmBytes", byteArrayClass)
+            .addParameter(
+                ParameterSpec.builder("imports", importsClassName)
+                    .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                    .build(),
+            )
+            .addParameter("block", contextLambdaType)
+            .returns(typeVarR)
+            .addStatement("return openSession(wasmBytes, imports).use { session -> context(session) { block() } }")
+        worldObjBuilder.addFunction(withSessionBytesBuilder.build())
 
         // 5. Emit Exported Interfaces & Top-level Exported Functions
         for ((exportKey, item) in world.exports) {
@@ -1599,6 +1625,7 @@ class WitToKotlinPoetConverter(
     private fun buildWasmtimeSessionTypeSpec(): TypeSpec {
         val autoCloseableClass = ClassName("java.lang", "AutoCloseable")
         val pathClass = ClassName("java.nio.file", "Path")
+        val byteArrayClass = ClassName("kotlin", "ByteArray")
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val typeR = TypeVariableName("R")
@@ -1665,12 +1692,38 @@ class WitToKotlinPoetConverter(
                             )
                             .build(),
                     )
+                    .addProperty(
+                        PropertySpec.builder(
+                            "bytesFactory",
+                            LambdaTypeName.get(
+                                parameters = listOf(
+                                    ParameterSpec.builder("wasmBytes", byteArrayClass).build(),
+                                    ParameterSpec.builder("imports", anyNullable).build(),
+                                ),
+                                returnType = runtimeSessionClass,
+                            ),
+                        )
+                            .mutable(true)
+                            .initializer(
+                                "{ wasmBytes, imports -> %T.open(wasmBytes, imports) }",
+                                ffmSessionClass,
+                            )
+                            .build(),
+                    )
                     .addFunction(
                         FunSpec.builder("open")
                             .addParameter("wasmPath", pathClass)
                             .addParameter("imports", anyNullable)
                             .returns(runtimeSessionClass)
                             .addStatement("return factory(wasmPath, imports)")
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("open")
+                            .addParameter("wasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(runtimeSessionClass)
+                            .addStatement("return bytesFactory(wasmBytes, imports)")
                             .build(),
                     )
                     .build(),
@@ -1685,6 +1738,7 @@ class WitToKotlinPoetConverter(
         val arenaClass = ClassName("java.lang.foreign", "Arena")
         val memorySegmentClass = ClassName("java.lang.foreign", "MemorySegment")
         val pathClass = ClassName("java.nio.file", "Path")
+        val byteArrayClass = ClassName("kotlin", "ByteArray")
         val jsonClass = ClassName("kotlinx.serialization.json", "Json")
         val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
         val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
@@ -1840,6 +1894,41 @@ class WitToKotlinPoetConverter(
                             .beginControlFlow("if (ptr == %T.NULL)", memorySegmentClass)
                             .addStatement("val errMsg = %T.readNullTerminatedUtf8(errBuf)", ffmBridgeClass)
                             .addStatement("throw IllegalStateException(%P)", "Failed to open Wasmtime session: \$errMsg")
+                            .endControlFlow()
+                            .addStatement("return %T(bridge, sessionArena, ptr)", ffmSessionClass)
+                            .nextControlFlow("catch (t: Throwable)")
+                            .addStatement("sessionArena.close()")
+                            .addStatement("throw t")
+                            .endControlFlow()
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("open")
+                            .addParameter("wasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .addParameter(
+                                ParameterSpec.builder("bridge", ffmBridgeClass)
+                                    .defaultValue("%T.getDefault()", ffmBridgeClass)
+                                    .build(),
+                            )
+                            .returns(ffmSessionClass)
+                            .addStatement("val sessionArena = %T.ofShared()", arenaClass)
+                            .beginControlFlow("try")
+                            .addStatement(
+                                "val wasmBytesPtr = %T.allocateBytes(sessionArena, wasmBytes)",
+                                ffmBridgeClass,
+                            )
+                            .addStatement("val importsJsonPtr = %T.allocateUtf8CString(sessionArena, %S)", ffmBridgeClass, "[]")
+                            .addStatement("val callbackStub = bridge.createHostCallbackStub(sessionArena, imports)")
+                            .addStatement("val errCap = 4096L")
+                            .addStatement("val errBuf = sessionArena.allocate(errCap)")
+                            .addStatement(
+                                "val ptr = bridge.sessionOpenBytesHandle.invokeExact(wasmBytesPtr, wasmBytes.size.toLong(), importsJsonPtr, callbackStub, errBuf, errCap) as %T",
+                                memorySegmentClass,
+                            )
+                            .beginControlFlow("if (ptr == %T.NULL)", memorySegmentClass)
+                            .addStatement("val errMsg = %T.readNullTerminatedUtf8(errBuf)", ffmBridgeClass)
+                            .addStatement("throw IllegalStateException(%P)", "Failed to open Wasmtime session from bytes: \$errMsg")
                             .endControlFlow()
                             .addStatement("return %T(bridge, sessionArena, ptr)", ffmSessionClass)
                             .nextControlFlow("catch (t: Throwable)")
