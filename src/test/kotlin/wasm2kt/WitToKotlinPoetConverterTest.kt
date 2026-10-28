@@ -1034,4 +1034,117 @@ class WitToKotlinPoetConverterTest {
         val defaultWorldFile = standaloneOutDir.resolve("com/example/standalone/DefaultWorld.kt")
         assertTrue(Files.exists(defaultWorldFile), "DefaultWorld.kt should be synthesized when WIT has only interfaces")
     }
+
+    @Test
+    fun `ByteArray and AOT precompiled cwasm execution via openSession and withSession`(@TempDir tempDir: Path) {
+        val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm"))
+        val wasmPath = Paths.get(wasmFixtureUrl.toURI())
+        val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wit"))
+        val witPath = Paths.get(witFixtureUrl.toURI())
+
+        // 1. Precompile roundtrip.wasm into AOT .cwasm bytes and file via FfmWasmtimeBridge
+        val bridge = wasm2kt.runtime.FfmWasmtimeBridge.getDefault()
+        val rawWasmBytes = Files.readAllBytes(wasmPath)
+        val cwasmBytes = bridge.precompileComponent(rawWasmBytes)
+        assertTrue(cwasmBytes.isNotEmpty(), "Precompiled .cwasm bytes must not be empty")
+        val cwasmPath = tempDir.resolve("roundtrip.cwasm")
+        Files.write(cwasmPath, cwasmBytes)
+
+        // 2. Generate bindings from roundtrip.wit
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                "/Users/chikoski/.cargo/bin/wasm-tools",
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.cwasm",
+                witPath.toString(),
+            ),
+        )
+
+        // 3. Write a harness testing:
+        //    (a) withSession(wasmBytes: ByteArray) with raw .wasm bytes
+        //    (b) withSession(cwasmBytes: ByteArray) with AOT .cwasm bytes
+        //    (c) withSession(cwasmPath: Path) with AOT .cwasm file path
+        val harnessPath = tempDir.resolve("com/example/cwasm/CwasmHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.cwasm
+
+            import java.nio.file.Path
+
+            fun runAllLoadingModes(rawWasmBytes: ByteArray, cwasmBytes: ByteArray, cwasmPath: Path): String {
+                val imports = object : RoundtripWorld.Imports {
+                    override val envProvider = object : RoundtripWorld.EnvProvider {
+                        override fun getMultiplier(): Int = 6
+                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                    }
+                }
+
+                // Mode A: Raw .wasm ByteArray
+                val resRawBytes = RoundtripWorld.withSession(rawWasmBytes, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(7) }
+                    val tag = RoundtripWorld.describeCode("RAW", 200u)
+                    "${'$'}scaled:${'$'}tag"
+                }
+
+                // Mode B: Precompiled AOT .cwasm ByteArray
+                val resCwasmBytes = RoundtripWorld.withSession(cwasmBytes, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(8) }
+                    val tag = RoundtripWorld.describeCode("AOT_BYTES", 201u)
+                    "${'$'}scaled:${'$'}tag"
+                }
+
+                // Mode C: Precompiled AOT .cwasm Path
+                val resCwasmPath = RoundtripWorld.withSession(cwasmPath, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(9) }
+                    val tag = RoundtripWorld.describeCode("AOT_PATH", 202u)
+                    "${'$'}scaled:${'$'}tag"
+                }
+
+                return "rawBytes=${'$'}resRawBytes|cwasmBytes=${'$'}resCwasmBytes|cwasmPath=${'$'}resCwasmPath"
+            }
+            """.trimIndent(),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/cwasm")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("RoundtripWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "CwasmHarness must compile cleanly")
+
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.cwasm.CwasmHarnessKt")
+        val method = harnessClass.getDeclaredMethod(
+            "runAllLoadingModes",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            Path::class.java,
+        )
+        val actualOutput = method.invoke(null, rawWasmBytes, cwasmBytes, cwasmPath) as String
+
+        assertEquals(
+            "rawBytes=42:RAW#200|cwasmBytes=48:AOT_BYTES#201|cwasmPath=54:AOT_PATH#202",
+            actualOutput,
+        )
+    }
 }

@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 use wasmtime::component::{Component, Instance, Linker, ResourceAny, Type, Val};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::{Config, Engine, Precompiled, Store};
 
 /// Host callback function pointer type:
 /// Receives `(user_data, import_name_json_or_str, args_json_cstr)` and returns a newly allocated C string JSON response
@@ -518,6 +518,62 @@ fn invoke_host_callback(
 // Exported C ABI Functions for JVM Foreign Function & Memory (FFM) API
 // ============================================================================
 
+fn parse_imports_json(imports_json_ptr: *const c_char) -> Result<Vec<String>> {
+    if imports_json_ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let s = unsafe { CStr::from_ptr(imports_json_ptr) }.to_str()?;
+    if s.trim().is_empty() {
+        Ok(Vec::new())
+    } else {
+        serde_json::from_str(s).context("Invalid imports JSON array")
+    }
+}
+
+fn create_session_from_component(
+    engine: Engine,
+    component: Component,
+    imports_json_ptr: *const c_char,
+    host_callback: Option<HostCallbackFn>,
+) -> Result<BridgeSession> {
+    let imports_list = parse_imports_json(imports_json_ptr)?;
+
+    let mut linker = Linker::new(&engine);
+    register_host_imports(&mut linker, &component, &imports_list)?;
+
+    let mut store = Store::new(
+        &engine,
+        StoreData {
+            host_callback,
+            resources: HashMap::new(),
+            next_handle: 1,
+        },
+    );
+
+    let instance = linker
+        .instantiate(&mut store, &component)
+        .context("Failed to instantiate Wasm component")?;
+
+    Ok(BridgeSession {
+        engine,
+        component,
+        store,
+        instance,
+    })
+}
+
+fn write_err_buf(err: &anyhow::Error, err_buf: *mut c_char, err_buf_cap: usize) {
+    if !err_buf.is_null() && err_buf_cap > 0 {
+        let msg = format!("{:#}", err);
+        let bytes = msg.as_bytes();
+        let copy_len = bytes.len().min(err_buf_cap - 1);
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf as *mut u8, copy_len);
+            *err_buf.add(copy_len) = 0;
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn wasm2kt_session_open(
     wasm_path_ptr: *const c_char,
@@ -531,60 +587,111 @@ pub extern "C" fn wasm2kt_session_open(
             .to_str()
             .context("Invalid UTF-8 in wasm_path")?;
 
-        let imports_list: Vec<String> = if imports_json_ptr.is_null() {
-            Vec::new()
-        } else {
-            let s = unsafe { CStr::from_ptr(imports_json_ptr) }.to_str()?;
-            if s.trim().is_empty() {
-                Vec::new()
-            } else {
-                serde_json::from_str(s).context("Invalid imports JSON array")?
-            }
-        };
-
         let mut config = Config::new();
         config.wasm_component_model(true);
         let engine = Engine::new(&config)?;
-        let component = Component::from_file(&engine, wasm_path)
-            .with_context(|| format!("Failed to load component from {}", wasm_path))?;
+        let component = match engine.detect_precompiled_file(wasm_path) {
+            Ok(Some(Precompiled::Component)) => unsafe { Component::deserialize_file(&engine, wasm_path) }
+                .with_context(|| format!("Failed to deserialize precompiled .cwasm component from {}", wasm_path))?,
+            _ => Component::from_file(&engine, wasm_path)
+                .with_context(|| format!("Failed to load component from {}", wasm_path))?,
+        };
 
-        let mut linker = Linker::new(&engine);
-        register_host_imports(&mut linker, &component, &imports_list)?;
-
-        let mut store = Store::new(
-            &engine,
-            StoreData {
-                host_callback,
-                resources: HashMap::new(),
-                next_handle: 1,
-            },
-        );
-
-        let instance = linker
-            .instantiate(&mut store, &component)
-            .context("Failed to instantiate Wasm component")?;
-
-        Ok(BridgeSession {
-            engine,
-            component,
-            store,
-            instance,
-        })
+        create_session_from_component(engine, component, imports_json_ptr, host_callback)
     })();
 
     match res {
         Ok(session) => Box::into_raw(Box::new(session)),
         Err(e) => {
-            if !err_buf.is_null() && err_buf_cap > 0 {
-                let msg = format!("{:#}", e);
-                let bytes = msg.as_bytes();
-                let copy_len = bytes.len().min(err_buf_cap - 1);
-                unsafe {
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf as *mut u8, copy_len);
-                    *err_buf.add(copy_len) = 0;
-                }
-            }
+            write_err_buf(&e, err_buf, err_buf_cap);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wasm2kt_session_open_bytes(
+    wasm_bytes_ptr: *const u8,
+    wasm_bytes_len: usize,
+    imports_json_ptr: *const c_char,
+    host_callback: Option<HostCallbackFn>,
+    err_buf: *mut c_char,
+    err_buf_cap: usize,
+) -> *mut BridgeSession {
+    let res = (|| -> Result<BridgeSession> {
+        if wasm_bytes_ptr.is_null() {
+            bail!("wasm_bytes_ptr is null");
+        }
+        let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
+
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        let engine = Engine::new(&config)?;
+        let component = match engine.detect_precompiled(wasm_bytes) {
+            Some(Precompiled::Component) => unsafe { Component::deserialize(&engine, wasm_bytes) }
+                .context("Failed to deserialize precompiled .cwasm component from bytes")?,
+            _ => Component::from_binary(&engine, wasm_bytes)
+                .context("Failed to load Wasm component from bytes")?,
+        };
+
+        create_session_from_component(engine, component, imports_json_ptr, host_callback)
+    })();
+
+    match res {
+        Ok(session) => Box::into_raw(Box::new(session)),
+        Err(e) => {
+            write_err_buf(&e, err_buf, err_buf_cap);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wasm2kt_precompile_component(
+    wasm_bytes_ptr: *const u8,
+    wasm_bytes_len: usize,
+    out_len_ptr: *mut usize,
+    err_buf: *mut c_char,
+    err_buf_cap: usize,
+) -> *mut u8 {
+    let res = (|| -> Result<Vec<u8>> {
+        if wasm_bytes_ptr.is_null() {
+            bail!("wasm_bytes_ptr is null");
+        }
+        if out_len_ptr.is_null() {
+            bail!("out_len_ptr is null");
+        }
+        let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        let engine = Engine::new(&config)?;
+        engine
+            .precompile_component(wasm_bytes)
+            .context("Failed to precompile Wasm component into .cwasm")
+    })();
+
+    match res {
+        Ok(cwasm_vec) => {
+            let boxed_slice = cwasm_vec.into_boxed_slice();
+            let len = boxed_slice.len();
+            unsafe {
+                *out_len_ptr = len;
+            }
+            Box::into_raw(boxed_slice) as *mut u8
+        }
+        Err(e) => {
+            write_err_buf(&e, err_buf, err_buf_cap);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wasm2kt_free_bytes(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        unsafe {
+            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr, len);
+            drop(Box::from_raw(slice_ptr));
         }
     }
 }
