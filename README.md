@@ -182,6 +182,7 @@ Options:
 ## ドキュメント & 使用例 (Documentation & Examples)
 
 ### 詳細ドキュメント (`docs/`)
+* **[プロジェクトの現状とアクションアイテム](docs/STATUS.md)** / **[設計判断の記録 (ADR)](docs/adr/README.md)**
 * **[Getting Started (環境構築・チュートリアル)](docs/getting-started.md)**: ゼロから Wasm コンポーネントを用意し、Kotlin プロジェクトに組み込んで実行するまでの手順。
 * **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `WitOption`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
 * **[Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md)**: Android を含む純 JVM 実行。ビルド時の分解・AOT コンパイルのパイプラインと、プラグインの使い方。
