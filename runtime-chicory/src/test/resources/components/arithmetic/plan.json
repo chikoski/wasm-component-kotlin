@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    }
+  ],
+  "trampolines": [],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "add",
+      "func": {
+        "instance": 0,
+        "name": "add",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "sub",
+      "func": {
+        "instance": 0,
+        "name": "sub",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "mul",
+      "func": {
+        "instance": 0,
+        "name": "mul",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "div",
+      "func": {
+        "instance": 0,
+        "name": "div",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

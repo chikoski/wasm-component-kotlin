@@ -4,11 +4,14 @@ kotlinpoet = "2.2.0"
 kotlinx-serialization = "1.8.0"
 clikt = "5.0.3"
 junit = "5.11.4"
+chicory = "1.7.5"
 
 [libraries]
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
+chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chicory" }
+chicory-wasm = { module = "com.dylibso.chicory:wasm", version.ref = "chicory" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 
 [plugins]
