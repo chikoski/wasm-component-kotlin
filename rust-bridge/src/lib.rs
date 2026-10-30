@@ -1,4 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
+use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
+use jni::sys::{jbyteArray, jint, jlong, jstring};
+use jni::{JNIEnv, JavaVM};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
@@ -20,6 +23,7 @@ pub type HostCallbackFn = extern "C" fn(
 
 pub struct StoreData {
     pub host_callback: Option<HostCallbackFn>,
+    pub jni_callback: Option<(JavaVM, GlobalRef)>,
     pub resources: HashMap<i32, ResourceAny>,
     pub next_handle: i32,
 }
@@ -408,11 +412,19 @@ fn register_host_imports(
         match import_item {
             wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) => {
                 let name_owned = import_name.to_string();
+                let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                 let result_types: Vec<Type> = func_ty.results().collect();
                 linker
                     .root()
                     .func_new(import_name, move |mut ctx, params, results| {
-                        invoke_host_callback(&mut ctx, &name_owned, params, results, &result_types)
+                        invoke_host_callback(
+                            &mut ctx,
+                            &name_owned,
+                            params,
+                            &param_types,
+                            results,
+                            &result_types,
+                        )
                     })?;
             }
             wasmtime::component::types::ComponentItem::ComponentInstance(inst_ty) => {
@@ -427,9 +439,17 @@ fn register_host_imports(
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
                     if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item {
                         let callback_key = format!("{}#{}", short_iface, export_fn_name);
+                        let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                         let result_types: Vec<Type> = func_ty.results().collect();
                         inst.func_new(export_fn_name, move |mut ctx, params, results| {
-                            invoke_host_callback(&mut ctx, &callback_key, params, results, &result_types)
+                            invoke_host_callback(
+                                &mut ctx,
+                                &callback_key,
+                                params,
+                                &param_types,
+                                results,
+                                &result_types,
+                            )
                         })?;
                     }
                 }
@@ -442,61 +462,121 @@ fn register_host_imports(
     Ok(())
 }
 
+fn extract_and_clear_jni_exception(env: &mut JNIEnv<'_>) -> String {
+    if let Ok(throwable) = env.exception_occurred() {
+        let _ = env.exception_clear();
+        if !throwable.is_null() {
+            if let Ok(msg_val) = env.call_method(&throwable, "toString", "()Ljava/lang/String;", &[]) {
+                if let Ok(msg_obj) = msg_val.l() {
+                    if !msg_obj.is_null() {
+                        let j_str = JString::from(msg_obj);
+                        if let Ok(rust_str) = env.get_string(&j_str) {
+                            return rust_str.into();
+                        };
+                    }
+                }
+            }
+        }
+    } else {
+        let _ = env.exception_clear();
+    }
+    "Unknown JVM exception".to_string()
+}
+
 fn invoke_host_callback(
     ctx: &mut wasmtime::StoreContextMut<'_, StoreData>,
     import_name: &str,
     params: &[Val],
+    param_types: &[Type],
     results: &mut [Val],
     result_types: &[Type],
 ) -> Result<()> {
-    let cb = match ctx.data().host_callback {
-        Some(f) => f,
-        None => return Ok(()),
+    if ctx.data().host_callback.is_none() && ctx.data().jni_callback.is_none() {
+        return Ok(());
+    }
+
+    // Serialize all Val params (including records, variants, enums, flags, options, results, lists, tuples, and resources) into JSON array
+    let mut json_params = Vec::with_capacity(params.len());
+    {
+        let data = ctx.data_mut();
+        for (p, p_ty) in params.iter().zip(param_types.iter()) {
+            let j = val_to_json(p, p_ty, &mut data.resources, &mut data.next_handle)?;
+            json_params.push(j);
+        }
+    }
+
+    let args_json_str = serde_json::to_string(&json_params)?;
+
+    let resp_str_opt: Option<String> = if let Some(cb) = ctx.data().host_callback {
+        let c_import = CString::new(import_name)?;
+        let c_args = CString::new(args_json_str)?;
+        let mut out_buf = vec![0u8; 65536];
+
+        let status = cb(
+            c_import.as_ptr(),
+            c_args.as_ptr(),
+            out_buf.as_mut_ptr() as *mut c_char,
+            out_buf.len(),
+        );
+        if status != 0 {
+            let err_str = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }
+                .to_string_lossy()
+                .into_owned();
+            bail!("Host import '{}' failed: {}", import_name, err_str);
+        }
+        let s = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }
+            .to_str()?
+            .to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    } else if let Some((ref vm, ref callback_ref)) = ctx.data().jni_callback {
+        let mut env = vm
+            .get_env()
+            .or_else(|_| vm.attach_current_thread_permanently())
+            .context("Failed to acquire JNIEnv for host callback")?;
+        env.with_local_frame(16, |env| -> Result<Option<String>> {
+            let j_import = env.new_string(import_name)?;
+            let j_args = env.new_string(&args_json_str)?;
+            let j_import_obj: JObject = j_import.into();
+            let j_args_obj: JObject = j_args.into();
+            let call_res = env.call_method(
+                callback_ref,
+                "onHostCall",
+                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&j_import_obj), JValue::Object(&j_args_obj)],
+            );
+            if env.exception_check().unwrap_or(false) {
+                let exc_msg = extract_and_clear_jni_exception(env);
+                bail!(
+                    "Host import '{}' threw an exception in JVM/Android host: {}",
+                    import_name,
+                    exc_msg
+                );
+            }
+            let ret_val = call_res.with_context(|| format!("JNI call_method onHostCall failed for '{}'", import_name))?;
+            let ret_obj = ret_val.l()?;
+            if ret_obj.is_null() {
+                Ok(None)
+            } else {
+                let j_str = JString::from(ret_obj);
+                let s: String = env.get_string(&j_str)?.into();
+                if s.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(s))
+                }
+            }
+        })?
+    } else {
+        None
     };
 
-    // Serialize primitive/simple Val params into JSON array for the host callback
-    let mut json_params = Vec::with_capacity(params.len());
-    for p in params {
-        let j = match p {
-            Val::Bool(b) => json!(*b),
-            Val::S8(v) => json!(*v),
-            Val::U8(v) => json!(*v),
-            Val::S16(v) => json!(*v),
-            Val::U16(v) => json!(*v),
-            Val::S32(v) => json!(*v),
-            Val::U32(v) => json!(*v),
-            Val::S64(v) => json!(*v),
-            Val::U64(v) => json!(*v),
-            Val::Float32(v) => json!(*v),
-            Val::Float64(v) => json!(*v),
-            Val::Char(c) => json!(c.to_string()),
-            Val::String(s) => json!(s),
-            _ => json!(format!("{:?}", p)),
-        };
-        json_params.push(j);
-    }
-
-    let c_import = CString::new(import_name)?;
-    let c_args = CString::new(serde_json::to_string(&json_params)?)?;
-    let mut out_buf = vec![0u8; 65536];
-
-    let status = cb(
-        c_import.as_ptr(),
-        c_args.as_ptr(),
-        out_buf.as_mut_ptr() as *mut c_char,
-        out_buf.len(),
-    );
-    if status != 0 {
-        let err_str = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }
-            .to_string_lossy()
-            .into_owned();
-        bail!("Host import '{}' failed: {}", import_name, err_str);
-    }
-
     if !results.is_empty() {
-        let resp_str = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }.to_str()?;
-        if !resp_str.is_empty() {
-            let resp_json: JsonValue = serde_json::from_str(resp_str)?;
+        if let Some(resp_str) = resp_str_opt {
+            let resp_json: JsonValue = serde_json::from_str(&resp_str)?;
             if results.len() == 1 && result_types.len() == 1 {
                 results[0] = json_to_val(
                     &resp_json,
@@ -515,14 +595,133 @@ fn invoke_host_callback(
 }
 
 // ============================================================================
-// Exported C ABI Functions for JVM Foreign Function & Memory (FFM) API
+// Shared Engine, Thread-Safe Session Registry & Exported C ABI / JNI Functions
 // ============================================================================
 
-fn parse_imports_json(imports_json_ptr: *const c_char) -> Result<Vec<String>> {
-    if imports_json_ptr.is_null() {
-        return Ok(Vec::new());
+static SHARED_ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+static NEXT_SESSION_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+static SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, std::sync::Arc<ManagedSession>>>> =
+    std::sync::OnceLock::new();
+
+thread_local! {
+    static ACTIVE_SESSIONS: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+struct ManagedSession {
+    closed: std::sync::atomic::AtomicBool,
+    inner: std::sync::Mutex<BridgeSession>,
+}
+
+struct ActiveSessionGuard(usize);
+
+impl Drop for ActiveSessionGuard {
+    fn drop(&mut self) {
+        ACTIVE_SESSIONS.with(|set| {
+            set.borrow_mut().remove(&self.0);
+        });
     }
-    let s = unsafe { CStr::from_ptr(imports_json_ptr) }.to_str()?;
+}
+
+fn sessions_map() -> &'static std::sync::Mutex<HashMap<usize, std::sync::Arc<ManagedSession>>> {
+    SESSIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn register_session(session: BridgeSession) -> usize {
+    let mut id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if id == 0 {
+        id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    let managed = std::sync::Arc::new(ManagedSession {
+        closed: std::sync::atomic::AtomicBool::new(false),
+        inner: std::sync::Mutex::new(session),
+    });
+    if let Ok(mut map) = sessions_map().lock() {
+        map.insert(id, managed);
+    }
+    id
+}
+
+fn with_session_mut<T, F: FnOnce(&mut BridgeSession) -> Result<T>>(session_id: usize, f: F) -> Result<T> {
+    if session_id == 0 {
+        bail!("BridgeSession pointer is null");
+    }
+    let is_reentrant = ACTIVE_SESSIONS.with(|set| set.borrow().contains(&session_id));
+    if is_reentrant {
+        bail!("Reentrant operation on active WasmtimeSession is not permitted");
+    }
+    let managed = {
+        let map = sessions_map()
+            .lock()
+            .map_err(|_| anyhow!("Session registry mutex poisoned"))?;
+        map.get(&session_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("WasmtimeSession is already closed or invalid"))?
+    };
+    let mut guard = managed
+        .inner
+        .lock()
+        .map_err(|_| anyhow!("WasmtimeSession mutex poisoned"))?;
+    if managed.closed.load(std::sync::atomic::Ordering::Acquire) {
+        bail!("WasmtimeSession is already closed");
+    }
+    ACTIVE_SESSIONS.with(|set| {
+        set.borrow_mut().insert(session_id);
+    });
+    let _active_guard = ActiveSessionGuard(session_id);
+    let res = f(&mut guard);
+    if managed.closed.load(std::sync::atomic::Ordering::Acquire) {
+        bail!("WasmtimeSession was closed during host callback execution");
+    }
+    res
+}
+
+fn close_session_handle(session_id: usize) {
+    if session_id == 0 {
+        return;
+    }
+    let removed = sessions_map()
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(&session_id));
+    if let Some(managed) = removed {
+        managed.closed.store(true, std::sync::atomic::Ordering::Release);
+        let is_reentrant = ACTIVE_SESSIONS.with(|set| set.borrow().contains(&session_id));
+        if !is_reentrant {
+            drop(managed.inner.lock());
+        }
+    }
+}
+
+fn get_shared_engine() -> Result<Engine> {
+    if let Some(engine) = SHARED_ENGINE.get() {
+        return Ok(engine.clone());
+    }
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let _ = SHARED_ENGINE.set(engine.clone());
+    Ok(engine)
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown Rust panic in wasm2kt bridge".to_string()
+    }
+}
+
+fn run_catching<T, F: FnOnce() -> Result<T>>(f: F) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(payload) => Err(anyhow!("Rust panic across FFI boundary: {}", panic_payload_to_string(payload))),
+    }
+}
+
+fn parse_imports_json_str(s: &str) -> Result<Vec<String>> {
     if s.trim().is_empty() {
         Ok(Vec::new())
     } else {
@@ -530,14 +729,21 @@ fn parse_imports_json(imports_json_ptr: *const c_char) -> Result<Vec<String>> {
     }
 }
 
+fn parse_imports_json(imports_json_ptr: *const c_char) -> Result<Vec<String>> {
+    if imports_json_ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let s = unsafe { CStr::from_ptr(imports_json_ptr) }.to_str()?;
+    parse_imports_json_str(s)
+}
+
 fn create_session_from_component(
     engine: Engine,
     component: Component,
-    imports_json_ptr: *const c_char,
+    imports_list: Vec<String>,
     host_callback: Option<HostCallbackFn>,
+    jni_callback: Option<(JavaVM, GlobalRef)>,
 ) -> Result<BridgeSession> {
-    let imports_list = parse_imports_json(imports_json_ptr)?;
-
     let mut linker = Linker::new(&engine);
     register_host_imports(&mut linker, &component, &imports_list)?;
 
@@ -545,6 +751,7 @@ fn create_session_from_component(
         &engine,
         StoreData {
             host_callback,
+            jni_callback,
             resources: HashMap::new(),
             next_handle: 1,
         },
@@ -560,6 +767,24 @@ fn create_session_from_component(
         store,
         instance,
     })
+}
+
+fn load_component_from_path(engine: &Engine, wasm_path: &str) -> Result<Component> {
+    match engine.detect_precompiled_file(wasm_path) {
+        Ok(Some(Precompiled::Component)) => unsafe { Component::deserialize_file(engine, wasm_path) }
+            .with_context(|| format!("Failed to deserialize precompiled .cwasm component from {}", wasm_path)),
+        _ => Component::from_file(engine, wasm_path)
+            .with_context(|| format!("Failed to load component from {}", wasm_path)),
+    }
+}
+
+fn load_component_from_bytes(engine: &Engine, wasm_bytes: &[u8]) -> Result<Component> {
+    match engine.detect_precompiled(wasm_bytes) {
+        Some(Precompiled::Component) => unsafe { Component::deserialize(engine, wasm_bytes) }
+            .context("Failed to deserialize precompiled .cwasm component from bytes"),
+        _ => Component::from_binary(engine, wasm_bytes)
+            .context("Failed to load Wasm component from bytes"),
+    }
 }
 
 fn write_err_buf(err: &anyhow::Error, err_buf: *mut c_char, err_buf_cap: usize) {
@@ -582,26 +807,23 @@ pub extern "C" fn wasm2kt_session_open(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
+        if wasm_path_ptr.is_null() {
+            bail!("wasm_path_ptr is null");
+        }
         let wasm_path = unsafe { CStr::from_ptr(wasm_path_ptr) }
             .to_str()
             .context("Invalid UTF-8 in wasm_path")?;
+        let imports_list = parse_imports_json(imports_json_ptr)?;
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
-        let component = match engine.detect_precompiled_file(wasm_path) {
-            Ok(Some(Precompiled::Component)) => unsafe { Component::deserialize_file(&engine, wasm_path) }
-                .with_context(|| format!("Failed to deserialize precompiled .cwasm component from {}", wasm_path))?,
-            _ => Component::from_file(&engine, wasm_path)
-                .with_context(|| format!("Failed to load component from {}", wasm_path))?,
-        };
+        let engine = get_shared_engine()?;
+        let component = load_component_from_path(&engine, wasm_path)?;
 
-        create_session_from_component(engine, component, imports_json_ptr, host_callback)
-    })();
+        create_session_from_component(engine, component, imports_list, host_callback, None)
+    });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)),
+        Ok(session) => register_session(session) as *mut BridgeSession,
         Err(e) => {
             write_err_buf(&e, err_buf, err_buf_cap);
             ptr::null_mut()
@@ -618,27 +840,21 @@ pub extern "C" fn wasm2kt_session_open_bytes(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
-    let res = (|| -> Result<BridgeSession> {
+    let res = run_catching(|| -> Result<BridgeSession> {
         if wasm_bytes_ptr.is_null() {
             bail!("wasm_bytes_ptr is null");
         }
         let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
+        let imports_list = parse_imports_json(imports_json_ptr)?;
 
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
-        let component = match engine.detect_precompiled(wasm_bytes) {
-            Some(Precompiled::Component) => unsafe { Component::deserialize(&engine, wasm_bytes) }
-                .context("Failed to deserialize precompiled .cwasm component from bytes")?,
-            _ => Component::from_binary(&engine, wasm_bytes)
-                .context("Failed to load Wasm component from bytes")?,
-        };
+        let engine = get_shared_engine()?;
+        let component = load_component_from_bytes(&engine, wasm_bytes)?;
 
-        create_session_from_component(engine, component, imports_json_ptr, host_callback)
-    })();
+        create_session_from_component(engine, component, imports_list, host_callback, None)
+    });
 
     match res {
-        Ok(session) => Box::into_raw(Box::new(session)),
+        Ok(session) => register_session(session) as *mut BridgeSession,
         Err(e) => {
             write_err_buf(&e, err_buf, err_buf_cap);
             ptr::null_mut()
@@ -654,7 +870,7 @@ pub extern "C" fn wasm2kt_precompile_component(
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut u8 {
-    let res = (|| -> Result<Vec<u8>> {
+    let res = run_catching(|| -> Result<Vec<u8>> {
         if wasm_bytes_ptr.is_null() {
             bail!("wasm_bytes_ptr is null");
         }
@@ -662,13 +878,11 @@ pub extern "C" fn wasm2kt_precompile_component(
             bail!("out_len_ptr is null");
         }
         let wasm_bytes = unsafe { std::slice::from_raw_parts(wasm_bytes_ptr, wasm_bytes_len) };
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
+        let engine = get_shared_engine()?;
         engine
             .precompile_component(wasm_bytes)
             .context("Failed to precompile Wasm component into .cwasm")
-    })();
+    });
 
     match res {
         Ok(cwasm_vec) => {
@@ -688,12 +902,89 @@ pub extern "C" fn wasm2kt_precompile_component(
 
 #[no_mangle]
 pub extern "C" fn wasm2kt_free_bytes(ptr: *mut u8, len: usize) {
-    if !ptr.is_null() {
-        unsafe {
-            let slice_ptr = ptr::slice_from_raw_parts_mut(ptr, len);
-            drop(Box::from_raw(slice_ptr));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !ptr.is_null() {
+            unsafe {
+                let slice_ptr = ptr::slice_from_raw_parts_mut(ptr, len);
+                drop(Box::from_raw(slice_ptr));
+            }
+        }
+    }));
+}
+
+fn session_invoke_internal(
+    session: &mut BridgeSession,
+    func_spec: &str,
+    args_str: &str,
+) -> Result<JsonValue> {
+    let args_json: Vec<JsonValue> = serde_json::from_str(args_str)
+        .with_context(|| format!("Failed to parse args JSON: {}", args_str))?;
+
+    let func = resolve_exported_func(
+        &session.component,
+        &session.instance,
+        &mut session.store,
+        func_spec,
+    )?;
+    let param_types = func.params(&session.store);
+    let result_types = func.results(&session.store);
+
+    if args_json.len() != param_types.len() {
+        bail!(
+            "Function '{}' expected {} arguments, got {}",
+            func_spec,
+            param_types.len(),
+            args_json.len()
+        );
+    }
+
+    let mut wasm_params = Vec::with_capacity(param_types.len());
+    for (arg_j, (_, p_ty)) in args_json.iter().zip(param_types.iter()) {
+        let val = json_to_val(arg_j, p_ty, &mut session.store.data_mut().resources)?;
+        wasm_params.push(val);
+    }
+
+    let mut wasm_results = vec![Val::Bool(false); result_types.len()];
+    func.call(&mut session.store, &wasm_params, &mut wasm_results)
+        .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))?;
+    func.post_return(&mut session.store)
+        .with_context(|| format!("Wasmtime post_return for '{}' failed", func_spec))?;
+
+    let data = session.store.data_mut();
+    match result_types.len() {
+        0 => Ok(JsonValue::Null),
+        1 => val_to_json(
+            &wasm_results[0],
+            &result_types[0],
+            &mut data.resources,
+            &mut data.next_handle,
+        ),
+        _ => {
+            let mut tuple_out = Vec::with_capacity(result_types.len());
+            for (r_val, r_ty) in wasm_results.iter().zip(result_types.iter()) {
+                tuple_out.push(val_to_json(
+                    r_val,
+                    r_ty,
+                    &mut data.resources,
+                    &mut data.next_handle,
+                )?);
+            }
+            Ok(JsonValue::Array(tuple_out))
         }
     }
+}
+
+fn session_drop_resource_internal(session: &mut BridgeSession, handle: i32) -> Result<JsonValue> {
+    let res_any = session
+        .store
+        .data_mut()
+        .resources
+        .remove(&handle)
+        .ok_or_else(|| anyhow!("Resource handle {} is not active or already dropped", handle))?;
+    res_any
+        .resource_drop(&mut session.store)
+        .with_context(|| format!("Failed to drop Wasmtime resource handle {}", handle))?;
+    Ok(JsonValue::Null)
 }
 
 #[no_mangle]
@@ -702,70 +993,19 @@ pub extern "C" fn wasm2kt_session_invoke(
     func_spec_ptr: *const c_char,
     args_json_ptr: *const c_char,
 ) -> *mut c_char {
-    if session_ptr.is_null() {
-        return err_response("BridgeSession pointer is null");
-    }
-    let session = unsafe { &mut *session_ptr };
-
-    let res = (|| -> Result<JsonValue> {
+    let res = run_catching(|| -> Result<JsonValue> {
+        if func_spec_ptr.is_null() {
+            bail!("func_spec_ptr is null");
+        }
+        if args_json_ptr.is_null() {
+            bail!("args_json_ptr is null");
+        }
         let func_spec = unsafe { CStr::from_ptr(func_spec_ptr) }.to_str()?;
         let args_str = unsafe { CStr::from_ptr(args_json_ptr) }.to_str()?;
-        let args_json: Vec<JsonValue> = serde_json::from_str(args_str)
-            .with_context(|| format!("Failed to parse args JSON: {}", args_str))?;
-
-        let func = resolve_exported_func(
-            &session.component,
-            &session.instance,
-            &mut session.store,
-            func_spec,
-        )?;
-        let param_types = func.params(&session.store);
-        let result_types = func.results(&session.store);
-
-        if args_json.len() != param_types.len() {
-            bail!(
-                "Function '{}' expected {} arguments, got {}",
-                func_spec,
-                param_types.len(),
-                args_json.len()
-            );
-        }
-
-        let mut wasm_params = Vec::with_capacity(param_types.len());
-        for (arg_j, (_, p_ty)) in args_json.iter().zip(param_types.iter()) {
-            let val = json_to_val(arg_j, p_ty, &mut session.store.data_mut().resources)?;
-            wasm_params.push(val);
-        }
-
-        let mut wasm_results = vec![Val::Bool(false); result_types.len()];
-        func.call(&mut session.store, &wasm_params, &mut wasm_results)
-            .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))?;
-        func.post_return(&mut session.store)
-            .with_context(|| format!("Wasmtime post_return for '{}' failed", func_spec))?;
-
-        let data = session.store.data_mut();
-        match result_types.len() {
-            0 => Ok(JsonValue::Null),
-            1 => val_to_json(
-                &wasm_results[0],
-                &result_types[0],
-                &mut data.resources,
-                &mut data.next_handle,
-            ),
-            _ => {
-                let mut tuple_out = Vec::with_capacity(result_types.len());
-                for (r_val, r_ty) in wasm_results.iter().zip(result_types.iter()) {
-                    tuple_out.push(val_to_json(
-                        r_val,
-                        r_ty,
-                        &mut data.resources,
-                        &mut data.next_handle,
-                    )?);
-                }
-                Ok(JsonValue::Array(tuple_out))
-            }
-        }
-    })();
+        with_session_mut(session_ptr as usize, |session| {
+            session_invoke_internal(session, func_spec, args_str)
+        })
+    });
 
     match res {
         Ok(val) => ok_response(val),
@@ -778,23 +1018,11 @@ pub extern "C" fn wasm2kt_session_drop_resource(
     session_ptr: *mut BridgeSession,
     handle: i32,
 ) -> *mut c_char {
-    if session_ptr.is_null() {
-        return err_response("BridgeSession pointer is null");
-    }
-    let session = unsafe { &mut *session_ptr };
-
-    let res = (|| -> Result<JsonValue> {
-        let res_any = session
-            .store
-            .data_mut()
-            .resources
-            .remove(&handle)
-            .ok_or_else(|| anyhow!("Resource handle {} is not active or already dropped", handle))?;
-        res_any
-            .resource_drop(&mut session.store)
-            .with_context(|| format!("Failed to drop Wasmtime resource handle {}", handle))?;
-        Ok(JsonValue::Null)
-    })();
+    let res = run_catching(|| -> Result<JsonValue> {
+        with_session_mut(session_ptr as usize, |session| {
+            session_drop_resource_internal(session, handle)
+        })
+    });
 
     match res {
         Ok(val) => ok_response(val),
@@ -804,18 +1032,194 @@ pub extern "C" fn wasm2kt_session_drop_resource(
 
 #[no_mangle]
 pub extern "C" fn wasm2kt_session_close(session_ptr: *mut BridgeSession) {
-    if !session_ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(session_ptr));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        close_session_handle(session_ptr as usize);
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn wasm2kt_free_string(ptr: *mut c_char) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !ptr.is_null() {
+            unsafe {
+                drop(CString::from_raw(ptr));
+            }
+        }
+    }));
+}
+
+// ============================================================================
+// Exported JNI Functions for Android ART & Standard JVM (`JniWasmtimeBridge`)
+// ============================================================================
+
+fn response_to_jstring<'local>(env: &mut JNIEnv<'local>, res: Result<JsonValue>) -> jstring {
+    let resp = match res {
+        Ok(val) => BridgeResponse {
+            ok: true,
+            value: Some(val),
+            error: None,
+        },
+        Err(e) => BridgeResponse {
+            ok: false,
+            value: None,
+            error: Some(format!("{:#}", e)),
+        },
+    };
+    let s = serde_json::to_string(&resp).unwrap_or_else(|e| {
+        format!(r#"{{"ok":false,"error":"Failed to serialize response: {}"}}"#, e)
+    });
+    env.new_string(s)
+        .map(|js| js.into_raw())
+        .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    wasm_path: JString<'local>,
+    imports_json: JString<'local>,
+    host_callback: JObject<'local>,
+) -> jlong {
+    let res = run_catching(|| -> Result<BridgeSession> {
+        let wasm_path_str: String = env.get_string(&wasm_path)?.into();
+        let imports_json_str: String = env.get_string(&imports_json)?.into();
+        let imports_list = parse_imports_json_str(&imports_json_str)?;
+
+        let jni_cb = if host_callback.is_null() {
+            None
+        } else {
+            let vm = env.get_java_vm()?;
+            let global_ref = env.new_global_ref(&host_callback)?;
+            Some((vm, global_ref))
+        };
+
+        let engine = get_shared_engine()?;
+        let component = load_component_from_path(&engine, &wasm_path_str)?;
+
+        create_session_from_component(engine, component, imports_list, None, jni_cb)
+    });
+
+    match res {
+        Ok(session) => register_session(session) as jlong,
+        Err(e) => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                format!("Failed to open Wasmtime session: {:#}", e),
+            );
+            0
         }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn wasm2kt_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe {
-            drop(CString::from_raw(ptr));
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenBytes<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    wasm_bytes: JByteArray<'local>,
+    imports_json: JString<'local>,
+    host_callback: JObject<'local>,
+) -> jlong {
+    let res = run_catching(|| -> Result<BridgeSession> {
+        let bytes = env.convert_byte_array(&wasm_bytes)?;
+        let imports_json_str: String = env.get_string(&imports_json)?.into();
+        let imports_list = parse_imports_json_str(&imports_json_str)?;
+
+        let jni_cb = if host_callback.is_null() {
+            None
+        } else {
+            let vm = env.get_java_vm()?;
+            let global_ref = env.new_global_ref(&host_callback)?;
+            Some((vm, global_ref))
+        };
+
+        let engine = get_shared_engine()?;
+        let component = load_component_from_bytes(&engine, &bytes)?;
+
+        create_session_from_component(engine, component, imports_list, None, jni_cb)
+    });
+
+    match res {
+        Ok(session) => register_session(session) as jlong,
+        Err(e) => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                format!("Failed to open Wasmtime session from bytes: {:#}", e),
+            );
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionInvoke<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    func_spec: JString<'local>,
+    args_json: JString<'local>,
+) -> jstring {
+    let res = run_catching(|| -> Result<JsonValue> {
+        let func_spec_str: String = env.get_string(&func_spec)?.into();
+        let args_str: String = env.get_string(&args_json)?.into();
+        with_session_mut(session_ptr as usize, |session| {
+            session_invoke_internal(session, &func_spec_str, &args_str)
+        })
+    });
+    response_to_jstring(&mut env, res)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionDropResource<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    handle: jint,
+) -> jstring {
+    let res = run_catching(|| -> Result<JsonValue> {
+        with_session_mut(session_ptr as usize, |session| {
+            session_drop_resource_internal(session, handle)
+        })
+    });
+    response_to_jstring(&mut env, res)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionClose<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        close_session_handle(session_ptr as usize);
+    }));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativePrecompileComponent<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    wasm_bytes: JByteArray<'local>,
+) -> jbyteArray {
+    let res = run_catching(|| -> Result<Vec<u8>> {
+        let bytes = env.convert_byte_array(&wasm_bytes)?;
+        let engine = get_shared_engine()?;
+        engine
+            .precompile_component(&bytes)
+            .context("Failed to precompile Wasm component into .cwasm")
+    });
+
+    match res {
+        Ok(cwasm_vec) => env
+            .byte_array_from_slice(&cwasm_vec)
+            .map(|arr| arr.into_raw())
+            .unwrap_or(ptr::null_mut()),
+        Err(e) => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                format!("Failed to precompile Wasm component: {:#}", e),
+            );
+            ptr::null_mut()
         }
     }
 }

@@ -13,6 +13,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class WitToKotlinPoetConverterTest {
+    private val wasmToolsBin: String = resolveWasmToolsBinary()
+
+    private fun resolveWasmToolsBinary(): String {
+        System.getenv("WASM_TOOLS_BIN")?.takeIf { it.isNotBlank() }?.let { return it }
+        val homeCargo = Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools")
+        if (Files.isExecutable(homeCargo)) return homeCargo.toString()
+        val pathEnv = System.getenv("PATH").orEmpty()
+        for (dir in pathEnv.split(java.io.File.pathSeparator)) {
+            if (dir.isBlank()) continue
+            val candidate = Paths.get(dir, "wasm-tools")
+            if (Files.isExecutable(candidate)) return candidate.toString()
+        }
+        return "wasm-tools"
+    }
+
     private fun loadFixture(name: String): String =
         requireNotNull(javaClass.getResourceAsStream("/fixtures/$name")) {
             "Fixture not found: $name"
@@ -49,6 +64,7 @@ class WitToKotlinPoetConverterTest {
         assertTrue(supportFile.contains("sealed interface WitResult<out T, out E>"))
         assertTrue(supportFile.contains("data class Tuple2<out T0, out T1>"))
         assertTrue(supportFile.contains("interface WasmtimeSession : AutoCloseable"))
+        assertTrue(supportFile.contains("class JniWasmtimeSession"))
 
         // Verify World singleton object and nested types
         assertTrue(worldFile.contains("object CalculatorWorld"))
@@ -284,7 +300,7 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Extract JSON AST directly from the compiled .wasm component binary via wasm-tools (or .wit)
-        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools("/Users/chikoski/.cargo/bin/wasm-tools", witPath)
+        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools(wasmToolsBin, witPath)
         val jsonFile = tempDir.resolve("live_calc.json")
         Files.writeString(jsonFile, jsonAst)
 
@@ -374,7 +390,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -385,7 +401,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -463,7 +479,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -474,7 +490,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -577,7 +593,7 @@ class WitToKotlinPoetConverterTest {
             Wasm2KtCommand().parse(
                 listOf(
                     "--wasm-tools-path",
-                    "/Users/chikoski/.cargo/bin/wasm-tools",
+                    wasmToolsBin,
                     "-o",
                     exOutDir.toString(),
                     "-p",
@@ -632,7 +648,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -763,7 +779,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -864,7 +880,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -941,7 +957,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -995,7 +1011,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "--world",
                 "alpha",
                 "-o",
@@ -1023,7 +1039,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 standaloneOutDir.toString(),
                 "-p",
@@ -1054,7 +1070,7 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
-                "/Users/chikoski/.cargo/bin/wasm-tools",
+                wasmToolsBin,
                 "-o",
                 tempDir.toString(),
                 "-p",
@@ -1146,5 +1162,658 @@ class WitToKotlinPoetConverterTest {
             "rawBytes=42:RAW#200|cwasmBytes=48:AOT_BYTES#201|cwasmPath=54:AOT_PATH#202",
             actualOutput,
         )
+    }
+
+    @Test
+    fun `native JNI Wasmtime execution with JniWasmtimeSession across Path, ByteArray, AOT cwasm, host imports, and resources`(@TempDir tempDir: Path) {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val roundtripWitPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wit")).toURI())
+        val counterWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wasm")).toURI())
+        val counterWitPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wit")).toURI())
+
+        // Precompile roundtrip.wasm into AOT .cwasm via JNI bridge (JniWasmtimeBridge)
+        val rawRoundtripBytes = Files.readAllBytes(roundtripWasmPath)
+        val cwasmBytes = wasm2kt.runtime.JniWasmtimeBridge.precompileComponent(rawRoundtripBytes)
+        assertTrue(cwasmBytes.isNotEmpty(), "JNI precompiled .cwasm bytes must not be empty")
+
+        // Generate bindings for both roundtrip and counter in the same package
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.jni",
+                roundtripWitPath.toString(),
+            ),
+        )
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.jni",
+                counterWitPath.toString(),
+            ),
+        )
+
+        val harnessPath = tempDir.resolve("com/example/jni/JniHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.jni
+
+            import java.nio.file.Path
+
+            fun runJniScenario(roundtripWasmPath: Path, cwasmBytes: ByteArray, counterWasmPath: Path): String {
+                // Switch WasmtimeSession to JNI backend (Android ART compatible, zero java.lang.foreign usage)
+                WasmtimeSession.useJniBackend()
+
+                val imports = object : RoundtripWorld.Imports {
+                    override val envProvider = object : RoundtripWorld.EnvProvider {
+                        override fun getMultiplier(): Int = 7
+                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix@${'$'}code"
+                    }
+                }
+
+                // 1. Roundtrip over JNI from Path + Host Callbacks
+                val pathSummary = RoundtripWorld.withSession(roundtripWasmPath, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(6) } // 6 * 7 = 42
+                    val tag = RoundtripWorld.describeCode("JNI", 777u)
+                    val initial = RoundtripWorld.ItemSummary(
+                        count = 20u,
+                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.WRITE,
+                        prio = RoundtripWorld.Priority.MEDIUM,
+                    )
+                    val updated = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(22u))
+                    "${'$'}scaled:${'$'}tag:${'$'}{updated.count}:${'$'}{updated.perms.write}"
+                }
+
+                // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
+                val aotBytesSummary = RoundtripWorld.withSession(cwasmBytes, imports) {
+                    val scaled = with(RoundtripWorld.MathApi) { scale(5) } // 5 * 7 = 35
+                    val optVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(10)))
+                    val unwrapped = (optVal as WitOption.Some).value.getOrNull()
+                    "${'$'}scaled:${'$'}unwrapped"
+                }
+
+                // 3. Counter resource lifecycle over JNI
+                val counterSummary = CounterWorldWorld.withSession(counterWasmPath) {
+                    CounterWorldWorld.Counter(10).use { c1 ->
+                        c1.add(5)
+                        val c2 = CounterWorldWorld.Counter(27)
+                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                            "${'$'}{c1.getValue()}:${'$'}{c2.isClosed}:${'$'}{merged.getValue()}"
+                        }
+                    }
+                }
+
+                return "path=${'$'}pathSummary|aot=${'$'}aotBytesSummary|counter=${'$'}counterSummary"
+            }
+            """.trimIndent(),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/jni")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            pkgDir.resolve("RoundtripWorld.kt").toString(),
+            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            harnessPath.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "JniHarness must compile cleanly")
+
+        val classLoader = java.net.URLClassLoader(
+            arrayOf(classesOutDir.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val harnessClass = classLoader.loadClass("com.example.jni.JniHarnessKt")
+        val method = harnessClass.getDeclaredMethod(
+            "runJniScenario",
+            Path::class.java,
+            ByteArray::class.java,
+            Path::class.java,
+        )
+        val actualOutput = method.invoke(null, roundtripWasmPath, cwasmBytes, counterWasmPath) as String
+
+        assertEquals(
+            "path=42:JNI@777:42:true|aot=35:110|counter=15:true:42",
+            actualOutput,
+        )
+    }
+
+    @Test
+    fun `nested resource handles inside result, option, list, tuple, record, and variant compile and decode cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:nestedres@0.1.0;
+
+            world nested-res-world {
+                resource counter {
+                    constructor(init: s32);
+                    get-value: func() -> s32;
+                    try-create: static func(init: s32) -> result<counter, string>;
+                    find-counter: static func(found: bool) -> option<counter>;
+                }
+
+                record counter-pair {
+                    primary: counter,
+                    label: string,
+                }
+
+                variant counter-outcome {
+                    created(counter),
+                    empty,
+                }
+
+                export make-pair: func(init: s32, label: string) -> counter-pair;
+                export make-outcome: func(init: s32) -> counter-outcome;
+                export make-list: func(a: s32, b: s32) -> list<counter>;
+                export make-tuple: func(init: s32) -> tuple<counter, string>;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("nested_res.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.nestedres",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/nestedres")
+        val worldFile = pkgDir.resolve("NestedResWorldWorld.kt")
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compilerExitCode,
+            "WIT definitions with nested resource handles in result/option/list/tuple/record/variant must compile cleanly",
+        )
+    }
+
+    @Test
+    fun `colliding type names across multiple interfaces in the same world are disambiguated and compile cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:collision@0.1.0;
+
+            interface alpha {
+                record config {
+                    port: u16,
+                }
+                get-config: func() -> config;
+            }
+
+            interface beta {
+                record config {
+                    host: string,
+                }
+                get-config: func() -> config;
+            }
+
+            world collision-world {
+                export alpha;
+                export beta;
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("collision.wit")
+        Files.writeString(witFile, witText)
+
+        Wasm2KtCommand().parse(
+            listOf(
+                "--wasm-tools-path",
+                wasmToolsBin,
+                "-o",
+                tempDir.toString(),
+                "-p",
+                "com.example.collision",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/collision")
+        val worldFile = pkgDir.resolve("CollisionWorldWorld.kt")
+        val generatedCode = Files.readString(worldFile)
+
+        assertTrue(generatedCode.contains("data class AlphaConfig("), "Alpha's config record should be disambiguated as AlphaConfig")
+        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config record should be disambiguated as BetaConfig")
+
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            pkgDir.resolve("WitSupport.kt").toString(),
+            worldFile.toString(),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compilerExitCode,
+            "Disambiguated interface types must compile cleanly without Redeclaration errors",
+        )
+    }
+
+    @Test
+    fun `JNI host callback exception preserves Kotlin exception message and FFM buffer overflow or invalid char throws descriptive error`(@TempDir tempDir: Path) {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+
+        // 1. Verify JNI host callback exception preserves the Kotlin exception message
+        val failingImports = object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                throw IllegalArgumentException("custom-host-failure-for-$importSpec")
+            }
+        }
+        val jniSessionPtr = wasm2kt.runtime.JniWasmtimeBridge.openSession(roundtripWasmPath, failingImports)
+        try {
+            val respJson = wasm2kt.runtime.JniWasmtimeBridge.nativeSessionInvoke(
+                jniSessionPtr,
+                "describe-code",
+                """["WARN", 500]""",
+            )
+            assertTrue(
+                respJson.contains("custom-host-failure-for-env-provider#format-tag"),
+                "JNI host callback failure must preserve Kotlin exception details, got: $respJson",
+            )
+        } finally {
+            wasm2kt.runtime.JniWasmtimeBridge.nativeSessionClose(jniSessionPtr)
+        }
+
+        // 2. Verify FFM HostCallbackDispatcher detects buffer capacity overflow instead of truncating JSON
+        val largeImports = object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                return kotlinx.serialization.json.JsonPrimitive("x".repeat(200))
+            }
+        }
+        java.lang.foreign.Arena.ofConfined().use { arena ->
+            val dispatcher = wasm2kt.runtime.HostCallbackDispatcher(largeImports)
+            val importPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "env-provider#format-tag")
+            val argsPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "[]")
+            val tinyCap = 128L
+            val outBuf = arena.allocate(tinyCap)
+            val status = dispatcher.onHostCall(importPtr, argsPtr, outBuf, tinyCap)
+            assertEquals(1, status, "Buffer overflow in HostCallbackDispatcher must return non-zero error status")
+            val errMsg = wasm2kt.runtime.FfmWasmtimeBridge.readNullTerminatedUtf8(outBuf)
+            assertTrue(errMsg.contains("exceeds callback buffer capacity"), "Expected overflow message, got: $errMsg")
+        }
+
+        // 3. Verify FfmJsonCodec.decodeChar validates single BMP code point
+        assertEquals('A', wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive("A")))
+        val emptyCharErr = runCatching {
+            wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive(""))
+        }.exceptionOrNull()
+        assertTrue(emptyCharErr is IllegalArgumentException, "Empty string must fail decodeChar")
+    }
+
+
+    private fun compileGenerated(classesOutDir: Path, vararg sources: Path): org.jetbrains.kotlin.cli.common.ExitCode {
+        Files.createDirectories(classesOutDir)
+        return org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            *sources.map { it.toString() }.toTypedArray(),
+        )
+    }
+
+    private fun tagEchoImports(onFormatTag: (String, Long) -> String): wasm2kt.runtime.WitHostImportDispatcher =
+        object : wasm2kt.runtime.WitHostImportDispatcher {
+            override fun dispatchHostImport(
+                importSpec: String,
+                args: kotlinx.serialization.json.JsonArray,
+            ): kotlinx.serialization.json.JsonElement {
+                return when (importSpec) {
+                    "env-provider#format-tag" -> {
+                        val prefix = wasm2kt.runtime.FfmJsonCodec.decodeString(args[0])
+                        val code = wasm2kt.runtime.FfmJsonCodec.decodeLong(args[1])
+                        kotlinx.serialization.json.JsonPrimitive(onFormatTag(prefix, code))
+                    }
+                    "env-provider#get-multiplier" -> kotlinx.serialization.json.JsonPrimitive(1)
+                    else -> error("Unexpected import: $importSpec")
+                }
+            }
+        }
+
+    @Test
+    fun `generated WitSupport does not import java lang foreign and serializes session access`(@TempDir tempDir: Path) {
+        val witPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wit")).toURI())
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.android", witPath.toString()),
+        )
+        val support = Files.readString(tempDir.resolve("com/example/android/WitSupport.kt"))
+
+        assertTrue(!support.contains("import java.lang.foreign"), "WitSupport.kt must not import java.lang.foreign (Android SDK lacks FFM)")
+        assertTrue(!Regex("""\bArena\b|\bMemorySegment\b""").containsMatchIn(support), "WitSupport.kt must not reference Arena/MemorySegment")
+        assertTrue(support.contains("bridge.sessionInvoke(sessionPtr, functionName, argsJson)"), "FfmWasmtimeSession must delegate to FfmWasmtimeBridge")
+        val ffmSection = support.substringAfter("class FfmWasmtimeSession").substringBefore("class JniWasmtimeSession")
+        val jniSection = support.substringAfter("class JniWasmtimeSession").substringBefore("class InMemoryWasmtimeSession")
+        assertEquals(3, Regex("@Synchronized").findAll(ffmSection).count(), "FfmWasmtimeSession invoke/dropResource/close must be @Synchronized")
+        assertEquals(3, Regex("@Synchronized").findAll(jniSection).count(), "JniWasmtimeSession invoke/dropResource/close must be @Synchronized")
+
+        // Consumer R8/ProGuard keep rules must be packaged with the runtime
+        val proguard = requireNotNull(javaClass.getResource("/META-INF/proguard/wasm2kt.pro")) {
+            "META-INF/proguard/wasm2kt.pro must be on the runtime classpath"
+        }.readText()
+        assertTrue(proguard.contains("-keep class wasm2kt.runtime.JniHostCallback"), "JniHostCallback must be kept")
+        assertTrue(proguard.contains("onHostCall(java.lang.String, java.lang.String)"), "JniHostCallback.onHostCall signature must be kept")
+        assertTrue(proguard.contains("wasm2kt.runtime.HostCallbackDispatcher"), "HostCallbackDispatcher must be kept")
+    }
+
+    @Test
+    fun `host imports accepting resource-containing records, variants, and borrowed handles compile and dispatch`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:hostres@0.1.0;
+
+            world host-res-world {
+                resource counter {
+                    constructor(init: s32);
+                    get-value: func() -> s32;
+                }
+
+                record counter-pair {
+                    primary: counter,
+                    label: string,
+                }
+
+                variant counter-outcome {
+                    created(counter),
+                    empty,
+                }
+
+                import inspect-pair: func(p: counter-pair) -> string;
+                import inspect-outcome: func(o: counter-outcome) -> s32;
+                import inspect-counter: func(c: borrow<counter>) -> s32;
+
+                export make-pair: func(init: s32, label: string) -> counter-pair;
+            }
+        """.trimIndent()
+        val witFile = tempDir.resolve("host_res.wit")
+        Files.writeString(witFile, witText)
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.hostres", witFile.toString()),
+        )
+        val pkgDir = tempDir.resolve("com/example/hostres")
+        val worldFile = pkgDir.resolve("HostResWorldWorld.kt")
+        val harnessPath = pkgDir.resolve("HostResHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package com.example.hostres
+
+            import kotlinx.serialization.json.JsonArray
+            import kotlinx.serialization.json.JsonObject
+            import kotlinx.serialization.json.JsonPrimitive
+            import kotlinx.serialization.json.jsonPrimitive
+
+            fun runHostResScenario(): String {
+                val imports = object : HostResWorldWorld.Imports {
+                    override fun inspectPair(p: HostResWorldWorld.CounterPair): String {
+                        val err = runCatching { p.primary.getValue() }.exceptionOrNull()
+                        return "${'$'}{p.label}:${'$'}{p.primary.handle}:${'$'}{err?.message}"
+                    }
+                    override fun inspectOutcome(o: HostResWorldWorld.CounterOutcome): Int = when (o) {
+                        is HostResWorldWorld.CounterOutcome.Created -> o.value.handle
+                        HostResWorldWorld.CounterOutcome.Empty -> -1
+                    }
+                    override fun inspectCounter(c: HostResWorldWorld.Counter): Int = c.handle
+                }
+                val pair = imports.dispatchHostImport(
+                    "inspect-pair",
+                    JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(7), "label" to JsonPrimitive("lbl"))))),
+                ).jsonPrimitive.content
+                val created = imports.dispatchHostImport(
+                    "inspect-outcome",
+                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(9))))),
+                ).jsonPrimitive.content
+                val empty = imports.dispatchHostImport(
+                    "inspect-outcome",
+                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
+                ).jsonPrimitive.content
+                val borrowed = imports.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(3)))).jsonPrimitive.content
+                return "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed"
+            }
+            """.trimIndent(),
+        )
+
+        val classesOutDir = tempDir.resolve("classes")
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compileGenerated(classesOutDir, pkgDir.resolve("WitSupport.kt"), worldFile, harnessPath),
+            "Host imports taking resource-containing records/variants/handles must compile cleanly",
+        )
+        val classLoader = java.net.URLClassLoader(arrayOf(classesOutDir.toUri().toURL()), javaClass.classLoader)
+        val output = classLoader.loadClass("com.example.hostres.HostResHarnessKt")
+            .getDeclaredMethod("runHostResScenario")
+            .invoke(null) as String
+        assertEquals(
+            "lbl:7:Resource Counter(handle=7) is not bound to an active client Session|9|-1|3",
+            output,
+        )
+    }
+
+    @Test
+    fun `secondary type name collisions after interface prefixing are resolved and compile cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:collision2@0.1.0;
+
+            interface alpha {
+                record config {
+                    port: u16,
+                }
+                get-config: func() -> config;
+            }
+
+            interface beta {
+                record config {
+                    host: string,
+                }
+                get-config: func() -> config;
+            }
+
+            interface gamma {
+                record alpha-config {
+                    enabled: bool,
+                }
+                get-alpha-config: func() -> alpha-config;
+            }
+
+            world collision2-world {
+                export alpha;
+                export beta;
+                export gamma;
+            }
+        """.trimIndent()
+        val witFile = tempDir.resolve("collision2.wit")
+        Files.writeString(witFile, witText)
+        Wasm2KtCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.collision2", witFile.toString()),
+        )
+        val pkgDir = tempDir.resolve("com/example/collision2")
+        val worldFile = pkgDir.resolve("Collision2WorldWorld.kt")
+        val generatedCode = Files.readString(worldFile)
+
+        assertEquals(1, Regex("""data class AlphaConfig\(""").findAll(generatedCode).count(), "Only gamma's alpha-config may claim AlphaConfig")
+        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config should be BetaConfig")
+        assertTrue(Regex("""data class AlphaConfig_\d+\(""").containsMatchIn(generatedCode), "Alpha's config must fall back to an index-suffixed name")
+
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compileGenerated(tempDir.resolve("classes"), pkgDir.resolve("WitSupport.kt"), worldFile),
+            "Secondary collisions must not cause Redeclaration errors",
+        )
+    }
+
+    @Test
+    fun `JNI bridge survives many host callbacks, concurrent invocations, and rejects reentrant invoke and close`() {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val jni = wasm2kt.runtime.JniWasmtimeBridge
+
+        // 1. Many host callbacks in one session (JNI local references must be released per callback)
+        val sessionPtr = jni.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix#$code" })
+        try {
+            repeat(3000) { i ->
+                val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["T", $i]""")
+                assertTrue(resp.contains("\"ok\":true") && resp.contains("T#$i"), "Iteration $i failed: $resp")
+            }
+
+            // 2. Concurrent invocations on the same session are serialized safely
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+            try {
+                val futures = (0 until 8).map { t ->
+                    pool.submit<Int> {
+                        var ok = 0
+                        repeat(100) { i ->
+                            val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["C", ${t * 1000 + i}]""")
+                            if (resp.contains("C#${t * 1000 + i}")) ok++
+                        }
+                        ok
+                    }
+                }
+                assertEquals(800, futures.sumOf { it.get() }, "All concurrent JNI invocations must succeed")
+            } finally {
+                pool.shutdown()
+            }
+        } finally {
+            jni.nativeSessionClose(sessionPtr)
+        }
+
+        // 3. Reentrant invoke from inside a host callback is rejected with an error instead of deadlocking
+        var reentrantPtr = 0L
+        var innerResponse = ""
+        reentrantPtr = jni.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                innerResponse = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["X", 1]""")
+                "outer"
+            },
+        )
+        try {
+            val outer = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["O", 1]""")
+            assertTrue(outer.contains("outer"), "Outer call should still complete, got: $outer")
+            assertTrue(innerResponse.contains("Reentrant"), "Reentrant invoke must be rejected, got: $innerResponse")
+        } finally {
+            jni.nativeSessionClose(reentrantPtr)
+        }
+
+        // 4. Close from inside a host callback does not free the session under the running call
+        var closingPtr = 0L
+        closingPtr = jni.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                jni.nativeSessionClose(closingPtr)
+                "closed-inside"
+            },
+        )
+        val closedResp = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 1]""")
+        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val afterClose = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 2]""")
+        assertTrue(afterClose.contains("\"ok\":false"), "Invoke after close must fail, got: $afterClose")
+        jni.nativeSessionClose(closingPtr) // double close is a no-op
+    }
+
+    @Test
+    fun `FFM bridge session API rejects reentrant invoke and defers arena release on reentrant close`() {
+        val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
+        val bridge = wasm2kt.runtime.FfmWasmtimeBridge.getDefault()
+
+        // 1. Repeated calls through the Long-handle session API
+        val handle = bridge.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix@$code" })
+        try {
+            repeat(500) { i ->
+                val resp = bridge.sessionInvoke(handle, "describe-code", """["F", $i]""")
+                assertTrue(resp.contains("F@$i"), "Iteration $i failed: $resp")
+            }
+        } finally {
+            bridge.sessionClose(handle)
+            bridge.sessionClose(handle) // idempotent
+        }
+        val afterClose = runCatching { bridge.sessionInvoke(handle, "describe-code", """["F", 0]""") }.exceptionOrNull()
+        assertTrue(afterClose is IllegalStateException, "sessionInvoke after close must throw IllegalStateException")
+
+        // 2. Reentrant invoke is rejected by the native bridge
+        var reentrantHandle = 0L
+        var inner = ""
+        reentrantHandle = bridge.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                inner = bridge.sessionInvoke(reentrantHandle, "describe-code", """["X", 1]""")
+                "outer"
+            },
+        )
+        try {
+            val outer = bridge.sessionInvoke(reentrantHandle, "describe-code", """["O", 1]""")
+            assertTrue(outer.contains("outer"), "Outer call should complete, got: $outer")
+            assertTrue(inner.contains("Reentrant"), "Reentrant invoke must be rejected, got: $inner")
+        } finally {
+            bridge.sessionClose(reentrantHandle)
+        }
+
+        // 3. Close from inside the upcall must not free the upcall stub's Arena while it is executing
+        var closingHandle = 0L
+        closingHandle = bridge.openSession(
+            roundtripWasmPath,
+            tagEchoImports { _, _ ->
+                bridge.sessionClose(closingHandle)
+                "closed-inside"
+            },
+        )
+        val closedResp = bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 1]""")
+        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val reuse = runCatching { bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 2]""") }.exceptionOrNull()
+        assertTrue(reuse is IllegalStateException, "Invoke after reentrant close must throw IllegalStateException")
     }
 }
