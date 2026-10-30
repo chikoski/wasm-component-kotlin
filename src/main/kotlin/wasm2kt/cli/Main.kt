@@ -48,6 +48,11 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
         help = "Indicate input is already a wasm-tools JSON AST",
     ).flag(default = false)
 
+    private val noWasmtime: Boolean by option(
+        "--no-wasmtime",
+        help = "Omit the Wasmtime (FFM/JNI) session implementations, e.g. for Android builds using the Chicory backend",
+    ).flag(default = false)
+
     private val wasmToolsPath: String by option(
         "--wasm-tools-path",
         help = "Override for the wasm-tools binary path",
@@ -72,6 +77,7 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
             resolve = resolve,
             targetPackage = packageName,
             targetWorldName = worldName,
+            emitWasmtimeSessions = !noWasmtime,
         )
 
         val fileSpecs = converter.generate()

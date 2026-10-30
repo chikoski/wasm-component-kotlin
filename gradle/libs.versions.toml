@@ -11,6 +11,9 @@ kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 chicory-runtime = { module = "com.dylibso.chicory:runtime", version.ref = "chicory" }
+chicory-wasi = { module = "com.dylibso.chicory:wasi", version.ref = "chicory" }
+chicory-compiler = { module = "com.dylibso.chicory:compiler", version.ref = "chicory" }
+chicory-build-time-compiler = { module = "com.dylibso.chicory:build-time-compiler", version.ref = "chicory" }
 chicory-wasm = { module = "com.dylibso.chicory:wasm", version.ref = "chicory" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 
