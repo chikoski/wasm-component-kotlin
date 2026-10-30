@@ -1,6 +1,7 @@
 package wasm2kt.ast
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -83,9 +84,15 @@ data class WitFunction(
     val name: String,
     val kind: WitFunctionKind,
     val params: List<WitParam> = emptyList(),
-    val results: List<WitResultItem> = emptyList(),
+    /** wasm-tools < 1.220 emitted a `results` list. */
+    @SerialName("results") val legacyResults: List<WitResultItem> = emptyList(),
+    /** wasm-tools >= 1.220 emits a single optional `result` type. */
+    val result: WitTypeRef? = null,
     val docs: WitDocs? = null,
-)
+) {
+    val results: List<WitResultItem>
+        get() = if (result != null) listOf(WitResultItem(type = result)) else legacyResults
+}
 
 @Serializable(with = WitFunctionKindSerializer::class)
 sealed interface WitFunctionKind {
