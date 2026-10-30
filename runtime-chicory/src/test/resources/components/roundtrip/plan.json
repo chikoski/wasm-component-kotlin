@@ -1,0 +1,542 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "example:roundtrip/env-provider@0.1.0",
+          "name": "get-multiplier",
+          "kind": "func"
+        },
+        {
+          "module": "example:roundtrip/env-provider@0.1.0",
+          "name": "format-tag",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "",
+          "name": "0",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "kind": "table"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 0,
+      "args": [
+        {
+          "module": "example:roundtrip/env-provider@0.1.0",
+          "name": "get-multiplier",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "example:roundtrip/env-provider@0.1.0",
+          "name": "format-tag",
+          "def": {
+            "instance": 0,
+            "name": "0",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 1,
+        "name": "memory"
+      }
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_realloc",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 2,
+      "args": [
+        {
+          "module": "",
+          "name": "0",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "def": {
+            "instance": 0,
+            "name": "$imports",
+            "kind": "export"
+          }
+        }
+      ]
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "lower-import",
+      "import": 0,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      },
+      "options": 0,
+      "index": 0
+    },
+    {
+      "kind": "lower-import",
+      "import": 1,
+      "type": {
+        "params": [
+          {
+            "name": "prefix",
+            "type": {
+              "k": "string"
+            }
+          },
+          {
+            "name": "code",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 1
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 4,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 5,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 6,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 7,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "example:roundtrip/env-provider@0.1.0",
+      "path": [
+        "get-multiplier"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "example:roundtrip/env-provider@0.1.0",
+      "path": [
+        "format-tag"
+      ]
+    }
+  ],
+  "resourceTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "transform-summary",
+      "func": {
+        "instance": 1,
+        "name": "transform-summary",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "record",
+              "fields": [
+                {
+                  "name": "count",
+                  "type": {
+                    "k": "u32"
+                  }
+                },
+                {
+                  "name": "perms",
+                  "type": {
+                    "k": "flags",
+                    "names": [
+                      "read",
+                      "write",
+                      "execute"
+                    ]
+                  }
+                },
+                {
+                  "name": "prio",
+                  "type": {
+                    "k": "enum",
+                    "names": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "act",
+            "type": {
+              "k": "variant",
+              "cases": [
+                {
+                  "name": "reset",
+                  "type": null
+                },
+                {
+                  "name": "add-count",
+                  "type": {
+                    "k": "u32"
+                  }
+                },
+                {
+                  "name": "set-priority",
+                  "type": {
+                    "k": "enum",
+                    "names": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "record",
+            "fields": [
+              {
+                "name": "count",
+                "type": {
+                  "k": "u32"
+                }
+              },
+              {
+                "name": "perms",
+                "type": {
+                  "k": "flags",
+                  "names": [
+                    "read",
+                    "write",
+                    "execute"
+                  ]
+                }
+              },
+              {
+                "name": "prio",
+                "type": {
+                  "k": "enum",
+                  "names": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "check-even",
+      "func": {
+        "instance": 1,
+        "name": "check-even",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": {
+              "k": "u32"
+            },
+            "err": {
+              "k": "s32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "ping-result",
+      "func": {
+        "instance": 1,
+        "name": "ping-result",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "ok",
+            "type": {
+              "k": "bool"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": null,
+            "err": null
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "nested-option",
+      "func": {
+        "instance": 1,
+        "name": "nested-option",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "s32"
+              }
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-u64",
+      "func": {
+        "instance": 1,
+        "name": "echo-u64",
+        "kind": "export"
+      },
+      "options": 6,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "u64"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u64"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "describe-code",
+      "func": {
+        "instance": 1,
+        "name": "describe-code",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "prefix",
+            "type": {
+              "k": "string"
+            }
+          },
+          {
+            "name": "code",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:roundtrip/math-api@0.1.0",
+      "name": "scale",
+      "func": {
+        "instance": 1,
+        "name": "example:roundtrip/math-api@0.1.0#scale",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

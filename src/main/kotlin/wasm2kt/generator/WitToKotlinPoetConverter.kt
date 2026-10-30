@@ -343,6 +343,23 @@ class WitToKotlinPoetConverter(
             .addStatement("return Session(%T.open(wasmBytes, imports))", runtimeSessionClass)
         worldObjBuilder.addFunction(openSessionBytesBuilder.build())
 
+        // Backend-agnostic overload: any runtime implementing ComponentBackendFactory (e.g. the Chicory
+        // backend running core modules compiled at build time) can host this world.
+        val backendFactoryClass = ClassName("wasm2kt.runtime", "ComponentBackendFactory")
+        val backendSessionClass = ClassName(targetPackage, "BackendWasmtimeSession")
+        worldObjBuilder.addFunction(
+            FunSpec.builder("openSession")
+                .addParameter("component", backendFactoryClass)
+                .addParameter(
+                    ParameterSpec.builder("imports", importsClassName)
+                        .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                        .build(),
+                )
+                .returns(sessionClassName)
+                .addStatement("return Session(%T(component.instantiate(imports)))", backendSessionClass)
+                .build(),
+        )
+
         val typeVarR = TypeVariableName("R")
         val contextLambdaType = LambdaTypeName.get(
             receiver = null,
@@ -363,6 +380,22 @@ class WitToKotlinPoetConverter(
             .returns(typeVarR)
             .addStatement("return openSession(wasmPath, imports).use { session -> context(session) { block() } }")
         worldObjBuilder.addFunction(withSessionBuilder.build())
+
+        worldObjBuilder.addFunction(
+            FunSpec.builder("withSession")
+                .addModifiers(KModifier.INLINE)
+                .addTypeVariable(typeVarR)
+                .addParameter("component", backendFactoryClass)
+                .addParameter(
+                    ParameterSpec.builder("imports", importsClassName)
+                        .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                        .build(),
+                )
+                .addParameter("block", contextLambdaType)
+                .returns(typeVarR)
+                .addStatement("return openSession(component, imports).use { session -> context(session) { block() } }")
+                .build(),
+        )
 
         val withSessionBytesBuilder = FunSpec.builder("withSession")
             .addModifiers(KModifier.INLINE)
@@ -1561,6 +1594,7 @@ class WitToKotlinPoetConverter(
         fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
+        fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
 
         return fileBuilder.build()
     }
@@ -2200,6 +2234,92 @@ class WitToKotlinPoetConverter(
                             .addStatement("return %T(%T.openSessionBytes(wasmBytes, imports))", jniSessionClass, jniBridgeClass)
                             .build(),
                     )
+                    .build(),
+            )
+            .build()
+    }
+
+    /**
+     * Adapts any [wasm2kt.runtime.ComponentBackend] (such as the Chicory backend) to the generated
+     * `WasmtimeSession` contract, using the same JSON value encoding as the Wasmtime bridge.
+     */
+    private fun buildBackendWasmtimeSessionTypeSpec(): TypeSpec {
+        val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val backendClass = ClassName("wasm2kt.runtime", "ComponentBackend")
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
+        val typeR = TypeVariableName("R")
+        val decoderType = LambdaTypeName.get(
+            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
+            returnType = typeR,
+        )
+        val closedMessage = "WasmtimeSession is already closed"
+        return TypeSpec.classBuilder("BackendWasmtimeSession")
+            .addSuperinterface(runtimeSessionClass)
+            .primaryConstructor(FunSpec.constructorBuilder().addParameter("backend", backendClass).build())
+            .addProperty(PropertySpec.builder("backend", backendClass, KModifier.PRIVATE).initializer("backend").build())
+            .addProperty(
+                PropertySpec.builder("isClosed", BOOLEAN)
+                    .mutable(true)
+                    .setter(FunSpec.setterBuilder().addModifiers(KModifier.PRIVATE).build())
+                    .initializer("false")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invoke")
+                    .addAnnotation(synchronizedAnnotation)
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addTypeVariable(typeR)
+                    .addParameter("functionName", STRING)
+                    .addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("check(!isClosed) { %S }", closedMessage)
+                    .addStatement(
+                        "return decoder(backend.invoke(functionName, %T(args.map { %T.toJsonElement(it) })))",
+                        jsonArrayClass,
+                        ffmCodecClass,
+                    )
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("newResource")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("resourceName", STRING)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(INT)
+                    .addStatement("return invoke(%P, { %T.decodeInt(it) }, *args)", "[constructor]\$resourceName", ffmCodecClass)
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invokeMethod")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addTypeVariable(typeR)
+                    .addParameter("handle", INT)
+                    .addParameter("methodName", STRING)
+                    .addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .returns(typeR)
+                    .addStatement("return invoke(methodName, decoder, handle, *args)")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("dropResource")
+                    .addAnnotation(synchronizedAnnotation)
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addParameter("handle", INT)
+                    .addStatement("check(!isClosed) { %S }", closedMessage)
+                    .addStatement("backend.dropResource(handle)")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("close")
+                    .addAnnotation(synchronizedAnnotation)
+                    .addModifiers(KModifier.OVERRIDE)
+                    .beginControlFlow("if (!isClosed)")
+                    .addStatement("isClosed = true")
+                    .addStatement("backend.close()")
+                    .endControlFlow()
                     .build(),
             )
             .build()

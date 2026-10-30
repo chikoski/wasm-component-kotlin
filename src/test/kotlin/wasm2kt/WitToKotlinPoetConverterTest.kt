@@ -877,6 +877,16 @@ class WitToKotlinPoetConverterTest {
         val witFile = tempDir.resolve("large_flags.wit")
         Files.writeString(witFile, witText)
 
+        // The Component Model spec now caps flags at 32 members and wasm-tools >= 1.2xx rejects
+        // larger sets; this test only applies to toolchains that still accept them.
+        val probe = ProcessBuilder(wasmToolsBin, "component", "wit", "--json", witFile.toString())
+            .redirectErrorStream(true).start()
+        val probeOutput = probe.inputStream.bufferedReader().readText()
+        org.junit.jupiter.api.Assumptions.assumeFalse(
+            probe.waitFor() != 0 && "more than 32 flags" in probeOutput,
+            "wasm-tools rejects flags with more than 32 members",
+        )
+
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",

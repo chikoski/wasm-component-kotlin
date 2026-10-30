@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-drop]counter",
+          "kind": "func"
+        },
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-new]counter",
+          "kind": "func"
+        },
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-rep]counter",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "",
+          "name": "0",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "kind": "table"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "resource",
+      "resource": 0,
+      "dtor": {
+        "instance": 0,
+        "name": "0",
+        "kind": "export"
+      },
+      "instance": 0
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 0,
+      "args": [
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-drop]counter",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-new]counter",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "[export]example:counter/counter-api@0.1.0",
+          "name": "[resource-rep]counter",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        }
+      ]
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 2,
+      "args": [
+        {
+          "module": "",
+          "name": "0",
+          "def": {
+            "instance": 1,
+            "name": "example:counter/counter-api@0.1.0#[dtor]counter",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "def": {
+            "instance": 0,
+            "name": "$imports",
+            "kind": "export"
+          }
+        }
+      ]
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "resource-drop",
+      "table": 0,
+      "index": 0
+    },
+    {
+      "kind": "resource-new",
+      "table": 0,
+      "index": 1
+    },
+    {
+      "kind": "resource-rep",
+      "table": 0,
+      "index": 2
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [
+    {
+      "index": 0,
+      "resource": 0,
+      "instance": 0,
+      "imported": false
+    }
+  ],
+  "exports": [
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[constructor]counter",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[constructor]counter",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[method]counter.increment",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[method]counter.increment",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[method]counter.add",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[method]counter.add",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "delta",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[method]counter.get-value",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[method]counter.get-value",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[static]counter.merge",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[static]counter.merge",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

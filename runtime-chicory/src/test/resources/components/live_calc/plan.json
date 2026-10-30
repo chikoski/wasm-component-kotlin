@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "$root",
+          "name": "record-calc",
+          "kind": "func"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": [
+        {
+          "module": "$root",
+          "name": "record-calc",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        }
+      ]
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "lower-import",
+      "import": 0,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      },
+      "options": 0,
+      "index": 0
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "record-calc",
+      "path": []
+    }
+  ],
+  "resourceTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "add",
+      "func": {
+        "instance": 0,
+        "name": "add",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "multiply",
+      "func": {
+        "instance": 0,
+        "name": "multiply",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "s32"
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[package]
+name = "wasm2kt-decomposer"
+version = "0.1.0"
+edition = "2021"
+description = "Decomposes a WebAssembly component into core modules plus an instantiation plan for wasm2kt's Chicory backend"
+license = "Apache-2.0"
+
+[[bin]]
+name = "wasm2kt-decompose"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+# Pinned: we read wasmtime-environ's internal component representation (the same
+# approach jco's js-component-bindgen takes), which is not a stable public API.
+wasmtime-environ = { version = "=49.0.0", features = ["component-model", "compile", "anyhow"] }

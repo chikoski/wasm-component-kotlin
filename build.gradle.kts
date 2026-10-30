@@ -9,15 +9,19 @@ plugins {
 group = "io.github.wasm2kt"
 version = "0.1.0-SNAPSHOT"
 
-repositories {
-    mavenCentral()
+allprojects {
+    repositories {
+        mavenCentral()
+    }
 }
 
 dependencies {
+    api(project(":runtime-api"))
     implementation(libs.kotlinpoet)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.clikt)
 
+    testImplementation(project(":runtime-chicory"))
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))
     testImplementation(libs.junit.jupiter)
