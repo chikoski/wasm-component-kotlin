@@ -50,8 +50,10 @@ internal object AndroidWiring {
                     t.internalPackage.set(shared.flatMap { it.internalPackage })
                     t.world.set(c.component.world)
                 }
-                val sources = variant.sources.kotlin ?: variant.sources.java
-                    ?: error("Variant ${variant.name} has no Kotlin or Java sources to add wasm2kt bindings to")
+                // Kotlin compilations read the variant's Java source directories; `sources.kotlin` is not
+                // consumed by every AGP/KGP combination (e.g. AGP 8.9 + KGP 2.2).
+                val sources = variant.sources.java
+                    ?: error("Variant ${variant.name} has no Java sources to add wasm2kt bindings to")
                 sources.addGeneratedSourceDirectory(perVariant, Wasm2KtGenerateTask::outputDir)
             }
         }

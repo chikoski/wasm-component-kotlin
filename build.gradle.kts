@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     application
+    `maven-publish`
 }
 
 allprojects {
@@ -56,4 +57,19 @@ tasks.withType<JavaCompile>().configureEach {
 tasks.test {
     useJUnitPlatform()
     jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
+    repositories {
+        // Used by the Gradle plugin's functional tests; real publishing is configured separately.
+        maven {
+            name = "test"
+            url = uri(rootProject.layout.buildDirectory.dir("test-repo"))
+        }
+    }
 }

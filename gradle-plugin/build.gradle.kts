@@ -8,7 +8,9 @@ plugins {
 val functionalTest by sourceSets.creating
 
 dependencies {
-    implementation(project(":tooling"))
+    // Only for compiling the worker actions: at build time the tooling is resolved through the
+    // consumer's `wasm2ktTooling` configuration and loaded in an isolated class loader.
+    compileOnly(project(":tooling"))
     compileOnly(libs.android.gradle.api)
     compileOnly(libs.kotlin.gradle.plugin)
 
@@ -66,7 +68,12 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     testClassesDirs = functionalTest.output.classesDirs
     classpath = functionalTest.runtimeClasspath
     useJUnitPlatform()
-    dependsOn(":runtime-api:publishAllPublicationsToTestRepository", ":runtime-chicory:publishAllPublicationsToTestRepository")
+    dependsOn(
+        ":publishAllPublicationsToTestRepository",
+        ":runtime-api:publishAllPublicationsToTestRepository",
+        ":runtime-chicory:publishAllPublicationsToTestRepository",
+        ":tooling:publishAllPublicationsToTestRepository",
+    )
     systemProperty("wasm2kt.testRepo", testRepo.get().asFile.absolutePath)
     systemProperty("wasm2kt.version", project.version.toString())
     systemProperty("wasm2kt.fixtures", rootProject.file("src/test/resources/fixtures").absolutePath)

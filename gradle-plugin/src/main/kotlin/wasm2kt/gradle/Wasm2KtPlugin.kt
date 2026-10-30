@@ -8,7 +8,6 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.DomainObjectSet
 import org.gradle.api.tasks.TaskProvider
-import wasm2kt.tooling.ComponentBuild
 import java.util.Properties
 import javax.inject.Inject
 
@@ -55,6 +54,16 @@ class Wasm2KtPlugin : Plugin<Project> {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
         extension.addRuntimeDependency.convention(true)
 
+        // The tooling runs in workers with its own class path (see Wasm2KtToolingTask).
+        val tooling = project.configurations.create(TOOLING_CONFIGURATION) { c ->
+            c.isCanBeConsumed = false
+            c.isCanBeResolved = true
+            c.isVisible = false
+            c.description = "wasm2kt build-time tooling (decomposer, Chicory compiler, code generator)."
+            c.defaultDependencies { it.add(project.dependencies.create("io.github.wasm2kt:tooling:${pluginVersion()}")) }
+        }
+        project.tasks.withType(Wasm2KtToolingTask::class.java).configureEach { it.toolingClasspath.from(tooling) }
+
         val wired = project.objects.domainObjectSet(ComponentTasks::class.java)
         extension.components.all { component -> wired.add(registerTasks(project, component)) }
 
@@ -76,7 +85,7 @@ class Wasm2KtPlugin : Plugin<Project> {
         val cap = component.name.split(Regex("[^A-Za-z0-9]+")).filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar(Char::uppercaseChar) }
         val base = project.layout.buildDirectory.dir("wasm2kt/${component.name}")
-        val internalPackage = component.packageName.map { ComponentBuild.internalPackage(it, component.name) }
+        val internalPackage = component.packageName.map { internalPackage(it, component.name) }
 
         val decompose = project.tasks.register("wasm2ktDecompose$cap", Wasm2KtDecomposeTask::class.java) { t ->
             t.group = GROUP
@@ -104,7 +113,11 @@ class Wasm2KtPlugin : Plugin<Project> {
         return ComponentTasks(component, decompose, compile, generate)
     }
 
-    private fun pluginVersion(): String {
+    /** Must match `wasm2kt.tooling.ComponentBuild.internalPackage` (the tooling isn't on this class path). */
+    private fun internalPackage(packageName: String, componentName: String): String =
+        "$packageName.wasm2kt." + componentName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+
+    internal fun pluginVersion(): String {
         val props = Properties()
         Wasm2KtPlugin::class.java.getResourceAsStream("/wasm2kt/gradle/wasm2kt-plugin.properties")?.use { props.load(it) }
         return props.getProperty("version") ?: error("wasm2kt plugin version resource missing")
@@ -112,6 +125,7 @@ class Wasm2KtPlugin : Plugin<Project> {
 
     companion object {
         const val GROUP = "wasm2kt"
+        const val TOOLING_CONFIGURATION = "wasm2ktTooling"
     }
 }
 

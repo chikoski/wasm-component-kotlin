@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // wasm decomposer on Chicory), compile core modules to JVM bytecode, and generate Kotlin sources.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    `maven-publish`
 }
 
 dependencies {
@@ -42,4 +43,19 @@ tasks.processResources {
 tasks.test {
     useJUnitPlatform()
     systemProperty("wasm2kt.fixtures", rootProject.file("src/test/resources/fixtures").absolutePath)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
+    repositories {
+        // Used by the Gradle plugin's functional tests; real publishing is configured separately.
+        maven {
+            name = "test"
+            url = uri(rootProject.layout.buildDirectory.dir("test-repo"))
+        }
+    }
 }
