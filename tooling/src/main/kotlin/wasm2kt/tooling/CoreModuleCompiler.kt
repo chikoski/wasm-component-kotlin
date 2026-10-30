@@ -18,7 +18,18 @@ import java.nio.file.Path
  */
 object CoreModuleCompiler {
     /** A compiled core module: `<className>` is a [com.dylibso.chicory.runtime.Machine] with an `(Instance)` constructor. */
-    class Compiled(val index: Int, val machineClassName: String, val metaResource: String, val interpretedFunctions: Int)
+    class Compiled(val index: Int, val machineClassName: String, val metaResource: String, val interpretedFunctions: Int = 0)
+
+    /** The class and resource names [compile] produces, without compiling (they are deterministic). */
+    fun layout(decomposedDir: Path, packageName: String): List<Compiled> =
+        PlanFiles.coreModules(decomposedDir).map { (index, _) -> describe(index, packageName) }
+
+    private fun describe(index: Int, packageName: String, interpreted: Int = 0) = Compiled(
+        index = index,
+        machineClassName = "$packageName.Core${index}Machine",
+        metaResource = "/" + packageName.replace('.', '/') + "/Core$index.meta",
+        interpretedFunctions = interpreted,
+    )
 
     /**
      * Compiles every `core<N>.wasm` listed in [decomposedDir]'s plan.
@@ -45,12 +56,7 @@ object CoreModuleCompiler {
             val generator = Generator(config)
             val interpreted = generator.generateResources()
             generator.generateMetaWasm(interpreted)
-            Compiled(
-                index = index,
-                machineClassName = "$packageName.${baseName}Machine",
-                metaResource = "/" + packageName.replace('.', '/') + "/$baseName.meta",
-                interpretedFunctions = interpreted.size,
-            )
+            describe(index, packageName, interpreted.size)
         }
     }
 }

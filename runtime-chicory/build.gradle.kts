@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // Pure-JVM component runtime: replays a wasm2kt-decompose plan on Chicory. JVM 11 for Android.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    `maven-publish`
 }
 
 dependencies {
@@ -29,4 +30,23 @@ java {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+java {
+    withSourcesJar()
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
+    repositories {
+        // Used by the Gradle plugin's functional tests; real publishing is configured separately.
+        maven {
+            name = "test"
+            url = uri(rootProject.layout.buildDirectory.dir("test-repo"))
+        }
+    }
 }

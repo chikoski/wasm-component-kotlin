@@ -6,12 +6,12 @@ plugins {
     application
 }
 
-group = "io.github.wasm2kt"
-version = "0.1.0-SNAPSHOT"
-
 allprojects {
+    group = "io.github.wasm2kt"
+    version = "0.1.0-SNAPSHOT"
     repositories {
         mavenCentral()
+        google()
     }
 }
 
