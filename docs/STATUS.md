@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-10-31 / 対象ブランチ: `feat/gradle-plugin`（`main` へのマージ待ち）
+> 最終更新: 2026-10-31 / 対象ブランチ: `main`
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -67,18 +67,13 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### P0
 
-| Issue | ID | 内容 |
-| :--- | :--- | :--- |
-| [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5) | A-1 | ART（実機 / エミュレータ）での動作確認 |
-| [#6](https://github.com/chikoski/wasm-component-kotlin/issues/6) | A-2 | `feat/gradle-plugin` を `main` にマージ |
-| [#7](https://github.com/chikoski/wasm-component-kotlin/issues/7) | A-4 | 未コミットの PHASE1 / WIT_ASYNC ドキュメントの扱い |
+なし
 
 ### P1
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
 | [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) | A-5 | GitHub Actions で CI |
-| [#9](https://github.com/chikoski/wasm-component-kotlin/issues/9) | A-6 | `org.gradle.java.home` の固定を外す |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備 |
 | [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) | A-8 | ルートのモジュール分割（ast / generator / cli / runtime-wasmtime） |
 | [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) | A-9 | `decomposer/dist` の wasm が最新かを CI で検証 |
@@ -98,6 +93,10 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### 完了
 
+* [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5) ART での動作確認 — ヘッドレスエミュレーターで debug / release とも確認（2026-10-31）
+* [#6](https://github.com/chikoski/wasm-component-kotlin/issues/6) `feat/gradle-plugin` を `main` にマージ — #21
+* [#7](https://github.com/chikoski/wasm-component-kotlin/issues/7) 計画メモ 2 件の扱い — `docs/notes/` にコミット
+* [#9](https://github.com/chikoski/wasm-component-kotlin/issues/9) `org.gradle.java.home` の固定を外す — デーモン JVM 指定に置き換え
 * A-3 ローカルの `main` を `origin/main` に同期する — `feat/chicory-backend` は PR #4 でマージ済み。手元で `git switch main && git pull` するだけなので、Issue にはしていません
 
 ## 4. 既存ドキュメントの位置づけ
@@ -110,5 +109,5 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `SPEC.md`、`SPEC_REVIEW.md` | 当初の仕様と決定事項 |
 | `ANDROID_INTEGRATION_PLAN.md` | Wasmtime を Android で動かす計画。Android の主路線は Chicory に移った（→ [ADR-0001](adr/0001-chicory-backend-for-android.md)） |
 | `CODE_REVIEW.md`、`TEST_PROPOSALS.md` | 過去のレビュー記録 |
-| `PHASE1_IMPLEMENTATION_TASKS.md`（未コミット） | フェーズ 1 の作業計画。Step 3（モジュール分割の一部、Gradle プラグイン、AGP、キャッシュ、TestKit）は実施済み。Step 1 / 2 / 4 は #16 / #17 などに引き継ぎ |
-| `WIT_ASYNC_GUIDE.md`（未コミット） | async 対応の調査メモ（#16 の前提資料） |
+| [`docs/notes/phase1-implementation-tasks.md`](notes/phase1-implementation-tasks.md) | フェーズ 1 の作業計画。Step 3（モジュール分割の一部、Gradle プラグイン、AGP、キャッシュ、TestKit）は実施済み。Step 1 / 2 / 4 は #16 / #17 などに引き継ぎ |
+| [`docs/notes/wit-async-guide.md`](notes/wit-async-guide.md) | async 対応の調査メモ（#16 の前提資料） |
