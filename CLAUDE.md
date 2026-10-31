@@ -32,7 +32,10 @@ decomposer/build-wasm.sh                        # decomposer を変更したら�
 ```
 
 ルートのテストには `wasm-tools` が必要です（1.220 以降。`WASM_TOOLS_BIN` か `~/.cargo/bin` か PATH から探します）。
-Gradle は JDK 21 以上で動かしてください。
+Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定で **JDK 21** で動きます（`./gradlew` を起動した JDK や `JAVA_HOME` とは無関係）。
+JDK 21 がインストールされていれば、Gradle が自動で見つけます。見つからない場合は `~/.gradle/gradle.properties` に
+`org.gradle.java.installations.paths=<JDK 21 のパス>`（Homebrew なら `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`）を追加してください。
+Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` になる）ため、この設定を外さないでください。
 
 ## 守ること
 

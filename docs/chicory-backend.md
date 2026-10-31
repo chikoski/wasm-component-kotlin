@@ -55,7 +55,7 @@ wasm2kt {
 
 ### 要件
 
-* Gradle を **JDK 21 以上**で実行すること（ツール群が JDK 21 向けにビルドされているため）
+* Gradle デーモンを **JDK 21 以上**で実行すること（ツール群が JDK 21 向けにビルドされているため）。このリポジトリとサンプルは `gradle/gradle-daemon-jvm.properties` で JDK 21 を指定しています
 * アプリ側の実行環境: JVM 11 以上 / Android **minSdk 26** 以上
 * `wasm-tools` や Rust ツールチェーンは**不要**です（下記の分解ツールは WebAssembly として同梱）
 

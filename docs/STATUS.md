@@ -52,8 +52,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * **ART（実機 / エミュレータ）での実行は未確認**。R8 縮小後の release ビルドで実行時に問題が出ないかも未確認
 * Chicory バックエンドの未対応機能: ホスト定義 resource、async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
-* Gradle を JDK 21 以上で動かす必要がある（tooling と plugin が JVM 21 向け）
-* `gradle.properties` に macOS 固有の `org.gradle.java.home` が固定されている（CI や他の環境で問題になる）
+* Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）
 * ルートのテストには `wasm-tools`（1.220 以降推奨）と、ビルド済みの `rust-bridge` が必要
 
