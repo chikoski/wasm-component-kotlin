@@ -3,7 +3,7 @@ package com.example.counter
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/counter.wasm")
+    val wasmPath = Paths.get("fixtures/counter.wasm")
 
     CounterWorldWorld.withSession(wasmPath) {
         CounterWorldWorld.Counter(10).use { c1 ->

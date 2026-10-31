@@ -1474,26 +1474,7 @@ class WitToKotlinPoetConverterTest {
             wasm2kt.runtime.JniWasmtimeBridge.nativeSessionClose(jniSessionPtr)
         }
 
-        // 2. Verify FFM HostCallbackDispatcher detects buffer capacity overflow instead of truncating JSON
-        val largeImports = object : wasm2kt.runtime.WitHostImportDispatcher {
-            override fun dispatchHostImport(
-                importSpec: String,
-                args: kotlinx.serialization.json.JsonArray,
-            ): kotlinx.serialization.json.JsonElement {
-                return kotlinx.serialization.json.JsonPrimitive("x".repeat(200))
-            }
-        }
-        java.lang.foreign.Arena.ofConfined().use { arena ->
-            val dispatcher = wasm2kt.runtime.HostCallbackDispatcher(largeImports)
-            val importPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "env-provider#format-tag")
-            val argsPtr = wasm2kt.runtime.FfmWasmtimeBridge.allocateUtf8CString(arena, "[]")
-            val tinyCap = 128L
-            val outBuf = arena.allocate(tinyCap)
-            val status = dispatcher.onHostCall(importPtr, argsPtr, outBuf, tinyCap)
-            assertEquals(1, status, "Buffer overflow in HostCallbackDispatcher must return non-zero error status")
-            val errMsg = wasm2kt.runtime.FfmWasmtimeBridge.readNullTerminatedUtf8(outBuf)
-            assertTrue(errMsg.contains("exceeds callback buffer capacity"), "Expected overflow message, got: $errMsg")
-        }
+        // 2. HostCallbackDispatcher's buffer overflow handling is tested in runtime-wasmtime (it is internal there).
 
         // 3. Verify FfmJsonCodec.decodeChar validates single BMP code point
         assertEquals('A', wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive("A")))

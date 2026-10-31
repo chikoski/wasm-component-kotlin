@@ -29,7 +29,11 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 | モジュール | 役割 | JVM | 状態 |
 | :--- | :--- | :--- | :--- |
-| `:`（ルート） | AST・ジェネレータ・CLI・Wasmtime ブリッジ（Kotlin 側） | 21 | 稼働。分割は未完（→ [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11)） |
+| `ast` | WIT JSON のモデル | 21 | 稼働 |
+| `generator` | KotlinPoet によるバインディング生成 | 21 | 稼働 |
+| `cli` | `wasm2kt` コマンド | 21 | 稼働 |
+| `runtime-wasmtime` | Wasmtime ブリッジの Kotlin 側（FFM / JNI） | 21 | 稼働 |
+| `integration-tests` | CLI・生成・両ランタイムの E2E テストと差分テスト | 21 | 稼働 |
 | `rust-bridge/` | Wasmtime ブリッジ（Rust, cdylib） | — | 稼働 |
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
 | `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 11 | 稼働 |
@@ -54,7 +58,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
-* ルートのテストには `wasm-tools`（1.220 以降推奨）と、ビルド済みの `rust-bridge` が必要
+* integration-tests には `wasm-tools`（1.220 以降推奨）と、ビルド済みの `rust-bridge` が必要
 
 ## 3. アクションアイテム
 
@@ -71,9 +75,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### P1
 
-| Issue | ID | 内容 |
-| :--- | :--- | :--- |
-| [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) | A-8 | ルートのモジュール分割（ast / generator / cli / runtime-wasmtime） |
+なし
 
 ### P2
 
@@ -91,6 +93,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### 完了
 
+* [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) ルートのモジュール分割 — ast / generator / cli / runtime-wasmtime / integration-tests、fixtures を共有ディレクトリに
 * [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) GitHub Actions で CI — #23
 * [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) `decomposer/dist` の検証 — 再現可能ビルド + CI の decomposer ジョブ
 * [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5) ART での動作確認 — ヘッドレスエミュレーターで debug / release とも確認（2026-10-31）

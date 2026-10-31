@@ -10,31 +10,37 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 
 ## モジュール
 
-* `:`（ルート）: `wasm2kt.ast` / `wasm2kt.generator` / `wasm2kt.cli` / `wasm2kt.runtime`（Wasmtime ブリッジ）。JVM 21
+* `:`（ルート）: 集約のみ（コードなし）。共通の publishing 設定
+* `ast`: WIT JSON のモデル（`wasm2kt.ast`）。JVM 21
+* `generator`: KotlinPoet によるバインディング生成（`wasm2kt.generator`）。JVM 21
+* `cli`: `wasm2kt` コマンド（`wasm2kt.cli`）。`./gradlew run --args=...` はリポジトリルート基準
+* `runtime-wasmtime`: Wasmtime ブリッジの Kotlin 側（FFM / JNI、`wasm2kt.runtime`）。JVM 21 + preview
 * `runtime-api`: `ComponentBackend`、`WitHostImportDispatcher`、`FfmJsonCodec`。JVM 11 を維持（Android で使うため）
 * `runtime-chicory`: Chicory バックエンド。JVM 11 を維持
 * `tooling`: 分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`）、生成（`ComponentCodegen`）、一括実行（`ComponentBuild`）
 * `gradle-plugin`: `io.github.wasm2kt`
 * `decomposer/`: Rust（ツールチェーンは `rust-toolchain.toml` で固定）。`dist/wasm2kt-decompose.wasm` は tooling のリソースとして同梱
 * `rust-bridge/`: Rust。Wasmtime ブリッジ
+* `integration-tests`: CLI で生成 → コンパイル → Wasmtime / Chicory で実行する E2E テストと差分テスト（テストの作業ディレクトリはリポジトリルート）
+* `fixtures/`: テスト用のコンポーネント（`.wasm` / `.wit`）。integration-tests、tooling、gradle-plugin、decomposer で共有
 * `samples/android`: composite build。ルートの wrapper で `./gradlew -p samples/android ...`
 
 ## コマンド
 
 ```bash
-./gradlew test                                  # ルート + 各モジュールのテスト
+./gradlew test                                  # 全モジュールのテスト
 ./gradlew check                                 # 上記 + gradle-plugin の functionalTest（TestKit）
 ./gradlew :runtime-chicory:test                 # Chicory バックエンド単体
-./gradlew :test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト
+./gradlew :integration-tests:test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト
 ./gradlew -p samples/android :app:testDebugUnitTest :app:assembleRelease
 # ART での確認（ヘッドレスエミュレーター、Android CLI）は samples/android/README.md を参照
-cargo build --release --manifest-path rust-bridge/Cargo.toml  # ルートのテストに必要
+cargo build --release --manifest-path rust-bridge/Cargo.toml  # integration-tests に必要
 decomposer/build-wasm.sh                        # decomposer を変更したら必ず実行（dist を更新。再現可能ビルド）
 decomposer/regenerate-fixtures.sh               # 同上（runtime-chicory のテスト用分解結果を更新）
 ```
 
 CI（`.github/workflows/ci.yml`）は jvm / decomposer / native / android / emulator の 5 ジョブです。decomposer ジョブは、同梱 wasm とテスト用分解結果が最新でないと失敗します。ローカルで同じことを確認するには上のコマンドを使います。
-ルートのテストには `wasm-tools` が必要です（1.220 以降。`WASM_TOOLS_BIN` か `~/.cargo/bin` か PATH から探します）。
+integration-tests には `wasm-tools` が必要です（1.220 以降。`WASM_TOOLS_BIN` か `~/.cargo/bin` か PATH から探します）。
 Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定で **JDK 21** で動きます（`./gradlew` を起動した JDK や `JAVA_HOME` とは無関係）。
 JDK 21 がインストールされていれば、Gradle が自動で見つけます。見つからない場合は `~/.gradle/gradle.properties` に
 `org.gradle.java.installations.paths=<JDK 21 のパス>`（Homebrew なら `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`）を追加してください。

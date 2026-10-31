@@ -21,22 +21,3 @@ java {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
 }
-
-java {
-    withSourcesJar()
-}
-
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            from(components["java"])
-        }
-    }
-    repositories {
-        // Used by the Gradle plugin's functional tests; real publishing is configured separately.
-        maven {
-            name = "test"
-            url = uri(rootProject.layout.buildDirectory.dir("test-repo"))
-        }
-    }
-}

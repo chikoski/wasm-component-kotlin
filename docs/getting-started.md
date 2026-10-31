@@ -52,7 +52,7 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 `.wit` ファイルには元の `world` 名（例: `world arithmetic` や `world counter-world`）が保持されているため、`ArithmeticWorld` や `CounterWorldWorld` のような分かりやすい名前の特異オブジェクトが生成されます。
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/arithmetic.wit -o build/generated -p com.example.arithmetic"
+./gradlew run --args="fixtures/arithmetic.wit -o build/generated -p com.example.arithmetic"
 ```
 
 生成されるファイル：
@@ -65,7 +65,7 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 （※ `.wasm` バイナリ内の埋め込み WIT では world 名が `root` に正規化されるため、生成される特異オブジェクト名は `RootWorld` になります）
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/arithmetic.wasm -o build/generated -p com.example.arithmetic"
+./gradlew run --args="fixtures/arithmetic.wasm -o build/generated -p com.example.arithmetic"
 ```
 
 ---
@@ -121,7 +121,7 @@ package com.example.arithmetic
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/arithmetic.wasm")
+    val wasmPath = Paths.get("fixtures/arithmetic.wasm")
 
     ArithmeticWorld.withSession(wasmPath) {
         println("20 + 7 = ${ArithmeticWorld.add(20, 7)}")

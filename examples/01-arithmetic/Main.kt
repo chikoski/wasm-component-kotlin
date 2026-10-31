@@ -3,7 +3,7 @@ package com.example.arithmetic
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/arithmetic.wasm")
+    val wasmPath = Paths.get("fixtures/arithmetic.wasm")
 
     ArithmeticWorld.withSession(wasmPath) {
         val sum = ArithmeticWorld.add(20, 7)

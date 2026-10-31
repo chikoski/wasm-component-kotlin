@@ -49,12 +49,12 @@
 
 | 対象領域 | 該当ファイル / クラス | 説明 |
 | :--- | :--- | :--- |
-| **WIT AST パース基盤** | [`WitAst.kt`](../../src/main/kotlin/wasm2kt/ast/WitAst.kt)<br>• `WitResolve`<br>• `WitWorld`<br>• `WitInterface`<br>• `WitTypeDefKind.*` | `wasm-tools component wit --json` が出力する JSON AST を `kotlinx.serialization` でデコードする構造定義。`record`, `variant`, `enum`, `flags`, `tuple` などのパースとバリデーションは完全に確立されています。 |
-| **代数的データ型マッピング** | [`WitToKotlinPoetConverter.kt`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `buildRecordTypeSpec`<br>• `buildVariantTypeSpec`<br>• `buildEnumTypeSpec`<br>• `buildFlagsTypeSpec`<br>• `buildTupleTypeSpec` | • `record` → Kotlin `data class`<br>• `variant` → `sealed interface` + `data class` / `data object`<br>• `enum` → `enum class`<br>• `flags` → `@JvmInline value class` + ビット演算子 (`or`, `and`, `inv`)<br>• `tuple` → `TupleN`<br>これらは FR-1.2 の要件に完全合致しています。 |
-| **命名規則 & 識別子変換** | [`NamingConventions.kt`](../../src/main/kotlin/wasm2kt/generator/NamingConventions.kt) | WIT のケバブケース（`kebab-case`）から Kotlin のキャメルケース（`camelCase`）、パスカルケース（`PascalCase`）、スネークケース、Kotlin 予約語衝突時のバッククォートエスケープ処理。 |
-| **World & DSL 骨格生成** | [`WitToKotlinPoetConverter.kt`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `generateWorldFile`<br>• `withSession` / `openSession` | WIT の `world` を Kotlin シングルトン `object` として表現し、`withSession` ブロックや Kotlin Context Parameters (`context(session: Session)`) を展開する基本構造。 |
-| **KotlinPoet 整形 & 出力パイプライン** | [`WitToKotlinPoetConverter.kt`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `formatIdiomaticKotlin`<br>• `GeneratedKotlinFile.writeTo` | 生成された AST から冗長な `public` 修飾子を除去し、イディオマティックな Kotlin コードとしてファイル書き出しを行うパイプライン。 |
-| **静的 JSON コーデック基盤** | [`WitJsonSerializable`](../../src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt)<br>[`WitHostImportDispatcher`](../../src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt) | リフレクションを一切使用せず、KotlinPoet で各型専用の `toWitJson()` / `fromWitJson()` を静的出力するアーキテクチャ（R8 / ProGuard 耐性）。 |
+| **WIT AST パース基盤** | [`WitAst.kt`](../../ast/src/main/kotlin/wasm2kt/ast/WitAst.kt)<br>• `WitResolve`<br>• `WitWorld`<br>• `WitInterface`<br>• `WitTypeDefKind.*` | `wasm-tools component wit --json` が出力する JSON AST を `kotlinx.serialization` でデコードする構造定義。`record`, `variant`, `enum`, `flags`, `tuple` などのパースとバリデーションは完全に確立されています。 |
+| **代数的データ型マッピング** | [`WitToKotlinPoetConverter.kt`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `buildRecordTypeSpec`<br>• `buildVariantTypeSpec`<br>• `buildEnumTypeSpec`<br>• `buildFlagsTypeSpec`<br>• `buildTupleTypeSpec` | • `record` → Kotlin `data class`<br>• `variant` → `sealed interface` + `data class` / `data object`<br>• `enum` → `enum class`<br>• `flags` → `@JvmInline value class` + ビット演算子 (`or`, `and`, `inv`)<br>• `tuple` → `TupleN`<br>これらは FR-1.2 の要件に完全合致しています。 |
+| **命名規則 & 識別子変換** | [`NamingConventions.kt`](../../generator/src/main/kotlin/wasm2kt/generator/NamingConventions.kt) | WIT のケバブケース（`kebab-case`）から Kotlin のキャメルケース（`camelCase`）、パスカルケース（`PascalCase`）、スネークケース、Kotlin 予約語衝突時のバッククォートエスケープ処理。 |
+| **World & DSL 骨格生成** | [`WitToKotlinPoetConverter.kt`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `generateWorldFile`<br>• `withSession` / `openSession` | WIT の `world` を Kotlin シングルトン `object` として表現し、`withSession` ブロックや Kotlin Context Parameters (`context(session: Session)`) を展開する基本構造。 |
+| **KotlinPoet 整形 & 出力パイプライン** | [`WitToKotlinPoetConverter.kt`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)<br>• `formatIdiomaticKotlin`<br>• `GeneratedKotlinFile.writeTo` | 生成された AST から冗長な `public` 修飾子を除去し、イディオマティックな Kotlin コードとしてファイル書き出しを行うパイプライン。 |
+| **静的 JSON コーデック基盤** | [`WitJsonSerializable`](../../runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt)<br>[`WitHostImportDispatcher`](../../runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt) | リフレクションを一切使用せず、KotlinPoet で各型専用の `toWitJson()` / `fromWitJson()` を静的出力するアーキテクチャ（R8 / ProGuard 耐性）。 |
 
 ---
 
@@ -64,38 +64,38 @@
 
 ### 3.1 `option<T>` のマッピング（FR-1.2）
 * **現状**:
-  * 独自の代数的型 [`WitOption<out T>`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)（`Some<T>`, `None`）を定義・生成。
+  * 独自の代数的型 [`WitOption<out T>`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)（`Some<T>`, `None`）を定義・生成。
 * **変更要件**:
   * Kotlin 標準の **Nullable 型（`T?`）** に統一する。
 * **必要な改修作業**:
-  1. [`WitToKotlinPoetConverter.kt` (`mapTypeRef` / `mapTypeDefByIndex`)](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  1. [`WitToKotlinPoetConverter.kt` (`mapTypeRef` / `mapTypeDefByIndex`)](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitTypeDefKind.OptionType` の戻り値を `mapTypeRef(kind.type).copy(nullable = true)` に変更。
-  2. [`buildDecodeExpression`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  2. [`buildDecodeExpression`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitOption.fromWitJson(...)` の呼び出しを、`if (%L is JsonNull) null else %L`（内側型のデコード式）に変更。
-  3. [`formatArgumentCode`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  3. [`formatArgumentCode`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * 引数渡し時のシリアライズ式を `param?.let { encode(it) } ?: JsonNull` に変更。
-  4. [`generateCommonSupportFile`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  4. [`generateCommonSupportFile`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitOption` の定義出力処理を廃止。
 
 ### 3.2 `result<T, E>` のマッピング（FR-1.2）
 * **現状**:
-  * 独自の代数的型 [`WitResult<out T, out E>`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)（`Ok<T>`, `Err<E>`）を定義・生成。
+  * 独自の代数的型 [`WitResult<out T, out E>`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt)（`Ok<T>`, `Err<E>`）を定義・生成。
 * **変更要件**:
   * Kotlin 標準の **`kotlin.Result<T>`** に統一する。
 * **必要な改修作業**:
   1. **エラー型 `E` の例外ラッピング機構の設計**:
      * Kotlin の `kotlin.Result` は失敗時の値として `java.lang.Throwable` を要求します。しかし WIT の `E` は任意の型（`string`, `enum`, `record`, `variant` 等）になり得ます。
      * 汎用例外クラス `class WitComponentException(val error: Any?) : RuntimeException("WIT result error: $error")` をランタイムサポートとして導入。
-  2. [`mapTypeRef` / `mapTypeDefByIndex`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  2. [`mapTypeRef` / `mapTypeDefByIndex`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitTypeDefKind.ResultType` の型を `ClassName("kotlin", "Result").parameterizedBy(okType)` に変更。
-  3. [`buildDecodeExpression`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  3. [`buildDecodeExpression`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * JSON レスポンスが `{"ok": ...}` の場合は `Result.success(...)`、`{"err": ...}` の場合は `Result.failure(WitComponentException(...))` を生成するコードに変更。
-  4. [`generateCommonSupportFile`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  4. [`generateCommonSupportFile`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitResult` クラスの生成を廃止し、`WitComponentException` を共通ファイルへ出力。
 
 ### 3.3 `resource` のゼロアロケーション化（FR-1.2）
 * **現状**:
-  * 通常のヒープ割り当てクラス [`class <Resource>(session: Session?, val handle: Int) : AutoCloseable`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) を生成。内部で `session` インスタンスや `isClosed: Boolean` 状態を保持している。
+  * 通常のヒープ割り当てクラス [`class <Resource>(session: Session?, val handle: Int) : AutoCloseable`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) を生成。内部で `session` インスタンスや `isClosed: Boolean` 状態を保持している。
 * **変更要件**:
   * **`@JvmInline value class <Resource>(val handle: Int) : AutoCloseable`** によるゼロアロケーションハンドルにする。
 * **必要な改修作業**:
@@ -115,7 +115,7 @@
            }
        }
        ```
-  3. [`buildResourceTypeSpec`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  3. [`buildResourceTypeSpec`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * クラス修飾子に `KModifier.VALUE` を指定し、`@JvmInline` アノテーションを付加。
      * コンストラクタ引数を `handle: Int` のみに簡素化。
 
@@ -125,15 +125,15 @@
 * **変更要件**:
   * `list<u8>` はデフォルトで **`ByteArray`** にマッピングする。
 * **必要な改修作業**:
-  1. [`mapTypeRef` / `mapTypeDefByIndex`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  1. [`mapTypeRef` / `mapTypeDefByIndex`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `WitTypeDefKind.ListType` の要素型が `u8`（`WitTypeRef.Primitive("u8")`）であるかを判定。
      * `u8` の場合は `BYTE_ARRAY`（`kotlin.ByteArray`）を返す分岐を追加。
-  2. [`buildDecodeExpression`](../../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
+  2. [`buildDecodeExpression`](../../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt):
      * `list<u8>` 用に Base64 文字列デコード（またはバイト配列 JSON からの高速一括コピー）を行う `FfmJsonCodec.decodeByteArray(...)` を呼び出す式に変更。
 
 ### 3.5 AST パースモデルの WASI 0.3 拡張（FR-1.1 / FR-1.3）
 * **現状**:
-  * [`WitAst.kt` の `WitFunction`](../../src/main/kotlin/wasm2kt/ast/WitAst.kt) には `async` を表すフラグが存在しない。
+  * [`WitAst.kt` の `WitFunction`](../../ast/src/main/kotlin/wasm2kt/ast/WitAst.kt) には `async` を表すフラグが存在しない。
 * **必要な改修作業**:
   1. `WitFunction` に `val isAsync: Boolean = false`（または `val kind` や属性マップからの抽出）を追加。
   2. `wasm-tools component wit --json` の最新バージョン（WASI 0.3 / Component Model Async）の JSON スキーマを検証し、`async func` のシリアライズ形式を正確にパースできるようデシリアライザを更新。

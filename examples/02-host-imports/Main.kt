@@ -3,7 +3,7 @@ package com.example.live
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/live_calc.wasm")
+    val wasmPath = Paths.get("fixtures/live_calc.wasm")
     val auditLog = mutableListOf<String>()
 
     val hostImports = object : LiveCalcWorld.Imports {

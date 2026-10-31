@@ -24,11 +24,11 @@ flowchart TD
 
 ## 2. コード生成層 (`wasm2kt.ast` / `wasm2kt.generator`)
 
-### 2.1 `wasm-tools` JSON AST のデコード ([WitAst.kt](../src/main/kotlin/wasm2kt/ast/WitAst.kt))
+### 2.1 `wasm-tools` JSON AST のデコード ([WitAst.kt](../ast/src/main/kotlin/wasm2kt/ast/WitAst.kt))
 * Bytecode Alliance 公式の `wasm-tools component wit --json` をフロントエンドとして使用することで、WIT のパッケージ解決・`use` インポート・`.wasm` バイナリからの埋め込み WIT 抽出を 100% 上流仕様と互換性のある形で処理します。
 * JSON 内のポリモーフィックな型参照（プリミティブ文字列 `"s32"` と型テーブルインデックス整数 `7` の混在など）は、`WitTypeRefSerializer`, `WitTypeDefKindSerializer`, `WitFunctionKindSerializer`, `WitWorldItemSerializer` のカスタムシリアライザで型安全にデコードされます。
 
-### 2.2 KotlinPoet によるコード生成 ([WitToKotlinPoetConverter.kt](../src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt))
+### 2.2 KotlinPoet によるコード生成 ([WitToKotlinPoetConverter.kt](../generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt))
 * KotlinPoet 2.2 の `contextParameter("session", sessionClassName)` API を使用して Kotlin 2.2+ の Context Parameters 構文を出力します。
 * 生成時に KotlinPoet がデフォルトで付与する冗長な `public` 修飾子は、`formatIdiomaticKotlin` によって除去され、Kotlin のコーディング規約に沿ったクリーンなコードが出力されます。
 
@@ -42,7 +42,7 @@ flowchart TD
 * **`FfmWasmtimeSession`（デフォルト）**: Java 21 FFM API を使って Rust の `wasmtime` 共有ライブラリを呼び出す本番実装。
 * **`InMemoryWasmtimeSession`**: 純粋な Kotlin の Map とラムダで関数・リソーステーブルをシミュレートするモック実装。
 
-### 3.2 JVM FFM API ブリッジ ([FfmWasmtimeBridge.kt](../src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt))
+### 3.2 JVM FFM API ブリッジ ([FfmWasmtimeBridge.kt](../runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt))
 JNI（Java Native Interface）のボイラープレートや C ヘッダ生成を避け、JDK 21 の `java.lang.foreign` (`Linker`, `SymbolLookup`, `Arena`, `MemorySegment`, `FunctionDescriptor`) を使用しています。
 
 * **Downcall（Kotlin → Rust Wasmtime）**:

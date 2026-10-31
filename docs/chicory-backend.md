@@ -130,6 +130,10 @@ Android CLI でヘッドレスエミュレーターを使う手順や、release 
 
 | モジュール | 役割 |
 | :--- | :--- |
+| `ast` / `generator` / `cli` | WIT モデル、バインディング生成、`wasm2kt` コマンド（Wasmtime 版と共通） |
+| `runtime-wasmtime` | Wasmtime ブリッジ（FFM / JNI） |
+| `integration-tests` | Wasmtime / Chicory の E2E テストと差分テスト |
+| `fixtures/` | テスト用コンポーネント（各モジュールと decomposer で共有） |
 | `decomposer/` | 分解ツール（Rust）。`build-wasm.sh` で `dist/wasm2kt-decompose.wasm` を再生成（再現可能ビルド。CI で検証）、`regenerate-fixtures.sh` でテスト用の分解結果を再生成 |
 | `runtime-api` | `ComponentBackend` / `WitHostImportDispatcher` / `FfmJsonCodec`（JVM 11） |
 | `runtime-chicory` | Chicory バックエンド（JVM 11、Android 対応） |

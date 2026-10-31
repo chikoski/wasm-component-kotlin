@@ -27,9 +27,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      # Everything except the root project's tests, which need native tools (see the `native` job).
+      # Everything except integration-tests, which need native tools (see the `native` job).
       # Includes the gradle-plugin functional tests (TestKit builds of a consumer project).
-      - run: ./gradlew check -x :test --continue
+      - run: ./gradlew check -x :integration-tests:test --continue
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -75,17 +75,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust-bridge
-      # The root tests generate bindings with wasm-tools (>= 1.220) and run them on Wasmtime.
+      # integration-tests generate bindings with wasm-tools (>= 1.220) and run them on Wasmtime and Chicory.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools
       - run: cargo build --release --manifest-path rust-bridge/Cargo.toml
-      - run: ./gradlew :test
+      - run: ./gradlew :integration-tests:test
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: native-test-reports
-          path: build/reports/tests/
+          path: integration-tests/build/reports/tests/
 
   android:
     name: Android sample (build, JVM tests, R8)

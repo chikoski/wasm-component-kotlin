@@ -11,11 +11,11 @@
 ## ✅ 特に優れている点 (Strengths)
 
 1. **リフレクション完全排除と R8 / ProGuard 耐性**
-   * [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) において、各複合型に [`WitJsonSerializable`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L35-L37) (`toWitJson()`) と `companion object` の `fromWitJson()`、および [`WitHostImportDispatcher`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L43-L46) (`dispatchHostImport`) を静的にコード生成しており、実行時のリフレクションコストがゼロになっています。
+   * [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) において、各複合型に [`WitJsonSerializable`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L35-L37) (`toWitJson()`) と `companion object` の `fromWitJson()`、および [`WitHostImportDispatcher`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L43-L46) (`dispatchHostImport`) を静的にコード生成しており、実行時のリフレクションコストがゼロになっています。
 2. **リソース所有権（`own<T>` vs `borrow<T>`）の安全なトラッキング**
-   * [`buildResourceTypeSpec`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L869-L1043) と [`formatArgumentCode`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1252-L1264) により、`own<T>` 渡し時に `consumeOwnership()` が呼ばれてホスト側で `isClosed = true` になり、Use-After-Move や二重解放（Double Free）がコンパイル時＋実行時チェックで防がれています。
+   * [`buildResourceTypeSpec`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L869-L1043) と [`formatArgumentCode`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1252-L1264) により、`own<T>` 渡し時に `consumeOwnership()` が呼ばれてホスト側で `isClosed = true` になり、Use-After-Move や二重解放（Double Free）がコンパイル時＋実行時チェックで防がれています。
 3. **FFM / JNI / InMemory のクリーンな抽象化**
-   * 生成される DSL コードが [`WasmtimeSession`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1640-L1755) インターフェースのみに依存しており、JVM 21+ (FFM)、Android ART (JNI)、単体テスト (`InMemoryWasmtimeSession`) を透過的に切り替えられる構造になっています。
+   * 生成される DSL コードが [`WasmtimeSession`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1640-L1755) インターフェースのみに依存しており、JVM 21+ (FFM)、Android ART (JNI)、単体テスト (`InMemoryWasmtimeSession`) を透過的に切り替えられる構造になっています。
 
 ---
 
@@ -35,9 +35,9 @@
   [`register_host_imports`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs#L415-L438) で `result_types` と同様に `param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect()` をクロージャにキャプチャし、`invoke_host_callback` 内で `val_to_json` を使って引数をシリアライズするように統一する。
 
 ### 2. JNI ホストコールバックでの JVM 例外発生時にエラー原因が消失する
-* **対象箇所**: [`rust-bridge/src/lib.rs` (`invoke_host_callback`)](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs#L524-L527) / [`JniWasmtimeBridge.kt` (`JniHostCallback`)](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/JniWasmtimeBridge.kt#L16-L31)
+* **対象箇所**: [`rust-bridge/src/lib.rs` (`invoke_host_callback`)](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs#L524-L527) / [`JniWasmtimeBridge.kt` (`JniHostCallback`)](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/JniWasmtimeBridge.kt#L16-L31)
 * **問題**:
-  FFM バックエンド（[`HostCallbackDispatcher`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L345-L354)）では Kotlin 側の例外メッセージ（`t.message`）をバッファに書き込んで Rust 側へ伝播していますが、JNI バックエンドでは `env.exception_clear()` で例外を消去した後に固定文字列のみを返しているため、ホスト実装内で何が起きたのかデバッグが困難になります。
+  FFM バックエンド（[`HostCallbackDispatcher`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L345-L354)）では Kotlin 側の例外メッセージ（`t.message`）をバッファに書き込んで Rust 側へ伝播していますが、JNI バックエンドでは `env.exception_clear()` で例外を消去した後に固定文字列のみを返しているため、ホスト実装内で何が起きたのかデバッグが困難になります。
 * **修正案**:
   `JniHostCallback.onHostCall` 側（または Rust JNI 側の `env.exception_occurred()`）で例外をキャッチしてエラーメッセージを構造化レスポンスとして返すか、`Throwable.toString()` を JNI 経由で取得してから `exception_clear()` する。
 
@@ -60,7 +60,7 @@
   Rust 側でグローバルな `OnceLock<Engine>`（デフォルト設定の共有 Engine）を持つか、`Engine` インスタンスを再利用できるようにすることで、2回目以降のセッション起動を高速化する。
 
 ### 5. FFM ホストコールバックの出力バッファが 64KB 固定で、超過時に無言で JSON が切り詰められる
-* **対象箇所**: [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs#L487) および [`HostCallbackDispatcher.onHostCall`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L338-L340)
+* **対象箇所**: [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs#L487) および [`HostCallbackDispatcher.onHostCall`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L338-L340)
 * **問題**:
   FFM のホストコールバックでは Rust 側が `vec![0u8; 65536]` (64KB) のバッファを渡し、Kotlin 側で `minOf(bytes.size, (outBufCap - 1).toInt())` で切り詰めています。ホスト関数が 64KB を超える文字列やリストを返した場合、途中で切れた不正な JSON となり、`serde_json::from_str` で難解なパースエラーになります。
 * **修正案**:
@@ -68,11 +68,11 @@
 
 ### 6. 複数のインターフェースに同名型がある場合の衝突 & 複合型内部の Resource デコード
 * **対象箇所**:
-  1. [`WitToKotlinPoetConverter.kt` (`emitTypeDefinitionIfNeeded`)](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L514-L568)
-  2. [`WitToKotlinPoetConverter.kt` (`buildDecodeExpression`)](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1183-L1187)
+  1. [`WitToKotlinPoetConverter.kt` (`emitTypeDefinitionIfNeeded`)](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L514-L568)
+  2. [`WitToKotlinPoetConverter.kt` (`buildDecodeExpression`)](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1183-L1187)
 * **問題**:
   1. 異なる 2 つの WIT インターフェース（例: `iface-a` と `iface-b`）がどちらも `record config` を定義している場合、両方とも `<World>World.Config` として直下にフラット出力されるため、Kotlin のクラス名が衝突します。
-  2. `WitResult<Counter, String>` や `WitOption<Counter>` のように、リソースハンドルが `result` や `option` や `record` の内部に含まれている場合、[`mapTypeDefByIndex`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1346-L1348) は Kotlin 型を `Counter` にマッピングしますが、[`buildDecodeExpression`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1183-L1187) は `FfmJsonCodec.decodeInt(elem)`（`Int`）を生成するため、生成コードが型不一致（`Int` vs `Counter`）でコンパイルエラーになります（トップレベル戻り値は [`returnsOwnedResource`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1097-L1102) で個別対応されていますが、ジェネリクス内部が未対応です）。
+  2. `WitResult<Counter, String>` や `WitOption<Counter>` のように、リソースハンドルが `result` や `option` や `record` の内部に含まれている場合、[`mapTypeDefByIndex`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1346-L1348) は Kotlin 型を `Counter` にマッピングしますが、[`buildDecodeExpression`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1183-L1187) は `FfmJsonCodec.decodeInt(elem)`（`Int`）を生成するため、生成コードが型不一致（`Int` vs `Counter`）でコンパイルエラーになります（トップレベル戻り値は [`returnsOwnedResource`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1097-L1102) で個別対応されていますが、ジェネリクス内部が未対応です）。
 * **修正案**:
   `buildDecodeExpression` に `session` コンテキスト（またはラッパー）を渡せるようにし、`Handle` / `Resource` のデコード式が `Counter(session, FfmJsonCodec.decodeInt(elem))` を生成するようにすると、`result<own<resource>, error>` のような頻出パターンも完全に動作します。
 
@@ -81,15 +81,15 @@
 ## 🟡 Minor / Maintainability（保守性・改善提案）
 
 1. **Unicode スカラー値（サロゲートペア / 絵文字）に対する `char` の扱い**
-   * **対象箇所**: [`FfmJsonCodec.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L385) (`decodeChar`: `element.jsonPrimitive.content.first()`)
+   * **対象箇所**: [`FfmJsonCodec.kt`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L385) (`decodeChar`: `element.jsonPrimitive.content.first()`)
    * WIT の `char` は Unicode Scalar Value (21-bit `U+0000`〜`U+10FFFF`) ですが、Kotlin の `Char` は 16-bit UTF-16 コード単位です。BMP 外の文字（絵文字など）が渡された場合、`first()` は上位サロゲートのみを切り取ってしまいます。[SPEC_REVIEW.md (2.4)](file:///Users/chikoski/wssm-component-kotin/SPEC_REVIEW.md#L56) の留意事項通りですが、サロゲートペア検証を入れるか KDoc に明記しておくとより安全です。
 2. **CLI での `wasm-tools` プロセス実行時の標準出力・エラー出力のデッドロック防止**
-   * **対象箇所**: [`Main.kt` (`extractWitJsonViaWasmTools`)](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/cli/Main.kt#L96-L98)
+   * **対象箇所**: [`Main.kt` (`extractWitJsonViaWasmTools`)](file:///Users/chikoski/wssm-component-kotin/cli/src/main/kotlin/wasm2kt/cli/Main.kt#L96-L98)
    * `stdout` を全て読み切ってから `stderr` を読んでいるため、万が一 `wasm-tools` が大量の警告を `stderr` に出して OS パイプバッファ（通常 16KB〜64KB）が詰まるとデッドロックする可能性があります。別スレッドまたは一時ファイル経由で読み取るとより安全です。
 3. **未使用フィールドの整理**
-   * [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L82-L83) の `needsWitOption` / `needsWitResult` は `true` が代入されるだけで参照されておらず、実際には常に [`generateCommonSupportFile()`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1381-L1402) で `WitOption` と `WitResult` が出力されています。不要であれば変数を削除して問題ありません。
+   * [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L82-L83) の `needsWitOption` / `needsWitResult` は `true` が代入されるだけで参照されておらず、実際には常に [`generateCommonSupportFile()`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1381-L1402) で `WitOption` と `WitResult` が出力されています。不要であれば変数を削除して問題ありません。
 4. **テストコード内のハードコードされた `/Users/chikoski/.cargo/bin/wasm-tools` パス**
-   * **対象箇所**: [`WitToKotlinPoetConverterTest.kt`](file:///Users/chikoski/wssm-component-kotin/src/test/kotlin/wasm2kt/WitToKotlinPoetConverterTest.kt#L288) ほか複数箇所
+   * **対象箇所**: [`WitToKotlinPoetConverterTest.kt`](file:///Users/chikoski/wssm-component-kotin/integration-tests/src/test/kotlin/wasm2kt/WitToKotlinPoetConverterTest.kt#L288) ほか複数箇所
    * CI 環境や他の開発者のマシンでもそのままテストが通るよう、環境変数 `WASM_TOOLS_BIN` や `PATH` 検索（フォールバックとして `~/.cargo/bin/wasm-tools`）をヘルパー関数に切り出すことを推奨します。
 
 ---
@@ -99,9 +99,9 @@
 | 優先度 | 項目 | 対象ファイル |
 | :--- | :--- | :--- |
 | **P0 (Critical)** | 1. ホストインポート引数の複合型・リソース JSON シリアライズ対応 (`val_to_json` の利用) | [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs) |
-| **P0 (Critical)** | 2. JNI ホストコールバックでの例外メッセージ伝播 | [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs), [`JniWasmtimeBridge.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/JniWasmtimeBridge.kt) |
+| **P0 (Critical)** | 2. JNI ホストコールバックでの例外メッセージ伝播 | [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs), [`JniWasmtimeBridge.kt`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/JniWasmtimeBridge.kt) |
 | **P1 (High)** | 3. FFI / JNI 境界の `catch_unwind` と null ポインタ防御 | [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs) |
 | **P1 (Major)** | 4. `wasmtime::Engine` の共有キャッシュ化によるセッション起動高速化 | [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs) |
-| **P2 (Major)** | 5. FFM ホストコールバックの 64KB バッファ超過検出 | [`FfmWasmtimeBridge.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt), [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs) |
-| **P2 (Major)** | 6. ジェネリクス内部（`result<own<resource>, E>` 等）の Resource デコード対応 | [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) |
-| **P3 (Minor)** | 7. テスト内の `wasm-tools` パス解決・未使用フィールド整理 | [`WitToKotlinPoetConverterTest.kt`](file:///Users/chikoski/wssm-component-kotin/src/test/kotlin/wasm2kt/WitToKotlinPoetConverterTest.kt), [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) |
+| **P2 (Major)** | 5. FFM ホストコールバックの 64KB バッファ超過検出 | [`FfmWasmtimeBridge.kt`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt), [`rust-bridge/src/lib.rs`](file:///Users/chikoski/wssm-component-kotin/rust-bridge/src/lib.rs) |
+| **P2 (Major)** | 6. ジェネリクス内部（`result<own<resource>, E>` 等）の Resource デコード対応 | [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) |
+| **P3 (Minor)** | 7. テスト内の `wasm-tools` パス解決・未使用フィールド整理 | [`WitToKotlinPoetConverterTest.kt`](file:///Users/chikoski/wssm-component-kotin/integration-tests/src/test/kotlin/wasm2kt/WitToKotlinPoetConverterTest.kt), [`WitToKotlinPoetConverter.kt`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt) |

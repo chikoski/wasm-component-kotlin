@@ -8,5 +8,5 @@ cargo build --locked --release --manifest-path decomposer/Cargo.toml
 for name in arithmetic counter live_calc roundtrip; do
   out="runtime-chicory/src/test/resources/components/$name"
   rm -rf "$out"
-  decomposer/target/release/wasm2kt-decompose "src/test/resources/fixtures/$name.wasm" "$out"
+  decomposer/target/release/wasm2kt-decompose "fixtures/$name.wasm" "$out"
 done

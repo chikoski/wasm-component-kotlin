@@ -33,7 +33,7 @@
 
 ### Example 1: 四則演算コンポーネントの呼び出し (`arithmetic.wit`)
 
-**入力 WIT ([arithmetic.wit](src/test/resources/fixtures/arithmetic.wit)):**
+**入力 WIT ([arithmetic.wit](fixtures/arithmetic.wit)):**
 ```wit
 package example:arithmetic@0.1.0;
 
@@ -68,7 +68,7 @@ fun main() {
 
 ### Example 2: ステートフルな Resource と `borrow` / `own` 所有権 (`counter.wit`)
 
-**入力 WIT ([counter.wit](src/test/resources/fixtures/counter.wit)):**
+**入力 WIT ([counter.wit](fixtures/counter.wit)):**
 ```wit
 package example:counter@0.1.0;
 
@@ -143,10 +143,10 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 
 ```bash
 # .wit ファイルから生成する場合
-./gradlew run --args="src/test/resources/fixtures/counter.wit -o build/generated -p com.example.counter"
+./gradlew run --args="fixtures/counter.wit -o build/generated -p com.example.counter"
 
 # .wasm コンポーネントバイナリから直接生成する場合
-./gradlew run --args="src/test/resources/fixtures/counter.wasm -o build/generated -p com.example.counter"
+./gradlew run --args="fixtures/counter.wasm -o build/generated -p com.example.counter"
 
 # wasm-tools の JSON AST をパイプで渡す場合
 wasm-tools component wit --json component.wasm | ./gradlew run --args="--from-json -o build/generated -p com.example.wasm"

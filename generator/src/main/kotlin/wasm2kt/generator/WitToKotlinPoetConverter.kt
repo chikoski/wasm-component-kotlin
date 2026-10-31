@@ -197,8 +197,9 @@ class WitToKotlinPoetConverter(
         resolve.types.forEachIndexed { idx, typeDef ->
             if (typeDef.owner?.world == worldId) {
                 val kind = typeDef.kind
-                if (kind is WitTypeDefKind.TypeAlias && kind.type is WitTypeRef.Id && kind.type.index in emittedTypeIndices) {
-                    val targetDef = resolve.types[kind.type.index]
+                val aliased = (kind as? WitTypeDefKind.TypeAlias)?.type as? WitTypeRef.Id
+                if (aliased != null && aliased.index in emittedTypeIndices) {
+                    val targetDef = resolve.types[aliased.index]
                     if (targetDef.name == typeDef.name) {
                         emittedTypeIndices += idx
                         return@forEachIndexed
@@ -561,10 +562,11 @@ class WitToKotlinPoetConverter(
         while (current in resolve.types.indices && visited.add(current)) {
             val def = resolve.types[current]
             val kind = def.kind
-            if (kind is WitTypeDefKind.TypeAlias && kind.type is WitTypeRef.Id) {
-                val targetDef = resolve.types[kind.type.index]
+            val aliased = (kind as? WitTypeDefKind.TypeAlias)?.type as? WitTypeRef.Id
+            if (aliased != null) {
+                val targetDef = resolve.types[aliased.index]
                 if (targetDef.name == def.name) {
-                    current = kind.type.index
+                    current = aliased.index
                     continue
                 }
             }
@@ -647,7 +649,7 @@ class WitToKotlinPoetConverter(
                         is WitTypeDefKind.ListType -> containsResource(kind.type, visited)
                         is WitTypeDefKind.Tuple -> kind.types.any { containsResource(it, visited) }
                         is WitTypeDefKind.Record -> kind.fields.any { containsResource(it.type, visited) }
-                        is WitTypeDefKind.Variant -> kind.cases.any { it.type != null && containsResource(it.type, visited) }
+                        is WitTypeDefKind.Variant -> kind.cases.any { c -> c.type?.let { containsResource(it, visited) } ?: false }
                         is WitTypeDefKind.FutureType -> kind.type?.let { containsResource(it, visited) } ?: false
                         is WitTypeDefKind.StreamType -> kind.element?.let { containsResource(it, visited) } ?: false
                         else -> false
@@ -708,11 +710,12 @@ class WitToKotlinPoetConverter(
                 )
             }
             is WitTypeDefKind.TypeAlias -> {
-                if (kind.type is WitTypeRef.Id) {
-                    val targetDef = resolve.types.getOrNull(kind.type.index)
+                val aliased = kind.type
+                if (aliased is WitTypeRef.Id) {
+                    val targetDef = resolve.types.getOrNull(aliased.index)
                     if (targetDef?.name == rawName) {
                         emitTypeDefinitionIfNeeded(
-                            typeIdx = kind.type.index,
+                            typeIdx = aliased.index,
                             ownerContainer = ownerContainer,
                             fileBuilder = fileBuilder,
                             worldClassName = worldClassName,
@@ -990,7 +993,7 @@ class WitToKotlinPoetConverter(
                 case.docs?.contents?.let { objBuilder.addKdoc("%L\n", it.trim()) }
                 builder.addType(objBuilder.build())
             } else {
-                val payloadType = mapTypeRef(case.type, worldClassName)
+                val payloadType = mapTypeRef(checkNotNull(case.type), worldClassName)
                 val classBuilder = TypeSpec.classBuilder(caseName)
                     .addModifiers(KModifier.DATA)
                     .addSuperinterface(variantClassName)
@@ -1016,7 +1019,7 @@ class WitToKotlinPoetConverter(
             }
         }
 
-        val hasResourceCases = cases.any { it.type != null && containsResource(it.type) }
+        val hasResourceCases = cases.any { c -> c.type?.let { containsResource(it) } ?: false }
         val sessionExpr = if (hasResourceCases) CodeBlock.of("session") else null
         val fromJsonCode = CodeBlock.builder()
             .addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
@@ -1027,7 +1030,7 @@ class WitToKotlinPoetConverter(
                 fromJsonCode.addStatement("%S -> %N", case.name, caseName)
             } else {
                 val payloadElem = CodeBlock.of("%T.variantPayload(obj)", ffmCodecClass)
-                val decodedPayload = buildDecodeExpression(case.type, payloadElem, worldClassName, sessionExpr = sessionExpr)
+                val decodedPayload = buildDecodeExpression(checkNotNull(case.type), payloadElem, worldClassName, sessionExpr = sessionExpr)
                 fromJsonCode.addStatement("%S -> %N(%L)", case.name, caseName, decodedPayload)
             }
         }
@@ -1541,10 +1544,11 @@ class WitToKotlinPoetConverter(
             }
             is WitTypeDefKind.TypeAlias -> {
                 if (name != null) {
-                    if (kind.type is WitTypeRef.Id) {
-                        val targetDef = resolve.types.getOrNull(kind.type.index)
+                    val aliased = kind.type
+                    if (aliased is WitTypeRef.Id) {
+                        val targetDef = resolve.types.getOrNull(aliased.index)
                         if (targetDef?.name == name) {
-                            return mapTypeDefByIndex(kind.type.index, worldClassName)
+                            return mapTypeDefByIndex(aliased.index, worldClassName)
                         }
                     }
                     ClassName(targetPackage, resolveKotlinTypeSimpleName(index))
