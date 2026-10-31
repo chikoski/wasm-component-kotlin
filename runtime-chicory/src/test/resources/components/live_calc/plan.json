@@ -52,7 +52,7 @@
         "results": [],
         "async": false
       },
-      "options": 0,
+      "options": 1,
       "index": 0
     }
   ],
@@ -91,7 +91,7 @@
         "name": "add",
         "kind": "export"
       },
-      "options": 1,
+      "options": 0,
       "type": {
         "params": [
           {
@@ -123,7 +123,7 @@
         "name": "multiply",
         "kind": "export"
       },
-      "options": 1,
+      "options": 0,
       "type": {
         "params": [
           {

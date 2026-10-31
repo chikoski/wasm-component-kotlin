@@ -1,0 +1,26 @@
+package root:component;
+
+world root {
+  export example:res-edge/api;
+}
+package example:res-edge {
+  interface api {
+    resource res;
+
+    make: func(rep: u32) -> res;
+
+    same: func(handle: u32) -> res;
+
+    drop-raw: func(handle: u32);
+
+    rep-raw: func(handle: u32) -> u32;
+
+    take: func(r: res) -> u32;
+
+    take2: func(a: res, b: res) -> u32;
+
+    peek: func(r: borrow<res>) -> u32;
+
+    last-dropped: func() -> u32;
+  }
+}

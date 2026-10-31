@@ -125,7 +125,7 @@
         ],
         "async": false
       },
-      "options": 0,
+      "options": 6,
       "index": 0
     },
     {
@@ -153,7 +153,7 @@
         ],
         "async": false
       },
-      "options": 1,
+      "options": 7,
       "index": 1
     }
   ],
@@ -161,7 +161,7 @@
     {
       "index": 0,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -177,7 +177,7 @@
     {
       "index": 2,
       "stringEncoding": "utf8",
-      "memory": 0,
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -185,7 +185,7 @@
     {
       "index": 3,
       "stringEncoding": "utf8",
-      "memory": 0,
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -193,7 +193,7 @@
     {
       "index": 4,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -243,13 +243,195 @@
   "exports": [
     {
       "instance": null,
+      "name": "check-even",
+      "func": {
+        "instance": 1,
+        "name": "check-even",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": {
+              "k": "u32"
+            },
+            "err": {
+              "k": "s32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "describe-code",
+      "func": {
+        "instance": 1,
+        "name": "describe-code",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "prefix",
+            "type": {
+              "k": "string"
+            }
+          },
+          {
+            "name": "code",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-u64",
+      "func": {
+        "instance": 1,
+        "name": "echo-u64",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "u64"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u64"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:roundtrip/math-api@0.1.0",
+      "name": "scale",
+      "func": {
+        "instance": 1,
+        "name": "example:roundtrip/math-api@0.1.0#scale",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "nested-option",
+      "func": {
+        "instance": 1,
+        "name": "nested-option",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "s32"
+              }
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "ping-result",
+      "func": {
+        "instance": 1,
+        "name": "ping-result",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "ok",
+            "type": {
+              "k": "bool"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": null,
+            "err": null
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
       "name": "transform-summary",
       "func": {
         "instance": 1,
         "name": "transform-summary",
         "kind": "export"
       },
-      "options": 2,
+      "options": 5,
       "type": {
         "params": [
           {
@@ -351,188 +533,6 @@
                 }
               }
             ]
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "check-even",
-      "func": {
-        "instance": 1,
-        "name": "check-even",
-        "kind": "export"
-      },
-      "options": 3,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "s32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "result",
-            "ok": {
-              "k": "u32"
-            },
-            "err": {
-              "k": "s32"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "ping-result",
-      "func": {
-        "instance": 1,
-        "name": "ping-result",
-        "kind": "export"
-      },
-      "options": 4,
-      "type": {
-        "params": [
-          {
-            "name": "ok",
-            "type": {
-              "k": "bool"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "result",
-            "ok": null,
-            "err": null
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "nested-option",
-      "func": {
-        "instance": 1,
-        "name": "nested-option",
-        "kind": "export"
-      },
-      "options": 5,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "option",
-              "type": {
-                "k": "option",
-                "type": {
-                  "k": "s32"
-                }
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "option",
-            "type": {
-              "k": "option",
-              "type": {
-                "k": "s32"
-              }
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "echo-u64",
-      "func": {
-        "instance": 1,
-        "name": "echo-u64",
-        "kind": "export"
-      },
-      "options": 6,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "u64"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u64"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "describe-code",
-      "func": {
-        "instance": 1,
-        "name": "describe-code",
-        "kind": "export"
-      },
-      "options": 7,
-      "type": {
-        "params": [
-          {
-            "name": "prefix",
-            "type": {
-              "k": "string"
-            }
-          },
-          {
-            "name": "code",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "string"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": "example:roundtrip/math-api@0.1.0",
-      "name": "scale",
-      "func": {
-        "instance": 1,
-        "name": "example:roundtrip/math-api@0.1.0#scale",
-        "kind": "export"
-      },
-      "options": 4,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "s32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "s32"
           }
         ],
         "async": false

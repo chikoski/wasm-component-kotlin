@@ -1,0 +1,192 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {},
+      "exports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        }
+      },
+      "package": 1
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "api",
+      "types": {
+        "res": 0
+      },
+      "functions": {
+        "make": {
+          "name": "make",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "rep",
+              "type": "u32"
+            }
+          ],
+          "result": 1
+        },
+        "same": {
+          "name": "same",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "handle",
+              "type": "u32"
+            }
+          ],
+          "result": 2
+        },
+        "drop-raw": {
+          "name": "drop-raw",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "handle",
+              "type": "u32"
+            }
+          ]
+        },
+        "rep-raw": {
+          "name": "rep-raw",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "handle",
+              "type": "u32"
+            }
+          ],
+          "result": "u32"
+        },
+        "take": {
+          "name": "take",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "r",
+              "type": 3
+            }
+          ],
+          "result": "u32"
+        },
+        "take2": {
+          "name": "take2",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "a",
+              "type": 4
+            },
+            {
+              "name": "b",
+              "type": 5
+            }
+          ],
+          "result": "u32"
+        },
+        "peek": {
+          "name": "peek",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "r",
+              "type": 6
+            }
+          ],
+          "result": "u32"
+        },
+        "last-dropped": {
+          "name": "last-dropped",
+          "kind": "freestanding",
+          "params": [],
+          "result": "u32"
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": "res",
+      "kind": "resource",
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 0
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:res-edge",
+      "interfaces": {
+        "api": 0
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

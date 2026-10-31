@@ -1,0 +1,366 @@
+{
+  "version": 2,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": [
+        {
+          "module": "d",
+          "name": "last",
+          "kind": "global"
+        },
+        {
+          "module": "r",
+          "name": "new",
+          "kind": "func"
+        },
+        {
+          "module": "r",
+          "name": "drop",
+          "kind": "func"
+        },
+        {
+          "module": "r",
+          "name": "rep",
+          "kind": "func"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    },
+    {
+      "op": "resource",
+      "resource": 0,
+      "dtor": {
+        "instance": 0,
+        "name": "dtor",
+        "kind": "export"
+      },
+      "instance": 0
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 1,
+      "args": [
+        {
+          "module": "d",
+          "name": "last",
+          "def": {
+            "instance": 0,
+            "name": "last",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "r",
+          "name": "new",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "r",
+          "name": "drop",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "r",
+          "name": "rep",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        }
+      ]
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "resource-new",
+      "table": 0,
+      "index": 0
+    },
+    {
+      "kind": "resource-drop",
+      "table": 0,
+      "index": 1
+    },
+    {
+      "kind": "resource-rep",
+      "table": 0,
+      "index": 2
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [
+    {
+      "index": 0,
+      "resource": 0,
+      "instance": 0,
+      "imported": false,
+      "import": null
+    }
+  ],
+  "exports": [
+    {
+      "instance": "example:res-edge/api",
+      "name": "drop-raw",
+      "func": {
+        "instance": 1,
+        "name": "drop-raw",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "handle",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "last-dropped",
+      "func": {
+        "instance": 1,
+        "name": "last-dropped",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "make",
+      "func": {
+        "instance": 1,
+        "name": "make",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "rep",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "peek",
+      "func": {
+        "instance": 1,
+        "name": "peek",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "r",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "rep-raw",
+      "func": {
+        "instance": 1,
+        "name": "rep-raw",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "handle",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "same",
+      "func": {
+        "instance": 1,
+        "name": "same",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "handle",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "take",
+      "func": {
+        "instance": 1,
+        "name": "take",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "r",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "take2",
+      "func": {
+        "instance": 1,
+        "name": "take2",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}
