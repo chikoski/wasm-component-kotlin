@@ -1,0 +1,5 @@
+# Pinned so CI builds and lints the bridge with the same compiler as the decomposer.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy"]
+profile = "minimal"

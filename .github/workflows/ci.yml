@@ -48,6 +48,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: decomposer
+      - name: Lint and test the decomposer
+        working-directory: decomposer
+        run: |
+          cargo clippy --locked --release --all-targets -- -D warnings
+          cargo test --locked --release
       # The bundled wasm and runtime-chicory's test components are generated and committed;
       # rebuild both and require that nothing changes. The wasm build is reproducible (see build-wasm.sh).
       - run: decomposer/build-wasm.sh
@@ -71,15 +76,24 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned Rust toolchain (rust-bridge/rust-toolchain.toml)
+        working-directory: rust-bridge
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust-bridge
-      # integration-tests generate bindings with wasm-tools (>= 1.220) and run them on Wasmtime and Chicory.
+      # integration-tests generate bindings with wasm-tools and run them on Wasmtime and Chicory.
+      # Pinned to the wasm-tools family the decomposer uses (wasmparser 0.258), so results don't
+      # change when a new release tightens validation.
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-tools
-      - run: cargo build --release --manifest-path rust-bridge/Cargo.toml
+          tool: wasm-tools@1.258.0
+      - name: Lint and test the bridge
+        working-directory: rust-bridge
+        run: |
+          cargo clippy --locked --release --all-targets -- -D warnings
+          cargo test --locked --release
+      - run: cargo build --locked --release --manifest-path rust-bridge/Cargo.toml
       - run: ./gradlew :integration-tests:test
       - if: failure()
         uses: actions/upload-artifact@v4

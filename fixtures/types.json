@@ -1,0 +1,273 @@
+{
+  "worlds": [
+    {
+      "name": "types-world",
+      "imports": {
+        "blob": {
+          "type": 2
+        },
+        "packet": {
+          "type": 3
+        }
+      },
+      "exports": {
+        "echo-name": {
+          "function": {
+            "name": "echo-name",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 4
+              }
+            ],
+            "result": 4
+          }
+        },
+        "maybe-len": {
+          "function": {
+            "name": "maybe-len",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 4
+              }
+            ],
+            "result": 1
+          }
+        },
+        "echo-bytes": {
+          "function": {
+            "name": "echo-bytes",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 0
+              }
+            ],
+            "result": 0
+          }
+        },
+        "reverse-bytes": {
+          "function": {
+            "name": "reverse-bytes",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 0
+              }
+            ],
+            "result": 0
+          }
+        },
+        "echo-char": {
+          "function": {
+            "name": "echo-char",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "c",
+                "type": "char"
+              }
+            ],
+            "result": "char"
+          }
+        },
+        "next-char": {
+          "function": {
+            "name": "next-char",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "c",
+                "type": "char"
+              }
+            ],
+            "result": "char"
+          }
+        },
+        "echo-blob": {
+          "function": {
+            "name": "echo-blob",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "b",
+                "type": 2
+              }
+            ],
+            "result": 2
+          }
+        },
+        "echo-packet": {
+          "function": {
+            "name": "echo-packet",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "p",
+                "type": 3
+              }
+            ],
+            "result": 3
+          }
+        },
+        "compact": {
+          "function": {
+            "name": "compact",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 6
+              }
+            ],
+            "result": 7
+          }
+        },
+        "echo-optional-list": {
+          "function": {
+            "name": "echo-optional-list",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 6
+              }
+            ],
+            "result": 6
+          }
+        },
+        "nested": {
+          "function": {
+            "name": "nested",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 8
+              }
+            ],
+            "result": 8
+          }
+        }
+      },
+      "package": 0,
+      "docs": {
+        "contents": "Exercises the WIT -> Kotlin mappings decided in ADR-0006."
+      }
+    }
+  ],
+  "interfaces": [],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": "blob",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": 0
+            },
+            {
+              "name": "tag",
+              "type": 1
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "packet",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "empty",
+              "type": null
+            },
+            {
+              "name": "bytes",
+              "type": 0
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 5
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 4
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:types@0.1.0",
+      "interfaces": {},
+      "worlds": {
+        "types-world": 0
+      }
+    }
+  ]
+}

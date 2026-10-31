@@ -23,3 +23,17 @@ java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
+
+dependencies {
+    testImplementation(kotlin("test"))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    // WIT JSON inputs shared with the other modules (fixtures/*.json).
+    val fixtures = rootProject.layout.projectDirectory.dir("fixtures")
+    inputs.dir(fixtures).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("fixtures")
+    systemProperty("wasm2kt.fixtures", fixtures.asFile.absolutePath)
+}
