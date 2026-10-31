@@ -1,0 +1,73 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "record-calc": {
+          "function": {
+            "name": "record-calc",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "a",
+                "type": "s32"
+              },
+              {
+                "name": "b",
+                "type": "s32"
+              }
+            ]
+          }
+        }
+      },
+      "exports": {
+        "add": {
+          "function": {
+            "name": "add",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "a",
+                "type": "s32"
+              },
+              {
+                "name": "b",
+                "type": "s32"
+              }
+            ],
+            "result": "s32"
+          }
+        },
+        "multiply": {
+          "function": {
+            "name": "multiply",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "a",
+                "type": "s32"
+              },
+              {
+                "name": "b",
+                "type": "s32"
+              }
+            ],
+            "result": "s32"
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [],
+  "types": [],
+  "packages": [
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

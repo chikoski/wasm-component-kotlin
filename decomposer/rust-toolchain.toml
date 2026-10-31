@@ -1,0 +1,5 @@
+# Pinned so decomposer/dist/wasm2kt-decompose.wasm can be rebuilt byte-for-byte (checked in CI).
+[toolchain]
+channel = "1.97.0"
+targets = ["wasm32-wasip1"]
+profile = "minimal"
