@@ -7,12 +7,12 @@
 ## 1. 最重要ブロッカー：JVM FFM API (`java.lang.foreign`) から JNI への切り替え（または併用）
 
 ### 現状の課題
-* 現在の [`FfmWasmtimeBridge`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt) および生成される `FfmWasmtimeSession` は、Java 21/22 の **Foreign Function & Memory (FFM) API (`java.lang.foreign.*`)** に依存しています。
+* 現在の [`FfmWasmtimeBridge`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt) および生成される `FfmWasmtimeSession` は、Java 21/22 の **Foreign Function & Memory (FFM) API (`java.lang.foreign.*`)** に依存しています。
 * しかし、**Android の ART (Android Runtime) は現時点で `java.lang.foreign` パッケージをサポートしていません**（Android SDK にクラスが存在せず、実行時に `NoClassDefFoundError` となります）。
 
 ### 必要な変更
 1. **JNI (`JniWasmtimeSession` / `JniWasmtimeBridge`) バックエンドの追加**
-   * 生成される Kotlin 側の World や Resource はすでに [`WasmtimeSession`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1128-L1205) インターフェースによって抽象化されているため、**生成される DSL コード（`withSession`, `Counter`, `add` 等）自体は一切変更不要**です。
+   * 生成される Kotlin 側の World や Resource はすでに [`WasmtimeSession`](file:///Users/chikoski/wssm-component-kotin/generator/src/main/kotlin/wasm2kt/generator/WitToKotlinPoetConverter.kt#L1128-L1205) インターフェースによって抽象化されているため、**生成される DSL コード（`withSession`, `Counter`, `add` 等）自体は一切変更不要**です。
    * `WasmtimeSession` の実装として、デスクトップ/サーバー JVM 用の `FfmWasmtimeSession` に加え、Android / 汎用 JVM 用の **`JniWasmtimeSession`** を追加します。
 2. **Rust ブリッジ (`rust-bridge`) への JNI エントリポイント追加**
    * [rust-bridge/Cargo.toml](file:///Users/chikoski/wssm-component-kotin/rust-bridge/Cargo.toml) に `jni = "0.21"` クレートを追加し、既存の内部ロジック（`wasm2kt_session_open`, `wasm2kt_session_invoke`, `wasm2kt_session_drop_resource`）をそのまま呼ぶ `Java_wasm2kt_runtime_JniWasmtimeBridge_...` 関数群をエクスポートします。
@@ -82,7 +82,7 @@
 ## 4. `kotlin-reflect` 依存の排除と R8 / ProGuard 縮小への対応
 
 ### 現状の課題
-* 現在の [`FfmJsonCodec`](file:///Users/chikoski/wssm-component-kotin/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L247-L485) や生成コードでは、戻り値のデシリアライズや Record / Variant のフィールド走査に **`kotlin-reflect` (`typeOf<T>()`, `KClass.primaryConstructor`, `declaredMemberProperties`)** を使用しています。
+* 現在の [`FfmJsonCodec`](file:///Users/chikoski/wssm-component-kotin/runtime-wasmtime/src/main/kotlin/wasm2kt/runtime/FfmWasmtimeBridge.kt#L247-L485) や生成コードでは、戻り値のデシリアライズや Record / Variant のフィールド走査に **`kotlin-reflect` (`typeOf<T>()`, `KClass.primaryConstructor`, `declaredMemberProperties`)** を使用しています。
 * Android アプリ開発において **`kotlin-reflect` は大きなデメリット**になります：
   1. **APK サイズの肥大化**（`kotlin-reflect` 単体で数 MB 増加）。
   2. **実行速度の低下**（特に Android ART 上での初回リフレクション呼び出しは非常に重い）。

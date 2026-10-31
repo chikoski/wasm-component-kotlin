@@ -5,7 +5,7 @@ Wasm コンポーネントがホスト側の関数（`import record-calc: func(a
 
 ---
 
-## 1. WIT 定義 ([live_calc.wit](../../src/test/resources/fixtures/live_calc.wit))
+## 1. WIT 定義 ([live_calc.wit](../../fixtures/live_calc.wit))
 
 ```wit
 package example:livecalc@0.1.0;
@@ -22,7 +22,7 @@ world live-calc {
 ## 2. バインディングの生成コマンド
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/live_calc.wit -o build/examples/02-host-imports -p com.example.live"
+./gradlew run --args="fixtures/live_calc.wit -o build/examples/02-host-imports -p com.example.live"
 ```
 
 ---
@@ -35,7 +35,7 @@ package com.example.live
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/live_calc.wasm")
+    val wasmPath = Paths.get("fixtures/live_calc.wasm")
     val auditLog = mutableListOf<String>()
 
     // 1. ホストが提供する Imports インターフェースを実装

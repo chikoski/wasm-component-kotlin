@@ -4,7 +4,7 @@
 
 ---
 
-## 1. WIT 定義 ([arithmetic.wit](../../src/test/resources/fixtures/arithmetic.wit))
+## 1. WIT 定義 ([arithmetic.wit](../../fixtures/arithmetic.wit))
 
 ```wit
 package example:arithmetic@0.1.0;
@@ -23,7 +23,7 @@ world arithmetic {
 ## 2. バインディングの生成コマンド
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/arithmetic.wit -o build/examples/01-arithmetic -p com.example.arithmetic"
+./gradlew run --args="fixtures/arithmetic.wit -o build/examples/01-arithmetic -p com.example.arithmetic"
 ```
 
 ### 生成される `ArithmeticWorld.kt`（抜粋）
@@ -76,7 +76,7 @@ package com.example.arithmetic
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/arithmetic.wasm")
+    val wasmPath = Paths.get("fixtures/arithmetic.wasm")
 
     ArithmeticWorld.withSession(wasmPath) {
         val sum = ArithmeticWorld.add(20, 7)

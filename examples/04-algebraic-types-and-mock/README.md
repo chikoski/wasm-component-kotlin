@@ -4,7 +4,7 @@ WIT の豊富な型システム（`record`, `enum`, `flags`, `variant`, `tuple`,
 
 ---
 
-## 1. WIT 定義 ([calculator.wit](../../src/test/resources/fixtures/calculator.wit))
+## 1. WIT 定義 ([calculator.wit](../../fixtures/calculator.wit))
 
 ```wit
 package example:calc@0.1.0;
@@ -43,7 +43,7 @@ world calculator {
 ## 2. バインディングの生成コマンド
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/calculator.wit -o build/examples/04-algebraic-types-and-mock -p com.example.wasm"
+./gradlew run --args="fixtures/calculator.wit -o build/examples/04-algebraic-types-and-mock -p com.example.wasm"
 ```
 
 ---

@@ -4,7 +4,7 @@ WebAssembly Component Model の中核機能である **`resource`（ステート
 
 ---
 
-## 1. WIT 定義 ([counter.wit](../../src/test/resources/fixtures/counter.wit))
+## 1. WIT 定義 ([counter.wit](../../fixtures/counter.wit))
 
 ```wit
 package example:counter@0.1.0;
@@ -30,7 +30,7 @@ world counter-world {
 ## 2. バインディングの生成コマンド
 
 ```bash
-./gradlew run --args="src/test/resources/fixtures/counter.wit -o build/examples/03-counter-resource -p com.example.counter"
+./gradlew run --args="fixtures/counter.wit -o build/examples/03-counter-resource -p com.example.counter"
 ```
 
 ---
@@ -43,7 +43,7 @@ package com.example.counter
 import java.nio.file.Paths
 
 fun main() {
-    val wasmPath = Paths.get("src/test/resources/fixtures/counter.wasm")
+    val wasmPath = Paths.get("fixtures/counter.wasm")
 
     CounterWorldWorld.withSession(wasmPath) {
         // 1. リソースの生成: companion object の invoke が Context Parameter から Session を受け取る
