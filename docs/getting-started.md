@@ -14,6 +14,13 @@ JVM Foreign Function & Memory (FFM) API (`java.lang.foreign`) を使用するた
 brew install openjdk@21
 ```
 
+> Gradle デーモンは `gradle/gradle-daemon-jvm.properties` により JDK 21 で起動します。シェルの `JAVA_HOME` が JDK 25 などを指していても構いません。
+> Homebrew の JDK を Gradle が見つけられない場合は、`~/.gradle/gradle.properties` に次を追加してください（マシン固有の設定なので、リポジトリには入れません）。
+>
+> ```properties
+> org.gradle.java.installations.paths=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+> ```
+
 ### 1.2 Rust ツールチェーン & `wasm-tools`
 Rust 製の Wasmtime ブリッジのビルドと、WIT から JSON AST を抽出するための `wasm-tools` をインストールします：
 ```bash

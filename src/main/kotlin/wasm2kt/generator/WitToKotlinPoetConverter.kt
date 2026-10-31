@@ -69,6 +69,10 @@ data class GeneratedKotlinFile(
     override fun toString(): String = content
 }
 
+private const val NO_PATH_BACKEND_MESSAGE =
+    "These bindings were generated without the Wasmtime backend; open a session with a ComponentBackendFactory " +
+        "(e.g. the generated <Name>Component) or assign WasmtimeSession.factory / bytesFactory."
+
 /**
  * Converts a [WitResolve] AST into [GeneratedKotlinFile]s according to the wasm2kt specification.
  */
@@ -77,6 +81,12 @@ class WitToKotlinPoetConverter(
     private val resolve: WitResolve,
     private val targetPackage: String,
     private val targetWorldName: String? = null,
+    /**
+     * Emit the Wasmtime-backed (FFM / JNI) session implementations and make them the default for
+     * `openSession(Path | ByteArray)`. Disable for builds that only use a [wasm2kt.runtime.ComponentBackend]
+     * such as the Chicory backend (e.g. Android), so the bindings don't reference the Wasmtime bridge.
+     */
+    private val emitWasmtimeSessions: Boolean = true,
 ) {
     private val generatedTupleArities = mutableSetOf<Int>()
     private var currentWorldTypeNames: Map<Int, String> = emptyMap()
@@ -1591,8 +1601,10 @@ class WitToKotlinPoetConverter(
 
         // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
         fileBuilder.addType(buildWasmtimeSessionTypeSpec())
-        fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
-        fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
+        if (emitWasmtimeSessions) {
+            fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
+            fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
+        }
         fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
 
@@ -1874,14 +1886,18 @@ class WitToKotlinPoetConverter(
             )
             .addType(
                 TypeSpec.companionObjectBuilder()
-                    .addProperty(
-                        PropertySpec.builder("isFfmAvailable", BOOLEAN, KModifier.PRIVATE)
-                            .initializer(
-                                "try { Class.forName(%S); true } catch (_: Throwable) { false }",
-                                "java.lang.foreign.Linker",
+                    .apply {
+                        if (emitWasmtimeSessions) {
+                            addProperty(
+                                PropertySpec.builder("isFfmAvailable", BOOLEAN, KModifier.PRIVATE)
+                                    .initializer(
+                                        "try { Class.forName(%S); true } catch (_: Throwable) { false }",
+                                        "java.lang.foreign.Linker",
+                                    )
+                                    .build(),
                             )
-                            .build(),
-                    )
+                        }
+                    }
                     .addProperty(
                         PropertySpec.builder(
                             "factory",
@@ -1894,11 +1910,17 @@ class WitToKotlinPoetConverter(
                             ),
                         )
                             .mutable(true)
-                            .initializer(
-                                "{ wasmPath, imports -> if (isFfmAvailable) %T.open(wasmPath, imports) else %T.open(wasmPath, imports) }",
-                                ffmSessionClass,
-                                jniSessionClass,
-                            )
+                            .apply {
+                                if (emitWasmtimeSessions) {
+                                    initializer(
+                                        "{ wasmPath, imports -> if (isFfmAvailable) %T.open(wasmPath, imports) else %T.open(wasmPath, imports) }",
+                                        ffmSessionClass,
+                                        jniSessionClass,
+                                    )
+                                } else {
+                                    initializer("{ _, _ -> error(%S) }", NO_PATH_BACKEND_MESSAGE)
+                                }
+                            }
                             .build(),
                     )
                     .addProperty(
@@ -1913,25 +1935,35 @@ class WitToKotlinPoetConverter(
                             ),
                         )
                             .mutable(true)
-                            .initializer(
-                                "{ wasmBytes, imports -> if (isFfmAvailable) %T.open(wasmBytes, imports) else %T.open(wasmBytes, imports) }",
-                                ffmSessionClass,
-                                jniSessionClass,
+                            .apply {
+                                if (emitWasmtimeSessions) {
+                                    initializer(
+                                        "{ wasmBytes, imports -> if (isFfmAvailable) %T.open(wasmBytes, imports) else %T.open(wasmBytes, imports) }",
+                                        ffmSessionClass,
+                                        jniSessionClass,
+                                    )
+                                } else {
+                                    initializer("{ _, _ -> error(%S) }", NO_PATH_BACKEND_MESSAGE)
+                                }
+                            }
+                            .build(),
+                    )
+                    .apply {
+                        if (emitWasmtimeSessions) {
+                            addFunction(
+                                FunSpec.builder("useJniBackend")
+                                    .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", jniSessionClass)
+                                    .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", jniSessionClass)
+                                    .build(),
                             )
-                            .build(),
-                    )
-                    .addFunction(
-                        FunSpec.builder("useJniBackend")
-                            .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", jniSessionClass)
-                            .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", jniSessionClass)
-                            .build(),
-                    )
-                    .addFunction(
-                        FunSpec.builder("useFfmBackend")
-                            .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", ffmSessionClass)
-                            .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", ffmSessionClass)
-                            .build(),
-                    )
+                            addFunction(
+                                FunSpec.builder("useFfmBackend")
+                                    .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", ffmSessionClass)
+                                    .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", ffmSessionClass)
+                                    .build(),
+                            )
+                        }
+                    }
                     .addFunction(
                         FunSpec.builder("open")
                             .addParameter("wasmPath", pathClass)

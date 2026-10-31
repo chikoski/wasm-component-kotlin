@@ -10,7 +10,9 @@
 //! internal serde layout.
 //!
 //! Usage: `wasm2kt-decompose <component.wasm> <out-dir>`
-//! Output: `<out-dir>/plan.json` and `<out-dir>/core<N>.wasm`.
+//! Output: `<out-dir>/plan.json`, `<out-dir>/core<N>.wasm` and `<out-dir>/wit.json` (the
+//! component's WIT in the same JSON form as `wasm-tools component wit --json`, so binding
+//! generation needs no external wasm-tools).
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -38,7 +40,16 @@ fn main() -> Result<()> {
         std::fs::write(out_dir.join(file), wasm)?;
     }
     std::fs::write(out_dir.join("plan.json"), serde_json::to_string_pretty(&plan)?)?;
+    std::fs::write(out_dir.join("wit.json"), wit_json(&bytes)?)?;
     Ok(())
+}
+
+/// The component's type-level WIT, serialized exactly like `wasm-tools component wit --json`.
+pub fn wit_json(component_bytes: &[u8]) -> Result<String> {
+    match wit_component::decode(component_bytes).context("failed to decode the component's WIT")? {
+        wit_component::DecodedWasm::Component(resolve, _) => Ok(serde_json::to_string_pretty(&resolve)?),
+        wit_component::DecodedWasm::WitPackage(..) => bail!("expected a component, found a WIT package"),
+    }
 }
 
 /// Returns the plan and the list of `(file name, core module bytes)`.

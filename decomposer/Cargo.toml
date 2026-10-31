@@ -12,6 +12,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
+# Same wasm-tools family as wasmtime-environ 49 (wasmparser 0.258).
+wit-component = "=0.258.3"
+wit-parser = { version = "=0.258.3", features = ["serde"] }
 # Pinned: we read wasmtime-environ's internal component representation (the same
 # approach jco's js-component-bindgen takes), which is not a stable public API.
 wasmtime-environ = { version = "=49.0.0", features = ["component-model", "compile", "anyhow"] }
+
+[profile.release]
+# The wasm build ships inside the Gradle plugin; keep it small.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

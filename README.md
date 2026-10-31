@@ -18,6 +18,9 @@
 * **代数的データ型とビットフラグの完全な型安全性**
   * `variant`、`option<T>` (`WitOption<out T>`)、`result<T, E>` (`WitResult<out T, out E>`) をすべて `sealed interface` で表現し、`when` 式による網羅性チェックをサポートします（`option<option<T>>` のネスト問題も発生しません）。
   * `flags` は `@JvmInline value class` + ビット演算メソッド（`or`, `and`）としてゼロオーバーヘッドに生成します。
+* **Chicory バックエンドと Gradle プラグイン（Android 対応）**
+  * Gradle プラグイン `io.github.wasm2kt` で、コンポーネントの core モジュールをビルド時に JVM バイトコードへコンパイルし、純 JVM のランタイム [Chicory](https://github.com/dylibso/chicory) 上で実行します。ネイティブライブラリ・JNI・`wasm-tools` は不要で、Android でもそのまま動きます。
+  * ワールド DSL は共通で、`CalculatorWorld.withSession(CalculatorComponent) { ... }` のように渡すものを変えるだけです。詳しくは [Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md) を参照してください。
 * **Wasmtime ネイティブ実行 (JVM FFM API) & インメモリモックの両対応**
   * デフォルトでは Java 21+ の Foreign Function & Memory (FFM) API (`java.lang.foreign`) 経由で Rust 製の `wasmtime` ブリッジ (`cdylib`) を呼び出し、実際の `.wasm` コンポーネントをネイティブ実行します。
   * 単体テスト向けに、`.wasm` バイナリやネイティブライブラリなしで動作を検証できる `InMemoryWasmtimeSession` も同梱しています。
@@ -169,6 +172,7 @@ Options:
   -p, --package=<text>       生成される Kotlin コードのパッケージ名 (必須)
   -w, --world=<text>         対象の WIT world 名を指定（省略時はすべての world を生成）
   --from-json                入力を wasm-tools の JSON AST として直接読み込むフラグ
+  --no-wasmtime              Wasmtime (FFM/JNI) セッション実装を生成しない（Chicory のみ・Android 向け）
   --wasm-tools-path=<text>   wasm-tools 実行バイナリのパス（デフォルト: "wasm-tools"）
   -h, --help                 ヘルプを表示
 ```
@@ -178,10 +182,15 @@ Options:
 ## ドキュメント & 使用例 (Documentation & Examples)
 
 ### 詳細ドキュメント (`docs/`)
+* **[プロジェクトの現状とアクションアイテム](docs/STATUS.md)** / **[設計判断の記録 (ADR)](docs/adr/README.md)**
 * **[Getting Started (環境構築・チュートリアル)](docs/getting-started.md)**: ゼロから Wasm コンポーネントを用意し、Kotlin プロジェクトに組み込んで実行するまでの手順。
 * **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `WitOption`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
+* **[Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md)**: Android を含む純 JVM 実行。ビルド時の分解・AOT コンパイルのパイプラインと、プラグインの使い方。
 * **[アーキテクチャ解説](docs/architecture.md)**: `wasm-tools` JSON AST から KotlinPoet への変換パイプラインと、JVM FFM API ⇄ Rust `wasmtime` (`cdylib`) 間の C ABI 設計。
 * **[技術仕様書 (SPEC.md)](SPEC.md)** / **[仕様レビューと決定事項 (SPEC_REVIEW.md)](SPEC_REVIEW.md)**
+
+### サンプルアプリ (`samples/`)
+* **[android](samples/android)**: Gradle プラグインを使い、ビルド時にコンパイルしたコンポーネントを Android アプリから呼び出すサンプル。
 
 ### 使用例 (`examples/`)
 * **[01-arithmetic](examples/01-arithmetic/README.md)**: 最小構成の四則演算コンポーネントのネイティブ実行。
