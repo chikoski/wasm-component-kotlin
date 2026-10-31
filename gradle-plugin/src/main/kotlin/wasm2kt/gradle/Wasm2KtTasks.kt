@@ -23,6 +23,7 @@ import wasm2kt.tooling.ComponentBuild
 import wasm2kt.tooling.ComponentCodegen
 import wasm2kt.tooling.CoreModuleCompiler
 import wasm2kt.tooling.Decomposer
+import wasm2kt.tooling.PlanCheck
 import java.io.File
 import java.nio.file.Files
 import java.util.jar.JarEntry
@@ -53,6 +54,10 @@ abstract class Wasm2KtDecomposeTask : Wasm2KtToolingTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val component: RegularFileProperty
 
+    /** Fail the build, instead of warning, when the component uses something the Chicory backend cannot run. */
+    @get:Input
+    abstract val failOnUnsupportedFeatures: Property<Boolean>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -60,18 +65,34 @@ abstract class Wasm2KtDecomposeTask : Wasm2KtToolingTask() {
     fun decompose() = submit(DecomposeAction::class.java) {
         it.component.set(component)
         it.outputDir.set(outputDir)
+        it.failOnUnsupportedFeatures.set(failOnUnsupportedFeatures)
     }
 
     interface Params : WorkParameters {
         val component: RegularFileProperty
         val outputDir: DirectoryProperty
+        val failOnUnsupportedFeatures: Property<Boolean>
     }
 
     abstract class DecomposeAction : WorkAction<Params> {
+        private val logger = org.gradle.api.logging.Logging.getLogger(Wasm2KtDecomposeTask::class.java)
+
         override fun execute() {
             val out = parameters.outputDir.get().asFile
             out.deleteRecursively()
-            Decomposer.decompose(parameters.component.get().asFile.toPath(), out.toPath())
+            val component = parameters.component.get().asFile
+            Decomposer.decompose(component.toPath(), out.toPath())
+
+            // Report what would otherwise only fail on the device, the first time it is used (#39).
+            val problems = PlanCheck.unsupportedFeatures(out.toPath())
+            if (problems.isEmpty()) return
+            val report = "wasm2kt: ${component.name} uses features the Chicory backend does not support yet; " +
+                "calls that reach them will throw at run time:\n" + problems.joinToString("\n") { "  - $it" }
+            if (parameters.failOnUnsupportedFeatures.get()) {
+                out.deleteRecursively() // never leave a decomposed result behind for a failed check
+                throw IllegalStateException("$report\n(set wasm2kt.failOnUnsupportedFeatures = false to build anyway)")
+            }
+            logger.warn("$report\n(set wasm2kt.failOnUnsupportedFeatures = true to fail the build instead)")
         }
     }
 }

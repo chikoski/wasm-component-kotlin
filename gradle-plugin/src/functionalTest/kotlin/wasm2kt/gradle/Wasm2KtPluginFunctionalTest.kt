@@ -99,4 +99,40 @@ class Wasm2KtPluginFunctionalTest {
         assertEquals(TaskOutcome.FROM_CACHE, third.task(":wasm2ktCompileRoundtrip")?.outcome)
         assertTrue("RESULT scaled=42,tag=ERR#404;counter=42" in third.output)
     }
+
+    @Test
+    fun `unsupported features are reported at build time`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("composed-res.wasm"), dir.resolve("composed.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText("""rootProject.name = "consumer"""")
+        fun buildScript(fail: Boolean) = dir.resolve("build.gradle.kts").writeText(
+            """
+            plugins { id("io.github.wasm2kt") }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                failOnUnsupportedFeatures.set($fail)
+                components {
+                    register("composed") {
+                        source.set(file("composed.wasm"))
+                        packageName.set("com.example.composed")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        // Default: a warning naming what will fail at run time, and the build goes on.
+        buildScript(fail = false)
+        val warned = runner(dir, "wasm2ktDecomposeComposed").build()
+        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in warned.output, warned.output)
+        assertTrue("ResourceTransferOwn" in warned.output, warned.output)
+
+        // Opted in: the same check fails the build.
+        buildScript(fail = true)
+        val failed = runner(dir, "wasm2ktDecomposeComposed").buildAndFail()
+        assertTrue("ResourceTransferOwn" in failed.output, failed.output)
+        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktDecomposeComposed")?.outcome)
+    }
 }

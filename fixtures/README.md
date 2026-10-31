@@ -13,6 +13,7 @@ decomposer（`decomposer/regenerate-fixtures.sh`）で共有しています。
 | `host-res` | ホスト定義 resource（import した interface の `blob`、world 直下の `ticket`）と、ホストを呼ぶコンポーネント定義 resource | [`src/host-res`](src/host-res)（`build.sh` で再ビルド） |
 | `abi-edge` | Canonical ABI の検証用。core の値をそのまま返し、不正な char / 判別子 / 文字列 / ポインタ、`cabi_realloc` の異常を起こす | [`src/abi-edge`](src/abi-edge)（手書きの WAT。`build.sh` で再ビルド） |
 | `res-edge` | resource の所有権の検証用。コンポーネント定義の resource を、生のハンドル番号で操作する（返したハンドルの再利用など。#31） | [`src/res-edge`](src/res-edge)（手書きの WAT。`build.sh` で再ビルド） |
+| `composed-res` | 子コンポーネントの間で resource を受け渡す合成コンポーネント。アダプターが Chicory 未対応の組み込み関数を使う（#39） | [`src/composed-res`](src/composed-res)（手書きの WAT。`build.sh` で再ビルド） |
 | `calculator` | WIT のみ（コード生成と InMemory セッションのテスト用）。`calculator.json` は `wasm-tools component wit calculator.wit --json` の出力 | — |
 
 `src/` 以下にソースがあるものは、Rust（`types`、`host-res`）と wasm-tools で再ビルドできます。再ビルドしたら `decomposer/regenerate-fixtures.sh` も実行してください。
