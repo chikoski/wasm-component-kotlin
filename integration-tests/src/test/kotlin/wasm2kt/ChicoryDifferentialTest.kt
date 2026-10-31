@@ -212,6 +212,46 @@ class ChicoryDifferentialTest {
     }
 
     @Test
+    fun `host import responses larger than 64 KiB cross the boundary under both backends`() {
+        // The FFM bridge used to copy responses into a fixed 64 KiB buffer (#35). merge-new makes two
+        // host blobs, merges them and reads the result back through the `blob.read` import, whose
+        // JSON response here is about 450 KB.
+        fun blobs() = object : WitHostImportDispatcher {
+            val data = HashMap<Int, ByteArray>()
+            var next = 1
+            fun bytes(e: JsonElement) = ByteArray(e.jsonArray.size) { e.jsonArray[it].jsonPrimitive.int.toByte() }
+            fun store(b: ByteArray) = next++.also { data[it] = b }
+            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = when (importSpec) {
+                "store#[constructor]blob" -> JsonPrimitive(store(bytes(args[0])))
+                "store#[static]blob.merge" -> JsonPrimitive(store(data.getValue(args[0].jsonPrimitive.int) + data.getValue(args[1].jsonPrimitive.int)))
+                "store#[method]blob.read" -> JsonArray(data.getValue(args[0].jsonPrimitive.int).map { JsonPrimitive(it.toInt() and 0xFF) })
+                "store#[resource-drop]blob" -> JsonNull.also { data.remove(args[0].jsonPrimitive.int) }
+                else -> error("Unexpected import: $importSpec")
+            }
+        }
+        fun list(n: Int, seed: Int) = JsonArray(List(n) { JsonPrimitive((it * 31 + seed) and 0xFF) })
+        runBoth("host-res", ::blobs, listOf(Call("merge-new", list(60_000, 1), list(60_000, 2))))
+        WasmtimeBackend(fixture("host-res"), blobs()).use { b ->
+            val merged = b.invoke("merge-new", JsonArray(listOf(list(60_000, 1), list(60_000, 2)))).jsonArray
+            assertEquals(120_000, merged.size, "the whole response must reach the component")
+        }
+    }
+
+    @Test
+    fun `a long error message from a host import is reported in full`() {
+        val message = "x".repeat(100_000) + "-end"
+        val failing = object : WitHostImportDispatcher {
+            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = throw IllegalStateException(message)
+        }
+        val e = kotlin.test.assertFailsWith<IllegalStateException> {
+            WasmtimeBackend(fixture("roundtrip"), failing).use { b ->
+                b.invoke("describe-code", JsonArray(listOf(JsonPrimitive("p"), JsonPrimitive(1))))
+            }
+        }
+        kotlin.test.assertTrue(e.message!!.contains(message), "the host's message was cut short")
+    }
+
+    @Test
     fun `host imports see the same arguments under both backends`() {
         fun recorder(log: MutableList<String>) = object : WitHostImportDispatcher {
             override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement {
