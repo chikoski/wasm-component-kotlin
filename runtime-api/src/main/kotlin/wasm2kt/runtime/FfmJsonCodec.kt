@@ -29,6 +29,8 @@ object FfmJsonCodec {
         if (value == null || value == Unit) return JsonNull
         return when (value) {
             is JsonElement -> value
+            is WitHostResource -> JsonPrimitive(HostResourceTable.current().lower(value))
+            is WitBorrowed -> JsonPrimitive(HostResourceTable.current().lend(value.resource))
             is WitJsonSerializable -> value.toWitJson()
             is Boolean -> JsonPrimitive(value)
             is Byte -> JsonPrimitive(value)

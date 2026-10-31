@@ -96,7 +96,8 @@ KotlinPoet）は Gradle ワーカー内の**独立したクラスローダー**�
 * 文字列（utf8 / utf16 / latin1+utf16）、list、record、variant / enum / option / result（flat 表現の join を含む）、flags、
   16 個を超える flat 引数・2 個以上の flat 戻り値（線形メモリ経由）、post-return に対応
 * ホスト import（ディスパッチキーは Wasmtime ブリッジと同じ）、コンポーネントが定義する resource（`resource.new/rep/drop`、
-  デストラクタ、ホスト側ハンドル）に対応
+  デストラクタ、ホスト側ハンドル）、ホストが定義する resource（import された resource。own / borrow の受け渡し、
+  drop 時の `[resource-drop]<name>` 呼び出し。[ADR-0008](adr/0008-host-defined-resources.md)）に対応
 * `ChicoryComponent.fromDirectory(dir)` を使うと、分解結果をインタプリタで直接実行することもできます（テスト・検証用）
 
 ### エラーとトラップ
@@ -116,7 +117,6 @@ Wasmtime ブリッジとの差分テスト（`ChicoryDifferentialTest`）で、�
 
 ### 未対応
 
-* ホスト側で定義した resource（import した resource の受け渡し）
 * async（WASI P3: `future` / `stream`）とコールバック
 * WASI のホスト実装（`wasi:cli` などを import するコンポーネントは、現時点では import をホストで実装する必要があります）
 

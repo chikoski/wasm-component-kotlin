@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
-use wasmtime::component::{Component, Instance, Linker, ResourceAny, Type, Val};
-use wasmtime::{Config, Engine, Precompiled, Store};
+use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny, ResourceType, Type, Val};
+use wasmtime::{AsContextMut, Config, Engine, Precompiled, Store, StoreContextMut};
 
 /// Host callback function pointer type:
 /// Receives `(user_data, import_name_json_or_str, args_json_cstr)` and returns a newly allocated C string JSON response
@@ -26,6 +26,16 @@ pub struct StoreData {
     pub jni_callback: Option<(JavaVM, GlobalRef)>,
     pub resources: HashMap<i32, ResourceAny>,
     pub next_handle: i32,
+    /// Resource types the component imports, as they appear in import signatures (uninstantiated).
+    pub imported_resource_types: Vec<ResourceType>,
+    /// Owned handles standing in for host borrows during the current call.
+    pub lent_host_resources: Vec<ResourceAny>,
+}
+
+/// Whether `rt` is a host-defined resource: the host type itself (export signatures of an instance)
+/// or an imported resource type as it appears in the component's import signatures.
+fn is_host_resource(rt: &ResourceType, store: &StoreContextMut<'_, StoreData>) -> bool {
+    *rt == host_resource_type() || store.data().imported_resource_types.contains(rt)
 }
 
 pub struct BridgeSession {
@@ -67,11 +77,25 @@ fn err_response(err: impl ToString) -> *mut c_char {
     })
 }
 
+/// Marker type for every host-defined resource. The JVM side identifies the object by its rep;
+/// all imported resource types share this host type (Wasmtime 29 has no dynamic host types).
+struct HostRes;
+
+fn host_resource_type() -> ResourceType {
+    ResourceType::host::<HostRes>()
+}
+
+fn json_handle(j: &JsonValue, what: &str) -> Result<i64> {
+    j.as_i64()
+        .or_else(|| j.get("handle")?.as_i64())
+        .ok_or_else(|| anyhow!("Expected integer handle for {}<resource>, got {}", what, j))
+}
+
 /// Convert JSON representation + expected `wasmtime::component::Type` into `wasmtime::component::Val`.
 fn json_to_val(
     j: &JsonValue,
     ty: &Type,
-    resources: &mut HashMap<i32, ResourceAny>,
+    store: &mut StoreContextMut<'_, StoreData>,
 ) -> Result<Val> {
     match ty {
         Type::Bool => Ok(Val::Bool(
@@ -134,7 +158,7 @@ fn json_to_val(
             let elem_ty = list_ty.ty();
             let mut vals = Vec::with_capacity(arr.len());
             for item in arr {
-                vals.push(json_to_val(item, &elem_ty, resources)?);
+                vals.push(json_to_val(item, &elem_ty, store)?);
             }
             Ok(Val::List(vals))
         }
@@ -145,7 +169,7 @@ fn json_to_val(
                 let fval = obj
                     .get(field.name)
                     .ok_or_else(|| anyhow!("Missing record field '{}'", field.name))?;
-                fields.push((field.name.to_string(), json_to_val(fval, &field.ty, resources)?));
+                fields.push((field.name.to_string(), json_to_val(fval, &field.ty, store)?));
             }
             Ok(Val::Record(fields))
         }
@@ -156,7 +180,7 @@ fn json_to_val(
                 let item = arr
                     .get(idx)
                     .ok_or_else(|| anyhow!("Missing tuple element at {}", idx))?;
-                vals.push(json_to_val(item, &elem_ty, resources)?);
+                vals.push(json_to_val(item, &elem_ty, store)?);
             }
             Ok(Val::Tuple(vals))
         }
@@ -173,7 +197,7 @@ fn json_to_val(
             let payload = match case_def.ty {
                 Some(ref payload_ty) => {
                     let pval = obj.get("value").unwrap_or(&JsonValue::Null);
-                    Some(Box::new(json_to_val(pval, payload_ty, resources)?))
+                    Some(Box::new(json_to_val(pval, payload_ty, store)?))
                 }
                 None => None,
             };
@@ -193,14 +217,14 @@ fn json_to_val(
                         "none" => Ok(Val::Option(None)),
                         "some" => {
                             let inner_json = obj.get("value").unwrap_or(&JsonValue::Null);
-                            let inner_val = json_to_val(inner_json, &opt_ty.ty(), resources)?;
+                            let inner_val = json_to_val(inner_json, &opt_ty.ty(), store)?;
                             Ok(Val::Option(Some(Box::new(inner_val))))
                         }
                         other => bail!("Invalid option tag: {}", other),
                     };
                 }
             }
-            let inner_val = json_to_val(j, &opt_ty.ty(), resources)?;
+            let inner_val = json_to_val(j, &opt_ty.ty(), store)?;
             Ok(Val::Option(Some(Box::new(inner_val))))
         }
         Type::Result(res_ty) => {
@@ -214,7 +238,7 @@ fn json_to_val(
                     let ok_val = match res_ty.ok() {
                         Some(ok_ty) => {
                             let v = obj.get("value").unwrap_or(&JsonValue::Null);
-                            Some(Box::new(json_to_val(v, &ok_ty, resources)?))
+                            Some(Box::new(json_to_val(v, &ok_ty, store)?))
                         }
                         None => None,
                     };
@@ -224,7 +248,7 @@ fn json_to_val(
                     let err_val = match res_ty.err() {
                         Some(err_ty) => {
                             let v = obj.get("error").unwrap_or(&JsonValue::Null);
-                            Some(Box::new(json_to_val(v, &err_ty, resources)?))
+                            Some(Box::new(json_to_val(v, &err_ty, store)?))
                         }
                         None => None,
                     };
@@ -256,24 +280,33 @@ fn json_to_val(
                 bail!("Expected array or u64 bitmask for flags, got {}", j)
             }
         }
+        Type::Own(rt) if is_host_resource(rt, store) => {
+            // A host resource, identified by the rep the JVM side assigned.
+            let rep = json_handle(j, "own")? as u32;
+            Ok(Val::Resource(ResourceAny::try_from_resource(Resource::<HostRes>::new_own(rep), &mut *store)?))
+        }
+        Type::Borrow(rt) if is_host_resource(rt, store) => {
+            // Wasmtime 29 cannot lower a host-made borrow outside a host call, so lend an owned
+            // handle instead and release it once the call returns (see session_invoke_internal).
+            let rep = json_handle(j, "borrow")? as u32;
+            let any = ResourceAny::try_from_resource(Resource::<HostRes>::new_own(rep), &mut *store)?;
+            store.data_mut().lent_host_resources.push(any);
+            Ok(Val::Resource(any))
+        }
         Type::Own(_) => {
-            let handle = j
-                .as_i64()
-                .or_else(|| j.get("handle")?.as_i64())
-                .ok_or_else(|| anyhow!("Expected integer handle for own<resource>, got {}", j))?
-                as i32;
-            let res = resources
+            let handle = json_handle(j, "own")? as i32;
+            let res = store
+                .data_mut()
+                .resources
                 .remove(&handle)
                 .ok_or_else(|| anyhow!("Resource handle {} not found or already consumed", handle))?;
             Ok(Val::Resource(res))
         }
         Type::Borrow(_) => {
-            let handle = j
-                .as_i64()
-                .or_else(|| j.get("handle")?.as_i64())
-                .ok_or_else(|| anyhow!("Expected integer handle for borrow<resource>, got {}", j))?
-                as i32;
-            let res = resources
+            let handle = json_handle(j, "borrow")? as i32;
+            let res = store
+                .data()
+                .resources
                 .get(&handle)
                 .copied()
                 .ok_or_else(|| anyhow!("Resource handle {} not found", handle))?;
@@ -286,8 +319,7 @@ fn json_to_val(
 fn val_to_json(
     val: &Val,
     ty: &Type,
-    resources: &mut HashMap<i32, ResourceAny>,
-    next_handle: &mut i32,
+    store: &mut StoreContextMut<'_, StoreData>,
 ) -> Result<JsonValue> {
     match (val, ty) {
         (Val::Bool(b), _) => Ok(json!(*b)),
@@ -307,7 +339,7 @@ fn val_to_json(
             let elem_ty = list_ty.ty();
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(val_to_json(item, &elem_ty, resources, next_handle)?);
+                out.push(val_to_json(item, &elem_ty, store)?);
             }
             Ok(JsonValue::Array(out))
         }
@@ -318,14 +350,14 @@ fn val_to_json(
                 let fty = field_types
                     .get(name.as_str())
                     .ok_or_else(|| anyhow!("Unknown field {}", name))?;
-                map.insert(name.clone(), val_to_json(fval, fty, resources, next_handle)?);
+                map.insert(name.clone(), val_to_json(fval, fty, store)?);
             }
             Ok(JsonValue::Object(map))
         }
         (Val::Tuple(items), Type::Tuple(tup_ty)) => {
             let mut out = Vec::with_capacity(items.len());
             for (item, elem_ty) in items.iter().zip(tup_ty.types()) {
-                out.push(val_to_json(item, &elem_ty, resources, next_handle)?);
+                out.push(val_to_json(item, &elem_ty, store)?);
             }
             Ok(JsonValue::Array(out))
         }
@@ -335,7 +367,7 @@ fn val_to_json(
                 .find(|c| c.name == tag)
                 .ok_or_else(|| anyhow!("Unknown variant case {}", tag))?;
             let payload_json = match (payload, case_def.ty) {
-                (Some(pval), Some(pty)) => val_to_json(pval, &pty, resources, next_handle)?,
+                (Some(pval), Some(pty)) => val_to_json(pval, &pty, store)?,
                 _ => JsonValue::Null,
             };
             Ok(json!({
@@ -346,7 +378,7 @@ fn val_to_json(
         (Val::Enum(name), _) => Ok(json!(name)),
         (Val::Option(opt), Type::Option(opt_ty)) => match opt {
             Some(inner) => {
-                let inner_j = val_to_json(inner, &opt_ty.ty(), resources, next_handle)?;
+                let inner_j = val_to_json(inner, &opt_ty.ty(), store)?;
                 Ok(json!({
                     "option": "some",
                     "value": inner_j
@@ -359,7 +391,7 @@ fn val_to_json(
         (Val::Result(res), Type::Result(res_ty)) => match res {
             Ok(ok_opt) => {
                 let v = match (ok_opt, res_ty.ok()) {
-                    (Some(inner), Some(ok_ty)) => val_to_json(inner, &ok_ty, resources, next_handle)?,
+                    (Some(inner), Some(ok_ty)) => val_to_json(inner, &ok_ty, store)?,
                     _ => JsonValue::Null,
                 };
                 Ok(json!({
@@ -369,7 +401,7 @@ fn val_to_json(
             }
             Err(err_opt) => {
                 let v = match (err_opt, res_ty.err()) {
-                    (Some(inner), Some(err_ty)) => val_to_json(inner, &err_ty, resources, next_handle)?,
+                    (Some(inner), Some(err_ty)) => val_to_json(inner, &err_ty, store)?,
                     _ => JsonValue::Null,
                 };
                 Ok(json!({
@@ -387,10 +419,16 @@ fn val_to_json(
             }
             Ok(json!(mask))
         }
+        (Val::Resource(res_any), _) if res_any.ty() == host_resource_type() => {
+            // A host resource coming back from the guest: report its rep.
+            let res: Resource<HostRes> = res_any.try_into_resource(&mut *store)?;
+            Ok(json!(res.rep()))
+        }
         (Val::Resource(res_any), _) => {
-            let h = *next_handle;
-            *next_handle += 1;
-            resources.insert(h, *res_any);
+            let data = store.data_mut();
+            let h = data.next_handle;
+            data.next_handle += 1;
+            data.resources.insert(h, *res_any);
             Ok(json!(h))
         }
         _ => bail!("Type/Val mismatch when converting Val to JSON: {:?}", val),
@@ -403,7 +441,8 @@ fn register_host_imports(
     linker: &mut Linker<StoreData>,
     component: &Component,
     imports_list: &[String],
-) -> Result<()> {
+) -> Result<Vec<ResourceType>> {
+    let mut imported_resource_types = Vec::new();
     let comp_ty = component.component_type();
     let engine = component.engine();
 
@@ -437,6 +476,12 @@ fn register_host_imports(
                     .map(|s| s.split('@').next().unwrap_or(s))
                     .unwrap_or(import_name);
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
+                    if let wasmtime::component::types::ComponentItem::Resource(rt) = export_item {
+                        imported_resource_types.push(rt);
+                        let drop_key = format!("{}#[resource-drop]{}", short_iface, export_fn_name);
+                        inst.resource(export_fn_name, host_resource_type(), host_resource_dtor(drop_key))?;
+                        continue;
+                    }
                     if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item {
                         let callback_key = format!("{}#{}", short_iface, export_fn_name);
                         let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
@@ -454,12 +499,25 @@ fn register_host_imports(
                     }
                 }
             }
+            wasmtime::component::types::ComponentItem::Resource(rt) => {
+                imported_resource_types.push(rt);
+                let drop_key = format!("[resource-drop]{}", import_name);
+                linker.root().resource(import_name, host_resource_type(), host_resource_dtor(drop_key))?;
+            }
             _ => {}
         }
     }
 
     let _ = imports_list;
-    Ok(())
+    Ok(imported_resource_types)
+}
+
+/// Called when the guest drops its last owning handle to a host resource: forwards
+/// `[resource-drop]<name>` with the rep to the JVM host, which closes the object.
+fn host_resource_dtor(
+    key: String,
+) -> impl Fn(StoreContextMut<'_, StoreData>, u32) -> Result<()> + Send + Sync + 'static {
+    move |mut ctx, rep| invoke_host_callback(&mut ctx, &key, &[Val::U32(rep)], &[Type::U32], &mut [], &[])
 }
 
 fn extract_and_clear_jni_exception(env: &mut JNIEnv<'_>) -> String {
@@ -498,9 +556,9 @@ fn invoke_host_callback(
     // Serialize all Val params (including records, variants, enums, flags, options, results, lists, tuples, and resources) into JSON array
     let mut json_params = Vec::with_capacity(params.len());
     {
-        let data = ctx.data_mut();
+        let mut sc = ctx.as_context_mut();
         for (p, p_ty) in params.iter().zip(param_types.iter()) {
-            let j = val_to_json(p, p_ty, &mut data.resources, &mut data.next_handle)?;
+            let j = val_to_json(p, p_ty, &mut sc)?;
             json_params.push(j);
         }
     }
@@ -575,17 +633,15 @@ fn invoke_host_callback(
     };
 
     if !results.is_empty() {
-        if let Some(resp_str) = resp_str_opt {
+        // An empty response is JSON null (e.g. an option import returning none).
+        {
+            let resp_str = resp_str_opt.unwrap_or_else(|| "null".to_string());
             let resp_json: JsonValue = serde_json::from_str(&resp_str)?;
             if results.len() == 1 && result_types.len() == 1 {
-                results[0] = json_to_val(
-                    &resp_json,
-                    &result_types[0],
-                    &mut ctx.data_mut().resources,
-                )?;
+                results[0] = json_to_val(&resp_json, &result_types[0], &mut ctx.as_context_mut())?;
             } else if let Some(arr) = resp_json.as_array() {
                 for ((slot, r_ty), item_j) in results.iter_mut().zip(result_types.iter()).zip(arr.iter()) {
-                    *slot = json_to_val(item_j, r_ty, &mut ctx.data_mut().resources)?;
+                    *slot = json_to_val(item_j, r_ty, &mut ctx.as_context_mut())?;
                 }
             }
         }
@@ -745,7 +801,7 @@ fn create_session_from_component(
     jni_callback: Option<(JavaVM, GlobalRef)>,
 ) -> Result<BridgeSession> {
     let mut linker = Linker::new(&engine);
-    register_host_imports(&mut linker, &component, &imports_list)?;
+    let imported_resource_types = register_host_imports(&mut linker, &component, &imports_list)?;
 
     let mut store = Store::new(
         &engine,
@@ -754,6 +810,8 @@ fn create_session_from_component(
             jni_callback,
             resources: HashMap::new(),
             next_handle: 1,
+            imported_resource_types,
+            lent_host_resources: Vec::new(),
         },
     );
 
@@ -940,34 +998,32 @@ fn session_invoke_internal(
 
     let mut wasm_params = Vec::with_capacity(param_types.len());
     for (arg_j, (_, p_ty)) in args_json.iter().zip(param_types.iter()) {
-        let val = json_to_val(arg_j, p_ty, &mut session.store.data_mut().resources)?;
+        let val = json_to_val(arg_j, p_ty, &mut session.store.as_context_mut())?;
         wasm_params.push(val);
     }
 
     let mut wasm_results = vec![Val::Bool(false); result_types.len()];
-    func.call(&mut session.store, &wasm_params, &mut wasm_results)
-        .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))?;
-    func.post_return(&mut session.store)
-        .with_context(|| format!("Wasmtime post_return for '{}' failed", func_spec))?;
+    let called = func
+        .call(&mut session.store, &wasm_params, &mut wasm_results)
+        .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))
+        .and_then(|_| {
+            func.post_return(&mut session.store)
+                .with_context(|| format!("Wasmtime post_return for '{}' failed", func_spec))
+        });
+    // End the host borrows of this call (these handles carry no destructor).
+    for lent in std::mem::take(&mut session.store.data_mut().lent_host_resources) {
+        let _ = lent.resource_drop(&mut session.store);
+    }
+    called?;
 
-    let data = session.store.data_mut();
+    let mut sc = session.store.as_context_mut();
     match result_types.len() {
         0 => Ok(JsonValue::Null),
-        1 => val_to_json(
-            &wasm_results[0],
-            &result_types[0],
-            &mut data.resources,
-            &mut data.next_handle,
-        ),
+        1 => val_to_json(&wasm_results[0], &result_types[0], &mut sc),
         _ => {
             let mut tuple_out = Vec::with_capacity(result_types.len());
             for (r_val, r_ty) in wasm_results.iter().zip(result_types.iter()) {
-                tuple_out.push(val_to_json(
-                    r_val,
-                    r_ty,
-                    &mut data.resources,
-                    &mut data.next_handle,
-                )?);
+                tuple_out.push(val_to_json(r_val, r_ty, &mut sc)?);
             }
             Ok(JsonValue::Array(tuple_out))
         }

@@ -46,8 +46,9 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### 検証済み
 
-* `./gradlew check`（TestKit の functionalTest を含む）: 45 件中 44 件成功、1 件スキップ（新しい wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）
+* `./gradlew check`（TestKit の functionalTest を含む）: 48 件中 47 件成功、1 件スキップ（新しい wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
+* ホスト定義 resource: Wasmtime（FFM / JNI）と Chicory で同じハーネスのイベント列が一致（own / borrow / 入れ子の option・result / static / world 直下の resource / drop 時の `close()`、貸し出し中のハンドルの drop の拒否）
 * Wasmtime と挙動が違う仕様の項目（UTF-16 のアラインメント、ホストの値の範囲検査）と再入は Chicory 単体のテストで確認（[ADR-0007](adr/0007-canonical-abi-validation.md)）
 * Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
 * Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
@@ -55,8 +56,9 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 未検証・既知の制約
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
-* Chicory バックエンドの未対応機能: ホスト定義 resource、async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
-* Chicory バックエンドでは、ホストに貸し出し中（`borrow`）のハンドルを import の中で drop する経路を、テスト用のコンポーネントがないため確認できていない（#14 で追加する）
+* Chicory バックエンドの未対応機能: async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
+* ホスト resource の受け渡しは、セッションの呼び出し中（同じスレッド）に限られる。Wasmtime では import resource 型をすべて 1 つのホスト型で登録している（[ADR-0008](adr/0008-host-defined-resources.md)）
+* コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
@@ -82,9 +84,8 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 | 順 | Issue | ID | 内容 |
 | :--- | :--- | :--- | :--- |
-| 1 | [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource（WASI 0.3 の前提） |
-| 2 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
-| 3 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない） |
+| 1 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
+| 2 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない） |
 
 ### P2
 
@@ -97,6 +98,7 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 ### 完了
 
+* [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) ホスト定義 resource — [ADR-0008](adr/0008-host-defined-resources.md)（`WitHostResource` の interface と `Imports` の constructor / static、`HostResourceTable`、Chicory と Wasmtime ブリッジの両方、plan v2）
 * [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) Canonical ABI の検証の厳密化 — [ADR-0007](adr/0007-canonical-abi-validation.md)（`ComponentTrapException` と poison、`may_enter` / `may_leave`、ポインタ・長さ・エンコーディング・判別子・`char` の検査、ハンドルの貸し出し数、ホストの値の範囲検査、NaN の正規化）
 * [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) 型マッピングの見直し — [ADR-0006](adr/0006-type-mapping.md)（option → `T?`、`list<u8>` → `ByteArray`、char → `CodePoint`、world 名、`WitResult` の補助関数、WIT シグネチャの KDoc）。async の型は #16 で実装
 * [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) ルートのモジュール分割 — ast / generator / cli / runtime-wasmtime / integration-tests、fixtures を共有ディレクトリに

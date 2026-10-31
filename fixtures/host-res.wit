@@ -1,0 +1,50 @@
+package example:host-res@0.1.0;
+
+/// Implemented by the host: a growable byte buffer.
+interface store {
+    resource blob {
+        constructor(init: list<u8>);
+        size: func() -> u32;
+        append: func(data: list<u8>);
+        read: func() -> list<u8>;
+        merge: static func(a: borrow<blob>, b: own<blob>) -> blob;
+    }
+    log: func(msg: string);
+    /// Returns a blob made by the host, or none.
+    find: func(name: string) -> option<blob>;
+}
+
+/// Implemented by the guest.
+interface guest-api {
+    resource counter {
+        constructor(v: s32);
+        /// Calls `store.log` while the counter is borrowed.
+        poke: func();
+        value: func() -> s32;
+    }
+}
+
+world host-res {
+    use store.{blob};
+    import store;
+
+    /// A world-level host resource.
+    resource ticket {
+        constructor(id: u32);
+        id: func() -> u32;
+    }
+
+    export guest-api;
+
+    /// Creates a blob, appends to it, returns its size and drops it.
+    export make-and-measure: func(init: list<u8>, extra: list<u8>) -> u32;
+    /// Creates a blob and hands ownership to the host.
+    export keep: func(init: list<u8>) -> blob;
+    export measure: func(b: borrow<blob>) -> u32;
+    /// Takes ownership and drops the blob.
+    export consume: func(b: blob) -> u32;
+    export merge-new: func(a: list<u8>, b: list<u8>) -> list<u8>;
+    export lookup: func(name: string) -> option<blob>;
+    export echo-blob: func(b: blob) -> result<blob, string>;
+    export ticket-id: func(n: u32) -> u32;
+}

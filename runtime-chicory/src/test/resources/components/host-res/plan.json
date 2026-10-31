@@ -1,0 +1,1120 @@
+{
+  "version": 2,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.size",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[resource-drop]blob",
+          "kind": "func"
+        },
+        {
+          "module": "[export]example:host-res/guest-api@0.1.0",
+          "name": "[resource-new]counter",
+          "kind": "func"
+        },
+        {
+          "module": "[export]example:host-res/guest-api@0.1.0",
+          "name": "[resource-drop]counter",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "log",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[constructor]blob",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "find",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.append",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[static]blob.merge",
+          "kind": "func"
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.read",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[constructor]ticket",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[method]ticket.id",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[resource-drop]ticket",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "actual",
+          "name": "0",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "1",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "2",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "3",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "4",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "5",
+          "kind": "func"
+        },
+        {
+          "module": "shim",
+          "name": "$imports",
+          "kind": "table"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "resource",
+      "resource": 2,
+      "dtor": {
+        "instance": 0,
+        "name": "5",
+        "kind": "export"
+      },
+      "instance": 0
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 0,
+      "args": [
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.size",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[resource-drop]blob",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "[export]example:host-res/guest-api@0.1.0",
+          "name": "[resource-new]counter",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "[export]example:host-res/guest-api@0.1.0",
+          "name": "[resource-drop]counter",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "log",
+          "def": {
+            "instance": 0,
+            "name": "0",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[constructor]blob",
+          "def": {
+            "instance": 0,
+            "name": "1",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "find",
+          "def": {
+            "instance": 0,
+            "name": "2",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.append",
+          "def": {
+            "instance": 0,
+            "name": "3",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[static]blob.merge",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        },
+        {
+          "module": "example:host-res/store@0.1.0",
+          "name": "[method]blob.read",
+          "def": {
+            "instance": 0,
+            "name": "4",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[constructor]ticket",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[method]ticket.id",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[resource-drop]ticket",
+          "def": {
+            "kind": "trampoline",
+            "index": 7
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 1,
+        "name": "memory"
+      }
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_realloc",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 2,
+      "args": [
+        {
+          "module": "actual",
+          "name": "0",
+          "def": {
+            "kind": "trampoline",
+            "index": 8
+          }
+        },
+        {
+          "module": "actual",
+          "name": "1",
+          "def": {
+            "kind": "trampoline",
+            "index": 9
+          }
+        },
+        {
+          "module": "actual",
+          "name": "2",
+          "def": {
+            "kind": "trampoline",
+            "index": 10
+          }
+        },
+        {
+          "module": "actual",
+          "name": "3",
+          "def": {
+            "kind": "trampoline",
+            "index": 11
+          }
+        },
+        {
+          "module": "actual",
+          "name": "4",
+          "def": {
+            "kind": "trampoline",
+            "index": 12
+          }
+        },
+        {
+          "module": "actual",
+          "name": "5",
+          "def": {
+            "instance": 1,
+            "name": "example:host-res/guest-api@0.1.0#[dtor]counter",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "shim",
+          "name": "$imports",
+          "def": {
+            "instance": 0,
+            "name": "$imports",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-post-return",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_post_merge-new",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 1,
+      "def": {
+        "instance": 1,
+        "name": "cabi_post_echo-blob",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "lower-import",
+      "import": 2,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      },
+      "options": 0,
+      "index": 0
+    },
+    {
+      "kind": "resource-drop",
+      "table": 0,
+      "index": 1
+    },
+    {
+      "kind": "resource-new",
+      "table": 2,
+      "index": 2
+    },
+    {
+      "kind": "resource-drop",
+      "table": 2,
+      "index": 3
+    },
+    {
+      "kind": "lower-import",
+      "import": 3,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 4
+    },
+    {
+      "kind": "lower-import",
+      "import": 4,
+      "type": {
+        "params": [
+          {
+            "name": "id",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 1
+          }
+        ],
+        "async": false
+      },
+      "options": 0,
+      "index": 5
+    },
+    {
+      "kind": "lower-import",
+      "import": 5,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 1
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      },
+      "options": 0,
+      "index": 6
+    },
+    {
+      "kind": "resource-drop",
+      "table": 1,
+      "index": 7
+    },
+    {
+      "kind": "lower-import",
+      "import": 6,
+      "type": {
+        "params": [
+          {
+            "name": "msg",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      },
+      "options": 2,
+      "index": 8
+    },
+    {
+      "kind": "lower-import",
+      "import": 7,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      },
+      "options": 3,
+      "index": 9
+    },
+    {
+      "kind": "lower-import",
+      "import": 8,
+      "type": {
+        "params": [
+          {
+            "name": "name",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "async": false
+      },
+      "options": 4,
+      "index": 10
+    },
+    {
+      "kind": "lower-import",
+      "import": 9,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "data",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      },
+      "options": 4,
+      "index": 11
+    },
+    {
+      "kind": "lower-import",
+      "import": 10,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      },
+      "options": 5,
+      "index": 12
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 4,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 5,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 6,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 7,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 8,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 0,
+      "async": false
+    },
+    {
+      "index": 9,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": 1,
+      "async": false
+    },
+    {
+      "index": 10,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "blob"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "ticket",
+      "path": []
+    },
+    {
+      "index": 2,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "[method]blob.size"
+      ]
+    },
+    {
+      "index": 3,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "[static]blob.merge"
+      ]
+    },
+    {
+      "index": 4,
+      "name": "[constructor]ticket",
+      "path": []
+    },
+    {
+      "index": 5,
+      "name": "[method]ticket.id",
+      "path": []
+    },
+    {
+      "index": 6,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "log"
+      ]
+    },
+    {
+      "index": 7,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "[constructor]blob"
+      ]
+    },
+    {
+      "index": 8,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "find"
+      ]
+    },
+    {
+      "index": 9,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "[method]blob.append"
+      ]
+    },
+    {
+      "index": 10,
+      "name": "example:host-res/store@0.1.0",
+      "path": [
+        "[method]blob.read"
+      ]
+    }
+  ],
+  "resourceTables": [
+    {
+      "index": 0,
+      "resource": 0,
+      "instance": 0,
+      "imported": true,
+      "import": 0
+    },
+    {
+      "index": 1,
+      "resource": 1,
+      "instance": 0,
+      "imported": true,
+      "import": 1
+    },
+    {
+      "index": 2,
+      "resource": 2,
+      "instance": 0,
+      "imported": false,
+      "import": null
+    }
+  ],
+  "exports": [
+    {
+      "instance": null,
+      "name": "make-and-measure",
+      "func": {
+        "instance": 1,
+        "name": "make-and-measure",
+        "kind": "export"
+      },
+      "options": 6,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          },
+          {
+            "name": "extra",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "keep",
+      "func": {
+        "instance": 1,
+        "name": "keep",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "measure",
+      "func": {
+        "instance": 1,
+        "name": "consume",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "b",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "consume",
+      "func": {
+        "instance": 1,
+        "name": "consume",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "merge-new",
+      "func": {
+        "instance": 1,
+        "name": "merge-new",
+        "kind": "export"
+      },
+      "options": 8,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "lookup",
+      "func": {
+        "instance": 1,
+        "name": "lookup",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "name",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-blob",
+      "func": {
+        "instance": 1,
+        "name": "echo-blob",
+        "kind": "export"
+      },
+      "options": 9,
+      "type": {
+        "params": [
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": {
+              "k": "own",
+              "table": 0
+            },
+            "err": {
+              "k": "string"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "ticket-id",
+      "func": {
+        "instance": 1,
+        "name": "ticket-id",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "n",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:host-res/guest-api@0.1.0",
+      "name": "[constructor]counter",
+      "func": {
+        "instance": 1,
+        "name": "example:host-res/guest-api@0.1.0#[constructor]counter",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "s32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 2
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:host-res/guest-api@0.1.0",
+      "name": "[method]counter.poke",
+      "func": {
+        "instance": 1,
+        "name": "example:host-res/guest-api@0.1.0#[method]counter.poke",
+        "kind": "export"
+      },
+      "options": 10,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 2
+            }
+          }
+        ],
+        "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:host-res/guest-api@0.1.0",
+      "name": "[method]counter.value",
+      "func": {
+        "instance": 1,
+        "name": "example:host-res/guest-api@0.1.0#[method]counter.value",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 2
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

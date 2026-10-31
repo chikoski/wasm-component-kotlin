@@ -15,7 +15,10 @@ interface types {
     flags permissions { read, write, execute }
     variant status { ok, err(string), code(u32) }
     type user-id = u64;
+}
 
+/// Resources the component defines (exported): the host holds handles to them.
+interface counters {
     resource counter {
         constructor(init: u32);
         increment: func();
@@ -25,9 +28,10 @@ interface types {
 }
 
 world calculator {
-    use types.{point, color, permissions, status, user-id, counter};
+    use types.{point, color, permissions, status, user-id};
 
     import log: func(msg: string);
+    export counters;
     export add: func(a: s32, b: s32) -> s32;
     export compute: func(
         p: point,

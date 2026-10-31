@@ -1,0 +1,480 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "blob": {
+          "type": 5
+        },
+        "ticket": {
+          "type": 6
+        },
+        "[constructor]ticket": {
+          "function": {
+            "name": "[constructor]ticket",
+            "kind": {
+              "constructor": 6
+            },
+            "params": [
+              {
+                "name": "id",
+                "type": "u32"
+              }
+            ],
+            "result": 7
+          }
+        },
+        "[method]ticket.id": {
+          "function": {
+            "name": "[method]ticket.id",
+            "kind": {
+              "method": 6
+            },
+            "params": [
+              {
+                "name": "self",
+                "type": 8
+              }
+            ],
+            "result": "u32"
+          }
+        }
+      },
+      "exports": {
+        "make-and-measure": {
+          "function": {
+            "name": "make-and-measure",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "init",
+                "type": 9
+              },
+              {
+                "name": "extra",
+                "type": 9
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "keep": {
+          "function": {
+            "name": "keep",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "init",
+                "type": 9
+              }
+            ],
+            "result": 10
+          }
+        },
+        "measure": {
+          "function": {
+            "name": "measure",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "b",
+                "type": 11
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "consume": {
+          "function": {
+            "name": "consume",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "b",
+                "type": 10
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "merge-new": {
+          "function": {
+            "name": "merge-new",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "a",
+                "type": 9
+              },
+              {
+                "name": "b",
+                "type": 9
+              }
+            ],
+            "result": 9
+          }
+        },
+        "lookup": {
+          "function": {
+            "name": "lookup",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "name",
+                "type": "string"
+              }
+            ],
+            "result": 12
+          }
+        },
+        "echo-blob": {
+          "function": {
+            "name": "echo-blob",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "b",
+                "type": 10
+              }
+            ],
+            "result": 13
+          }
+        },
+        "ticket-id": {
+          "function": {
+            "name": "ticket-id",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "n",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        }
+      },
+      "package": 1
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "store",
+      "types": {
+        "blob": 0
+      },
+      "functions": {
+        "[constructor]blob": {
+          "name": "[constructor]blob",
+          "kind": {
+            "constructor": 0
+          },
+          "params": [
+            {
+              "name": "init",
+              "type": 1
+            }
+          ],
+          "result": 2
+        },
+        "[method]blob.size": {
+          "name": "[method]blob.size",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 3
+            }
+          ],
+          "result": "u32"
+        },
+        "[method]blob.append": {
+          "name": "[method]blob.append",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 3
+            },
+            {
+              "name": "data",
+              "type": 1
+            }
+          ]
+        },
+        "[method]blob.read": {
+          "name": "[method]blob.read",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 3
+            }
+          ],
+          "result": 1
+        },
+        "[static]blob.merge": {
+          "name": "[static]blob.merge",
+          "kind": {
+            "static": 0
+          },
+          "params": [
+            {
+              "name": "a",
+              "type": 3
+            },
+            {
+              "name": "b",
+              "type": 2
+            }
+          ],
+          "result": 2
+        },
+        "log": {
+          "name": "log",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "msg",
+              "type": "string"
+            }
+          ]
+        },
+        "find": {
+          "name": "find",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ],
+          "result": 4
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "guest-api",
+      "types": {
+        "counter": 14
+      },
+      "functions": {
+        "[constructor]counter": {
+          "name": "[constructor]counter",
+          "kind": {
+            "constructor": 14
+          },
+          "params": [
+            {
+              "name": "v",
+              "type": "s32"
+            }
+          ],
+          "result": 15
+        },
+        "[method]counter.poke": {
+          "name": "[method]counter.poke",
+          "kind": {
+            "method": 14
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 16
+            }
+          ]
+        },
+        "[method]counter.value": {
+          "name": "[method]counter.value",
+          "kind": {
+            "method": 14
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 16
+            }
+          ],
+          "result": "s32"
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": "blob",
+      "kind": "resource",
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 2
+      },
+      "owner": null
+    },
+    {
+      "name": "blob",
+      "kind": {
+        "type": 0
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "ticket",
+      "kind": "resource",
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 6
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 6
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 5
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 5
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 10
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 10,
+          "err": "string"
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "counter",
+      "kind": "resource",
+      "owner": {
+        "interface": 1
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 14
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 14
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:host-res@0.1.0",
+      "interfaces": {
+        "store": 0,
+        "guest-api": 1
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}
