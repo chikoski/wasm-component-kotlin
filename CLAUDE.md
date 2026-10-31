@@ -27,6 +27,7 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 ./gradlew :runtime-chicory:test                 # Chicory バックエンド単体
 ./gradlew :test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト
 ./gradlew -p samples/android :app:testDebugUnitTest :app:assembleRelease
+# ART での確認（ヘッドレスエミュレーター、Android CLI）は samples/android/README.md を参照
 cargo build --release --manifest-path rust-bridge/Cargo.toml  # ルートのテストに必要
 decomposer/build-wasm.sh                        # decomposer を変更したら必ず実行（dist を更新）
 ```

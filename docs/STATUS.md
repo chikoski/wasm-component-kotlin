@@ -36,7 +36,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 11 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
-| `samples/android` | Android サンプルアプリ（composite build） | 11 | ART 実機は未確認（→ [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5)） |
+| `samples/android` | Android サンプルアプリ（composite build） | 11 | ART（エミュレーター）で debug / release とも動作確認済み |
 
 ## 2. 現在の状態
 
@@ -45,11 +45,11 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * `./gradlew check`（TestKit の functionalTest を含む）: 36 件中 35 件成功、1 件スキップ（新しい wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクルで結果が一致
 * Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
-* Android サンプル: ホスト JVM のユニットテストが成功、R8 で縮小した release APK がビルド可能
+* Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
 
 ### 未検証・既知の制約
 
-* **ART（実機 / エミュレータ）での実行は未確認**。R8 縮小後の release ビルドで実行時に問題が出ないかも未確認
+* 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
 * Chicory バックエンドの未対応機能: ホスト定義 resource、async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み

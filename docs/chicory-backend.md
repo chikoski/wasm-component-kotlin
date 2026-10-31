@@ -123,6 +123,9 @@ Wasmtime ブリッジとの差分テスト（`ChicoryDifferentialTest`）で、�
 ./gradlew -p samples/android :app:connectedAndroidTest    # 接続した端末 / エミュレータ（ART）で実行
 ```
 
+Android CLI でヘッドレスエミュレーターを使う手順や、release ビルドの起動・スクリーンショットの取り方は
+[samples/android/README.md](../samples/android/README.md) にまとめています。
+
 ## 5. 開発者向け
 
 | モジュール | 役割 |
