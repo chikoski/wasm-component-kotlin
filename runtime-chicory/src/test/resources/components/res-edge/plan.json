@@ -161,7 +161,7 @@
         "name": "drop-raw",
         "kind": "export"
       },
-      "options": 2,
+      "options": 0,
       "type": {
         "params": [
           {
@@ -202,7 +202,7 @@
         "name": "make",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -229,7 +229,7 @@
         "name": "peek",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -256,7 +256,7 @@
         "name": "rep-raw",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -282,7 +282,7 @@
         "name": "same",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -309,7 +309,7 @@
         "name": "take",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {

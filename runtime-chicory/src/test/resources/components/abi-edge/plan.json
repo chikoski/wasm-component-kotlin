@@ -80,7 +80,7 @@
     {
       "index": 2,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -89,7 +89,7 @@
       "index": 3,
       "stringEncoding": "utf8",
       "memory": 0,
-      "realloc": null,
+      "realloc": 0,
       "postReturn": null,
       "async": false
     },
@@ -103,17 +103,17 @@
     },
     {
       "index": 5,
-      "stringEncoding": "utf16",
-      "memory": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
     },
     {
       "index": 6,
-      "stringEncoding": "utf8",
+      "stringEncoding": "utf16",
       "memory": 0,
-      "realloc": 0,
+      "realloc": null,
       "postReturn": null,
       "async": false
     }
@@ -150,7 +150,7 @@
         "name": "char-from",
         "kind": "export"
       },
-      "options": 2,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -176,7 +176,7 @@
         "name": "string-at",
         "kind": "export"
       },
-      "options": 4,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -211,7 +211,7 @@
         "name": "list-len",
         "kind": "export"
       },
-      "options": 6,
+      "options": 3,
       "type": {
         "params": [
           {
@@ -240,7 +240,7 @@
         "name": "option-from",
         "kind": "export"
       },
-      "options": 3,
+      "options": 4,
       "type": {
         "params": [
           {
@@ -269,7 +269,7 @@
         "name": "result-from",
         "kind": "export"
       },
-      "options": 2,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -297,7 +297,7 @@
         "name": "set-mode",
         "kind": "export"
       },
-      "options": 1,
+      "options": 5,
       "type": {
         "params": [
           {
@@ -319,7 +319,7 @@
         "name": "string-at",
         "kind": "export"
       },
-      "options": 4,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -351,7 +351,7 @@
         "name": "string-ret",
         "kind": "export"
       },
-      "options": 3,
+      "options": 4,
       "type": {
         "params": [
           {
@@ -377,7 +377,7 @@
         "name": "string-at",
         "kind": "export"
       },
-      "options": 5,
+      "options": 6,
       "type": {
         "params": [
           {

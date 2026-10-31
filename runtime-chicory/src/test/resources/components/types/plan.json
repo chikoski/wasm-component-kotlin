@@ -102,7 +102,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 0,
+      "postReturn": 4,
       "async": false
     },
     {
@@ -110,7 +110,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": null,
+      "postReturn": 2,
       "async": false
     },
     {
@@ -134,7 +134,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 2,
+      "postReturn": 0,
       "async": false
     },
     {
@@ -142,7 +142,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 3,
+      "postReturn": 5,
       "async": false
     },
     {
@@ -150,7 +150,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 4,
+      "postReturn": 3,
       "async": false
     },
     {
@@ -158,7 +158,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 5,
+      "postReturn": null,
       "async": false
     },
     {
@@ -181,7 +181,7 @@
         "name": "compact",
         "kind": "export"
       },
-      "options": 6,
+      "options": 0,
       "type": {
         "params": [
           {
@@ -216,7 +216,7 @@
         "name": "echo-blob",
         "kind": "export"
       },
-      "options": 4,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -352,7 +352,7 @@
         "name": "echo-name",
         "kind": "export"
       },
-      "options": 0,
+      "options": 4,
       "type": {
         "params": [
           {
@@ -384,7 +384,7 @@
         "name": "echo-optional-list",
         "kind": "export"
       },
-      "options": 7,
+      "options": 5,
       "type": {
         "params": [
           {
@@ -422,7 +422,7 @@
         "name": "echo-packet",
         "kind": "export"
       },
-      "options": 5,
+      "options": 6,
       "type": {
         "params": [
           {
@@ -490,7 +490,7 @@
         "name": "maybe-len",
         "kind": "export"
       },
-      "options": 1,
+      "options": 7,
       "type": {
         "params": [
           {

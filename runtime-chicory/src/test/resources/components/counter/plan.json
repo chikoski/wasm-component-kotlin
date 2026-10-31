@@ -215,7 +215,7 @@
         "name": "example:counter/counter-api@0.1.0#[method]counter.add",
         "kind": "export"
       },
-      "options": 2,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -271,7 +271,7 @@
         "name": "example:counter/counter-api@0.1.0#[method]counter.increment",
         "kind": "export"
       },
-      "options": 1,
+      "options": 2,
       "type": {
         "params": [
           {

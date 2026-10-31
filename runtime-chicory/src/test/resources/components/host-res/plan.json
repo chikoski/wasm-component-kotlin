@@ -420,7 +420,7 @@
         ],
         "async": false
       },
-      "options": 1,
+      "options": 6,
       "index": 4
     },
     {
@@ -489,7 +489,7 @@
         "results": [],
         "async": false
       },
-      "options": 2,
+      "options": 7,
       "index": 8
     },
     {
@@ -515,7 +515,7 @@
         ],
         "async": false
       },
-      "options": 3,
+      "options": 8,
       "index": 9
     },
     {
@@ -541,7 +541,7 @@
         ],
         "async": false
       },
-      "options": 4,
+      "options": 9,
       "index": 10
     },
     {
@@ -569,7 +569,7 @@
         "results": [],
         "async": false
       },
-      "options": 4,
+      "options": 9,
       "index": 11
     },
     {
@@ -595,7 +595,7 @@
         ],
         "async": false
       },
-      "options": 5,
+      "options": 10,
       "index": 12
     }
   ],
@@ -611,15 +611,15 @@
     {
       "index": 1,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
-      "postReturn": null,
+      "postReturn": 1,
       "async": false
     },
     {
       "index": 2,
       "stringEncoding": "utf8",
-      "memory": 0,
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -628,7 +628,7 @@
       "index": 3,
       "stringEncoding": "utf8",
       "memory": 0,
-      "realloc": null,
+      "realloc": 0,
       "postReturn": null,
       "async": false
     },
@@ -636,7 +636,7 @@
       "index": 4,
       "stringEncoding": "utf8",
       "memory": 0,
-      "realloc": null,
+      "realloc": 0,
       "postReturn": null,
       "async": false
     },
@@ -645,14 +645,14 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": null,
+      "postReturn": 0,
       "async": false
     },
     {
       "index": 6,
       "stringEncoding": "utf8",
-      "memory": 0,
-      "realloc": 0,
+      "memory": null,
+      "realloc": null,
       "postReturn": null,
       "async": false
     },
@@ -660,7 +660,7 @@
       "index": 7,
       "stringEncoding": "utf8",
       "memory": 0,
-      "realloc": 0,
+      "realloc": null,
       "postReturn": null,
       "async": false
     },
@@ -668,8 +668,8 @@
       "index": 8,
       "stringEncoding": "utf8",
       "memory": 0,
-      "realloc": 0,
-      "postReturn": 0,
+      "realloc": null,
+      "postReturn": null,
       "async": false
     },
     {
@@ -677,14 +677,14 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": null,
-      "postReturn": 1,
+      "postReturn": null,
       "async": false
     },
     {
       "index": 10,
       "stringEncoding": "utf8",
-      "memory": null,
-      "realloc": null,
+      "memory": 0,
+      "realloc": 0,
       "postReturn": null,
       "async": false
     }
@@ -821,7 +821,7 @@
         "name": "echo-blob",
         "kind": "export"
       },
-      "options": 9,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -882,7 +882,7 @@
         "name": "example:host-res/guest-api@0.1.0#[method]counter.poke",
         "kind": "export"
       },
-      "options": 10,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -932,7 +932,7 @@
         "name": "keep",
         "kind": "export"
       },
-      "options": 7,
+      "options": 3,
       "type": {
         "params": [
           {
@@ -962,7 +962,7 @@
         "name": "lookup",
         "kind": "export"
       },
-      "options": 7,
+      "options": 3,
       "type": {
         "params": [
           {
@@ -992,7 +992,7 @@
         "name": "make-and-measure",
         "kind": "export"
       },
-      "options": 6,
+      "options": 4,
       "type": {
         "params": [
           {
@@ -1057,7 +1057,7 @@
         "name": "merge-new",
         "kind": "export"
       },
-      "options": 8,
+      "options": 5,
       "type": {
         "params": [
           {

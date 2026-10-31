@@ -125,7 +125,7 @@
         ],
         "async": false
       },
-      "options": 0,
+      "options": 6,
       "index": 0
     },
     {
@@ -153,7 +153,7 @@
         ],
         "async": false
       },
-      "options": 1,
+      "options": 7,
       "index": 1
     }
   ],
@@ -161,7 +161,7 @@
     {
       "index": 0,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -177,7 +177,7 @@
     {
       "index": 2,
       "stringEncoding": "utf8",
-      "memory": 0,
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -185,7 +185,7 @@
     {
       "index": 3,
       "stringEncoding": "utf8",
-      "memory": 0,
+      "memory": null,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -193,7 +193,7 @@
     {
       "index": 4,
       "stringEncoding": "utf8",
-      "memory": null,
+      "memory": 0,
       "realloc": null,
       "postReturn": null,
       "async": false
@@ -249,7 +249,7 @@
         "name": "check-even",
         "kind": "export"
       },
-      "options": 3,
+      "options": 0,
       "type": {
         "params": [
           {
@@ -281,7 +281,7 @@
         "name": "describe-code",
         "kind": "export"
       },
-      "options": 7,
+      "options": 1,
       "type": {
         "params": [
           {
@@ -313,7 +313,7 @@
         "name": "echo-u64",
         "kind": "export"
       },
-      "options": 6,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -339,7 +339,7 @@
         "name": "example:roundtrip/math-api@0.1.0#scale",
         "kind": "export"
       },
-      "options": 4,
+      "options": 3,
       "type": {
         "params": [
           {
@@ -365,7 +365,7 @@
         "name": "nested-option",
         "kind": "export"
       },
-      "options": 5,
+      "options": 4,
       "type": {
         "params": [
           {
@@ -403,7 +403,7 @@
         "name": "ping-result",
         "kind": "export"
       },
-      "options": 4,
+      "options": 3,
       "type": {
         "params": [
           {
@@ -431,7 +431,7 @@
         "name": "transform-summary",
         "kind": "export"
       },
-      "options": 2,
+      "options": 5,
       "type": {
         "params": [
           {

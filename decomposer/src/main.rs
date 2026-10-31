@@ -163,7 +163,7 @@ impl Ctx<'_, '_> {
             trampolines.push(j);
         }
 
-        let options: Vec<Value> = self
+        let mut options: Vec<Value> = self
             .component
             .options
             .iter()
@@ -223,6 +223,8 @@ impl Ctx<'_, '_> {
                 }
             })
             .collect();
+
+        renumber_options(&mut options, &mut exports, &mut trampolines);
 
         let plan = json!({
             "version": PLAN_VERSION,
@@ -378,4 +380,37 @@ where
     let mut sorted: Vec<(String, ExportIndex)> = entries.map(|(name, (idx, _))| (name.to_string(), *idx)).collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     sorted
+}
+
+/// Renumbers canonical options by first use: sorted exports, then trampolines, then any unused
+/// ones in their original order. wasmtime-environ numbers options in translation order, which for
+/// some components (e.g. an exported instance bundled from lifted functions) follows hash order,
+/// so the raw indices would make plan.json differ between runs.
+fn renumber_options(options: &mut Vec<Value>, exports: &mut [Value], trampolines: &mut [Value]) {
+    let mut map: HashMap<u64, u64> = HashMap::new();
+    let assign = |old: u64, map: &mut HashMap<u64, u64>| {
+        let next = map.len() as u64;
+        *map.entry(old).or_insert(next)
+    };
+    for v in exports.iter().chain(trampolines.iter()) {
+        if let Some(old) = v.get("options").and_then(Value::as_u64) {
+            assign(old, &mut map);
+        }
+    }
+    for o in options.iter() {
+        if let Some(old) = o.get("index").and_then(Value::as_u64) {
+            assign(old, &mut map);
+        }
+    }
+    for v in exports.iter_mut().chain(trampolines.iter_mut()) {
+        if let Some(old) = v.get("options").and_then(Value::as_u64) {
+            v["options"] = json!(map[&old]);
+        }
+    }
+    for o in options.iter_mut() {
+        if let Some(old) = o.get("index").and_then(Value::as_u64) {
+            o["index"] = json!(map[&old]);
+        }
+    }
+    options.sort_by_key(|o| o.get("index").and_then(Value::as_u64));
 }
