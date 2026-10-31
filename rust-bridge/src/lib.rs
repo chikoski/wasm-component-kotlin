@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jbyteArray, jint, jlong, jstring};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
@@ -827,21 +827,45 @@ fn create_session_from_component(
     })
 }
 
-fn load_component_from_path(engine: &Engine, wasm_path: &str) -> Result<Component> {
-    match engine.detect_precompiled_file(wasm_path) {
-        Ok(Some(Precompiled::Component)) => unsafe { Component::deserialize_file(engine, wasm_path) }
-            .with_context(|| format!("Failed to deserialize precompiled .cwasm component from {}", wasm_path)),
-        _ => Component::from_file(engine, wasm_path)
-            .with_context(|| format!("Failed to load component from {}", wasm_path)),
+/// Opening a precompiled `.cwasm` runs the native code inside it without validation (Wasmtime's
+/// `Component::deserialize` is `unsafe` for that reason), so it is only done when the caller asks
+/// for it explicitly; `openSession` accepts `.wasm` components only (#33).
+const PRECOMPILED_REFUSED: &str = "input is a precompiled Wasmtime artifact (.cwasm), which contains native code \
+     that Wasmtime does not validate; open it with openPrecompiledSession, and only if it comes from a trusted source";
+
+fn not_precompiled_component(what: &str) -> anyhow::Error {
+    anyhow!("{what} is not a precompiled Wasmtime component (.cwasm) for this engine; open .wasm components with openSession")
+}
+
+fn load_component_from_path(engine: &Engine, wasm_path: &str, precompiled: bool) -> Result<Component> {
+    let detected = engine.detect_precompiled_file(wasm_path).ok().flatten();
+    if precompiled {
+        match detected {
+            Some(Precompiled::Component) => unsafe { Component::deserialize_file(engine, wasm_path) }
+                .with_context(|| format!("Failed to deserialize precompiled .cwasm component from {}", wasm_path)),
+            _ => Err(not_precompiled_component(wasm_path)),
+        }
+    } else {
+        if detected.is_some() {
+            bail!("{}: {}", wasm_path, PRECOMPILED_REFUSED);
+        }
+        Component::from_file(engine, wasm_path).with_context(|| format!("Failed to load component from {}", wasm_path))
     }
 }
 
-fn load_component_from_bytes(engine: &Engine, wasm_bytes: &[u8]) -> Result<Component> {
-    match engine.detect_precompiled(wasm_bytes) {
-        Some(Precompiled::Component) => unsafe { Component::deserialize(engine, wasm_bytes) }
-            .context("Failed to deserialize precompiled .cwasm component from bytes"),
-        _ => Component::from_binary(engine, wasm_bytes)
-            .context("Failed to load Wasm component from bytes"),
+fn load_component_from_bytes(engine: &Engine, wasm_bytes: &[u8], precompiled: bool) -> Result<Component> {
+    let detected = engine.detect_precompiled(wasm_bytes);
+    if precompiled {
+        match detected {
+            Some(Precompiled::Component) => unsafe { Component::deserialize(engine, wasm_bytes) }
+                .context("Failed to deserialize precompiled .cwasm component from bytes"),
+            _ => Err(not_precompiled_component("the given bytes")),
+        }
+    } else {
+        if detected.is_some() {
+            bail!("{}", PRECOMPILED_REFUSED);
+        }
+        Component::from_binary(engine, wasm_bytes).context("Failed to load Wasm component from bytes")
     }
 }
 
@@ -862,6 +886,7 @@ pub extern "C" fn wasm2kt_session_open(
     wasm_path_ptr: *const c_char,
     imports_json_ptr: *const c_char,
     host_callback: Option<HostCallbackFn>,
+    precompiled: bool,
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
@@ -875,7 +900,7 @@ pub extern "C" fn wasm2kt_session_open(
         let imports_list = parse_imports_json(imports_json_ptr)?;
 
         let engine = get_shared_engine()?;
-        let component = load_component_from_path(&engine, wasm_path)?;
+        let component = load_component_from_path(&engine, wasm_path, precompiled)?;
 
         create_session_from_component(engine, component, imports_list, host_callback, None)
     });
@@ -895,6 +920,7 @@ pub extern "C" fn wasm2kt_session_open_bytes(
     wasm_bytes_len: usize,
     imports_json_ptr: *const c_char,
     host_callback: Option<HostCallbackFn>,
+    precompiled: bool,
     err_buf: *mut c_char,
     err_buf_cap: usize,
 ) -> *mut BridgeSession {
@@ -906,7 +932,7 @@ pub extern "C" fn wasm2kt_session_open_bytes(
         let imports_list = parse_imports_json(imports_json_ptr)?;
 
         let engine = get_shared_engine()?;
-        let component = load_component_from_bytes(&engine, wasm_bytes)?;
+        let component = load_component_from_bytes(&engine, wasm_bytes, precompiled)?;
 
         create_session_from_component(engine, component, imports_list, host_callback, None)
     });
@@ -1136,6 +1162,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<
     wasm_path: JString<'local>,
     imports_json: JString<'local>,
     host_callback: JObject<'local>,
+    precompiled: jboolean,
 ) -> jlong {
     let res = run_catching(|| -> Result<BridgeSession> {
         let wasm_path_str: String = env.get_string(&wasm_path)?.into();
@@ -1151,7 +1178,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<
         };
 
         let engine = get_shared_engine()?;
-        let component = load_component_from_path(&engine, &wasm_path_str)?;
+        let component = load_component_from_path(&engine, &wasm_path_str, precompiled != 0)?;
 
         create_session_from_component(engine, component, imports_list, None, jni_cb)
     });
@@ -1175,6 +1202,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenB
     wasm_bytes: JByteArray<'local>,
     imports_json: JString<'local>,
     host_callback: JObject<'local>,
+    precompiled: jboolean,
 ) -> jlong {
     let res = run_catching(|| -> Result<BridgeSession> {
         let bytes = env.convert_byte_array(&wasm_bytes)?;
@@ -1190,7 +1218,7 @@ pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenB
         };
 
         let engine = get_shared_engine()?;
-        let component = load_component_from_bytes(&engine, &bytes)?;
+        let component = load_component_from_bytes(&engine, &bytes, precompiled != 0)?;
 
         create_session_from_component(engine, component, imports_list, None, jni_cb)
     });

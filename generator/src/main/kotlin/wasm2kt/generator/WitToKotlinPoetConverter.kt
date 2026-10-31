@@ -76,6 +76,13 @@ private const val NO_PATH_BACKEND_MESSAGE =
     "These bindings were generated without the Wasmtime backend; open a session with a ComponentBackendFactory " +
         "(e.g. the generated <Name>Component) or assign WasmtimeSession.factory / bytesFactory."
 
+/** KDoc for every generated entry point that loads a precompiled `.cwasm` (#33). */
+private const val PRECOMPILED_TRUST_KDOC =
+    "Opens a precompiled `.cwasm` made by `precompileComponent` with the same wasm2kt bridge build.\n\n" +
+        "**Only pass files from a trusted source** (e.g. produced by your own build): a `.cwasm` contains native " +
+        "code that Wasmtime runs without validating it, so a crafted file escapes the WebAssembly sandbox. " +
+        "`openSession` / `withSession` accept `.wasm` components only and reject `.cwasm`.\n"
+
 /**
  * Converts a [WitResolve] AST into [GeneratedKotlinFile]s according to the wasm2kt specification.
  */
@@ -468,6 +475,47 @@ class WitToKotlinPoetConverter(
             .returns(typeVarR)
             .addStatement("return openSession(wasmBytes, imports).use { session -> context(session) { block() } }")
         worldObjBuilder.addFunction(withSessionBytesBuilder.build())
+
+        // Precompiled .cwasm images run native code without validation, so they get their own,
+        // explicitly named entry points instead of being accepted by openSession (#33).
+        if (emitWasmtimeSessions) {
+            for ((paramName, paramType) in listOf("cwasmPath" to pathClass, "cwasmBytes" to byteArrayClass)) {
+                worldObjBuilder.addFunction(
+                    FunSpec.builder("openPrecompiledSession")
+                        .addKdoc(PRECOMPILED_TRUST_KDOC)
+                        .addParameter(paramName, paramType)
+                        .addParameter(
+                            ParameterSpec.builder("imports", importsClassName)
+                                .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                                .build(),
+                        )
+                        .returns(sessionClassName)
+                        .addStatement("val resources = %T()", hostResourceTableClass)
+                        .addStatement(
+                            "return Session(%T(resources.bind { %T.openPrecompiled($paramName, imports) }, resources))",
+                            hostResourceBoundSessionClass,
+                            runtimeSessionClass,
+                        )
+                        .build(),
+                )
+                worldObjBuilder.addFunction(
+                    FunSpec.builder("withPrecompiledSession")
+                        .addKdoc(PRECOMPILED_TRUST_KDOC)
+                        .addModifiers(KModifier.INLINE)
+                        .addTypeVariable(typeVarR)
+                        .addParameter(paramName, paramType)
+                        .addParameter(
+                            ParameterSpec.builder("imports", importsClassName)
+                                .apply { if (!hasImports) defaultValue("Imports.EMPTY") }
+                                .build(),
+                        )
+                        .addParameter("block", contextLambdaType)
+                        .returns(typeVarR)
+                        .addStatement("return openPrecompiledSession($paramName, imports).use { session -> context(session) { block() } }")
+                        .build(),
+                )
+            }
+        }
 
         // 5. Emit Exported Interfaces & Top-level Exported Functions
         for ((exportKey, item) in world.exports) {
@@ -2423,18 +2471,24 @@ class WitToKotlinPoetConverter(
                             }
                             .build(),
                     )
+                    .addProperty(precompiledFactoryProperty("precompiledFactory", "cwasmPath", pathClass, runtimeSessionClass, ffmSessionClass, jniSessionClass))
+                    .addProperty(precompiledFactoryProperty("precompiledBytesFactory", "cwasmBytes", byteArrayClass, runtimeSessionClass, ffmSessionClass, jniSessionClass))
                     .apply {
                         if (emitWasmtimeSessions) {
                             addFunction(
                                 FunSpec.builder("useJniBackend")
                                     .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", jniSessionClass)
                                     .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", jniSessionClass)
+                                    .addStatement("precompiledFactory = { cwasmPath, imports -> %T.openPrecompiled(cwasmPath, imports) }", jniSessionClass)
+                                    .addStatement("precompiledBytesFactory = { cwasmBytes, imports -> %T.openPrecompiled(cwasmBytes, imports) }", jniSessionClass)
                                     .build(),
                             )
                             addFunction(
                                 FunSpec.builder("useFfmBackend")
                                     .addStatement("factory = { wasmPath, imports -> %T.open(wasmPath, imports) }", ffmSessionClass)
                                     .addStatement("bytesFactory = { wasmBytes, imports -> %T.open(wasmBytes, imports) }", ffmSessionClass)
+                                    .addStatement("precompiledFactory = { cwasmPath, imports -> %T.openPrecompiled(cwasmPath, imports) }", ffmSessionClass)
+                                    .addStatement("precompiledBytesFactory = { cwasmBytes, imports -> %T.openPrecompiled(cwasmBytes, imports) }", ffmSessionClass)
                                     .build(),
                             )
                         }
@@ -2455,8 +2509,61 @@ class WitToKotlinPoetConverter(
                             .addStatement("return bytesFactory(wasmBytes, imports)")
                             .build(),
                     )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmPath", pathClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(runtimeSessionClass)
+                            .addStatement("return precompiledFactory(cwasmPath, imports)")
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(runtimeSessionClass)
+                            .addStatement("return precompiledBytesFactory(cwasmBytes, imports)")
+                            .build(),
+                    )
                     .build(),
             )
+            .build()
+    }
+
+    /** `precompiledFactory` / `precompiledBytesFactory` on the generated `WasmtimeSession` companion. */
+    private fun precompiledFactoryProperty(
+        name: String,
+        paramName: String,
+        paramType: TypeName,
+        runtimeSessionClass: ClassName,
+        ffmSessionClass: ClassName,
+        jniSessionClass: ClassName,
+    ): PropertySpec {
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        return PropertySpec.builder(
+            name,
+            LambdaTypeName.get(
+                parameters = listOf(
+                    ParameterSpec.builder(paramName, paramType).build(),
+                    ParameterSpec.builder("imports", anyNullable).build(),
+                ),
+                returnType = runtimeSessionClass,
+            ),
+        )
+            .mutable(true)
+            .apply {
+                if (emitWasmtimeSessions) {
+                    initializer(
+                        "{ $paramName, imports -> if (isFfmAvailable) %T.openPrecompiled($paramName, imports) else %T.openPrecompiled($paramName, imports) }",
+                        ffmSessionClass,
+                        jniSessionClass,
+                    )
+                } else {
+                    initializer("{ _, _ -> error(%S) }", NO_PATH_BACKEND_MESSAGE)
+                }
+            }
             .build()
     }
 
@@ -2608,6 +2715,26 @@ class WitToKotlinPoetConverter(
                             .addStatement("return %T(bridge, bridge.openSessionBytes(wasmBytes, imports))", ffmSessionClass)
                             .build(),
                     )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmPath", pathClass)
+                            .addParameter("imports", anyNullable)
+                            .addParameter(ParameterSpec.builder("bridge", ffmBridgeClass).defaultValue("%T.getDefault()", ffmBridgeClass).build())
+                            .returns(ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openPrecompiledSession(cwasmPath, imports))", ffmSessionClass)
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .addParameter(ParameterSpec.builder("bridge", ffmBridgeClass).defaultValue("%T.getDefault()", ffmBridgeClass).build())
+                            .returns(ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openPrecompiledSessionBytes(cwasmBytes, imports))", ffmSessionClass)
+                            .build(),
+                    )
                     .build(),
             )
             .build()
@@ -2739,6 +2866,24 @@ class WitToKotlinPoetConverter(
                             .addParameter("imports", anyNullable)
                             .returns(jniSessionClass)
                             .addStatement("return %T(%T.openSessionBytes(wasmBytes, imports))", jniSessionClass, jniBridgeClass)
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmPath", pathClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(jniSessionClass)
+                            .addStatement("return %T(%T.openPrecompiledSession(cwasmPath, imports))", jniSessionClass, jniBridgeClass)
+                            .build(),
+                    )
+                    .addFunction(
+                        FunSpec.builder("openPrecompiled")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter("cwasmBytes", byteArrayClass)
+                            .addParameter("imports", anyNullable)
+                            .returns(jniSessionClass)
+                            .addStatement("return %T(%T.openPrecompiledSessionBytes(cwasmBytes, imports))", jniSessionClass, jniBridgeClass)
                             .build(),
                     )
                     .build(),

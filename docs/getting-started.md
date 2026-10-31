@@ -131,3 +131,17 @@ fun main() {
     }
 }
 ```
+
+### 事前コンパイル（`.cwasm`）
+
+起動時のコンパイルを省くには、`FfmWasmtimeBridge.getDefault().precompileComponent(wasmPath)` で `.cwasm` を作ります。読み込むときは `withPrecompiledSession` / `openPrecompiledSession` を使います。
+
+```kotlin
+ArithmeticWorld.withPrecompiledSession(Paths.get("build/arithmetic.cwasm")) {
+    println(ArithmeticWorld.add(1, 2))
+}
+```
+
+`.cwasm` にはネイティブの機械語が入っていて、Wasmtime はその中身を検証しません。そのため、**自分のビルドで作ったものなど、信頼できる `.cwasm` だけを渡してください**。細工した `.cwasm` を読み込むと、WebAssembly のサンドボックスを経ずにコードが動きます。
+
+`withSession` / `openSession` は `.wasm` だけを受け付け、`.cwasm` を渡すとエラーになります。また、`.cwasm` は作ったときと同じブリッジ（同じ Wasmtime）でしか読み込めません。

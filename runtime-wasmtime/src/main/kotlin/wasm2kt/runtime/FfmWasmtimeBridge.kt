@@ -43,6 +43,7 @@ class FfmWasmtimeBridge private constructor(
     //     wasm_path_ptr: *const c_char,
     //     imports_json_ptr: *const c_char,
     //     host_callback: Option<HostCallbackFn>,
+    //     precompiled: bool,
     //     err_buf: *mut c_char,
     //     err_buf_cap: usize,
     // ) -> *mut BridgeSession
@@ -53,6 +54,7 @@ class FfmWasmtimeBridge private constructor(
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
+            ValueLayout.JAVA_BOOLEAN,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
         ),
@@ -63,6 +65,7 @@ class FfmWasmtimeBridge private constructor(
     //     wasm_bytes_len: usize,
     //     imports_json_ptr: *const c_char,
     //     host_callback: Option<HostCallbackFn>,
+    //     precompiled: bool,
     //     err_buf: *mut c_char,
     //     err_buf_cap: usize,
     // ) -> *mut BridgeSession
@@ -74,6 +77,7 @@ class FfmWasmtimeBridge private constructor(
             ValueLayout.JAVA_LONG,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
+            ValueLayout.JAVA_BOOLEAN,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
         ),
@@ -186,7 +190,21 @@ class FfmWasmtimeBridge private constructor(
 
     private val activeSessions = java.util.concurrent.ConcurrentHashMap<Long, FfmSessionState>()
 
-    fun openSession(wasmPath: Path, imports: Any?): Long {
+    /**
+     * Opens a session on the `.wasm` component at [wasmPath]. A precompiled `.cwasm` is rejected:
+     * it holds native code Wasmtime does not validate, so it must go through [openPrecompiledSession].
+     */
+    fun openSession(wasmPath: Path, imports: Any?): Long = openSession(wasmPath, imports, precompiled = false)
+
+    /**
+     * Opens a session on a `.cwasm` written by [precompileComponent] **with this bridge's Wasmtime build**.
+     *
+     * The file's native code runs without validation, so pass only files your own build produced
+     * or that come from an equally trusted source; never one a user or the network supplied.
+     */
+    fun openPrecompiledSession(cwasmPath: Path, imports: Any?): Long = openSession(cwasmPath, imports, precompiled = true)
+
+    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean): Long {
         val sessionArena = Arena.ofShared()
         try {
             val wasmPathPtr = allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())
@@ -198,6 +216,7 @@ class FfmWasmtimeBridge private constructor(
                 wasmPathPtr,
                 importsJsonPtr,
                 callbackStub,
+                precompiled,
                 errBuf,
                 errCap,
             ) as MemorySegment
@@ -214,7 +233,14 @@ class FfmWasmtimeBridge private constructor(
         }
     }
 
-    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long {
+    /** Like [openSession] for a `.wasm` component in memory; precompiled bytes are rejected. */
+    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long = openSessionBytes(wasmBytes, imports, precompiled = false)
+
+    /** Like [openPrecompiledSession] for `.cwasm` bytes in memory; the same trust requirement applies. */
+    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?): Long =
+        openSessionBytes(cwasmBytes, imports, precompiled = true)
+
+    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean): Long {
         val sessionArena = Arena.ofShared()
         try {
             val wasmBytesPtr = allocateBytes(sessionArena, wasmBytes)
@@ -227,6 +253,7 @@ class FfmWasmtimeBridge private constructor(
                 wasmBytes.size.toLong(),
                 importsJsonPtr,
                 callbackStub,
+                precompiled,
                 errBuf,
                 errCap,
             ) as MemorySegment
@@ -325,7 +352,7 @@ class FfmWasmtimeBridge private constructor(
 
     /**
      * Precompiles a raw `.wasm` component binary into a serialized AOT `.cwasm` image (`ByteArray`)
-     * that can be loaded with zero JIT compilation overhead via `openSession(cwasmBytes)` or `openSession(cwasmPath)`.
+     * that can be loaded with zero JIT compilation overhead via [openPrecompiledSessionBytes] or [openPrecompiledSession].
      */
     fun precompileComponent(wasmBytes: ByteArray): ByteArray {
         Arena.ofConfined().use { arena ->
