@@ -18,7 +18,9 @@
   * コンストラクタ（`companion object operator fun invoke`）が暗黙の `Session` をキャプチャするため、Kotlin 標準の `.use { ... }` ブロックで Wasmtime 側のリソース解放（`resource_drop`）を確実に自動化できます。
   * `borrow<T>`（借用）と `own<T>`（所有権移動・`consumeOwnership()`）を区別し、所有権移動後の誤使用や二重解放を防止します。
 * **代数的データ型とビットフラグの完全な型安全性**
-  * `variant`、`option<T>` (`WitOption<out T>`)、`result<T, E>` (`WitResult<out T, out E>`) をすべて `sealed interface` で表現し、`when` 式による網羅性チェックをサポートします（`option<option<T>>` のネスト問題も発生しません）。
+  * `option<T>` は Kotlin の `T?` になり、`?.` や `?:` がそのまま使えます（`option<option<T>>` のようにネストした場合だけ `WitOption` で外側と内側を区別します）。
+  * `variant` と `result<T, E>`（`WitResult<out T, out E>`）は `sealed interface` で表現し、`when` 式による網羅性チェックをサポートします。`WitResult` には `getOrThrow()` などの補助関数があります。
+  * `list<u8>` は `ByteArray`、`char` は（絵文字なども表せる）`CodePoint` になります。
   * `flags` は `@JvmInline value class` + ビット演算メソッド（`or`, `and`）としてゼロオーバーヘッドに生成します。
 * **Chicory バックエンドと Gradle プラグイン（Android 対応）**
   * Gradle プラグイン `io.github.wasm2kt` で、コンポーネントの core モジュールをビルド時に JVM バイトコードへコンパイルし、純 JVM のランタイム [Chicory](https://github.com/dylibso/chicory) 上で実行します。ネイティブライブラリ・JNI・`wasm-tools` は不要で、Android でもそのまま動きます。
@@ -95,18 +97,18 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("counter.wasm")
 
-    CounterWorldWorld.withSession(wasmPath) {
+    CounterWorld.withSession(wasmPath) {
         // Counter(...) の生成時に Context Parameter から Session を自動キャプチャし、.use で自動解放
-        CounterWorldWorld.Counter(10).use { c1 ->
+        CounterWorld.Counter(10).use { c1 ->
             c1.increment()
             c1.add(5)
             println("c1 = ${c1.getValue()}") // 16
 
-            val c2 = CounterWorldWorld.Counter(26)
+            val c2 = CounterWorld.Counter(26)
 
             // merge(a: borrow<counter>, b: own<counter>) -> counter
             // c1 は借用(borrow)なので引き続き利用可能、c2 は所有権移動(own)により消費される
-            CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+            CounterWorld.Counter.merge(c1, c2).use { merged ->
                 println("c1 after merge = ${c1.getValue()}") // 16 (引き続き有効)
                 println("c2 isClosed = ${c2.isClosed}")      // true (所有権が移動済み)
                 println("merged = ${merged.getValue()}")     // 42
@@ -186,7 +188,7 @@ Options:
 ### 詳細ドキュメント (`docs/`)
 * **[プロジェクトの現状とアクションアイテム](docs/STATUS.md)** / **[設計判断の記録 (ADR)](docs/adr/README.md)**
 * **[Getting Started (環境構築・チュートリアル)](docs/getting-started.md)**: ゼロから Wasm コンポーネントを用意し、Kotlin プロジェクトに組み込んで実行するまでの手順。
-* **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `WitOption`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
+* **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `option`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
 * **[Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md)**: Android を含む純 JVM 実行。ビルド時の分解・AOT コンパイルのパイプラインと、プラグインの使い方。
 * **[アーキテクチャ解説](docs/architecture.md)**: `wasm-tools` JSON AST から KotlinPoet への変換パイプラインと、JVM FFM API ⇄ Rust `wasmtime` (`cdylib`) 間の C ABI 設計。
 * **[技術仕様書 (SPEC.md)](SPEC.md)** / **[仕様レビューと決定事項 (SPEC_REVIEW.md)](SPEC_REVIEW.md)**
@@ -198,4 +200,4 @@ Options:
 * **[01-arithmetic](examples/01-arithmetic/README.md)**: 最小構成の四則演算コンポーネントのネイティブ実行。
 * **[02-host-imports](examples/02-host-imports/README.md)**: ホスト関数 (`Imports`) の実装と Wasm からの FFM Upcall コールバック。
 * **[03-counter-resource](examples/03-counter-resource/README.md)**: ステートフルな `resource` のライフサイクル（`.use` 自動解放、`borrow` と `own` による `merge`）。
-* **[04-algebraic-types-and-mock](examples/04-algebraic-types-and-mock/README.md)**: `record`, `variant`, `flags`, `WitOption`, `WitResult` の操作と、`InMemoryWasmtimeSession` を使った単体テスト。
+* **[04-algebraic-types-and-mock](examples/04-algebraic-types-and-mock/README.md)**: `record`, `variant`, `flags`, `option`（`T?`）, `WitResult` の操作と、`InMemoryWasmtimeSession` を使った単体テスト。

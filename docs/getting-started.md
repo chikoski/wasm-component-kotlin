@@ -49,7 +49,7 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 
 ### パターンA: `.wit` ファイルから生成する（推奨）
 
-`.wit` ファイルには元の `world` 名（例: `world arithmetic` や `world counter-world`）が保持されているため、`ArithmeticWorld` や `CounterWorldWorld` のような分かりやすい名前の特異オブジェクトが生成されます。
+`.wit` ファイルには元の `world` 名（例: `world arithmetic` や `world counter-world`）が保持されているため、`ArithmeticWorld` や `CounterWorld` のような分かりやすい名前の特異オブジェクトが生成されます。
 
 ```bash
 ./gradlew run --args="fixtures/arithmetic.wit -o build/generated -p com.example.arithmetic"

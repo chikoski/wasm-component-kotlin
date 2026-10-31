@@ -2,11 +2,33 @@
 
 このドキュメントでは、`wasm2kt` が WIT (WebAssembly Interface Type) の各要素をどのように Kotlin コードへ変換するか、また生成された DSL の使い方を詳しく解説します。
 
+## 対応表（早見表）
+
+利用側のプロジェクトの `CLAUDE.md` などにそのまま貼れるように、ここにまとめています。決定の経緯は [ADR-0006](adr/0006-type-mapping.md)。
+
+| WIT | Kotlin |
+| :--- | :--- |
+| `world foo` / `world foo-world` | `object FooWorld`（名前が `World` で終わる場合は付け足さない） |
+| `bool` / `s8`〜`s64` / `u8`〜`u64` / `f32` / `f64` | `Boolean` / `Byte`〜`Long` / `UByte`〜`ULong` / `Float` / `Double` |
+| `char` | `CodePoint`（`value: Int`。`CodePoint.of('a')`、`CodePoint.of("🎌")`） |
+| `string` | `String` |
+| `list<u8>` | `ByteArray` |
+| `list<T>` | `List<T>` |
+| `option<T>` | `T?` |
+| `option<T>`（`T` が null を取りうる。例: `option<option<U>>`） | `WitOption<T>`（例: `WitOption<U?>`） |
+| `result<T, E>` | `WitResult<T, E>`（`getOrThrow()` / `getOrNull()` / `errorOrNull()` / `fold` / `map` …） |
+| `tuple<A, B>` | `Tuple2<A, B>` |
+| `record` / `variant` / `enum` / `flags` | `data class` / `sealed interface` / `enum class` / `value class` |
+| `resource` | `AutoCloseable` なクラス |
+| `async func` / `future<T>` / `stream<T>` | `suspend fun` / `Deferred<T>` / `Flow<T>`（予定。Chicory のみ。#16） |
+
+生成される関数の KDoc には、元の WIT の定義（例: ``WIT: `lookup: func(k: string) -> option<option<s32>>` ``）が書き出されます。
+
 ---
 
 ## 1. World と実行セッション (`Session` & Context Parameters)
 
-WIT の `world` は、Kotlin の **シングルトンオブジェクト (`object <WorldName>World`)** にマッピングされます。
+WIT の `world` は、Kotlin の **シングルトンオブジェクト (`object <WorldName>World`)** にマッピングされます。名前がすでに `World` で終わる場合（`counter-world`）は付け足さず、`CounterWorld` になります。
 
 ```kotlin
 object CalculatorWorld {
@@ -52,8 +74,9 @@ WIT の `world` にホスト関数インポートが存在しない場合（例:
 | `s64` / `u64` | `kotlin.Long` / `kotlin.ULong` | |
 | `f32` (`float32`) | `kotlin.Float` | |
 | `f64` (`float64`) | `kotlin.Double` | |
-| `char` | `kotlin.Char` | |
+| `char` | `CodePoint`（`@JvmInline value class`、`value: Int`） | WIT の `char` は Unicode スカラー値（U+10FFFF まで）。Kotlin の `Char` では絵文字などを表せないため |
 | `string` | `kotlin.String` | UTF-8 文字列 |
+| `list<u8>` | `kotlin.ByteArray` | それ以外の `list<T>` は `List<T>`。`ByteArray` を持つ record / variant の `equals` / `hashCode` / `toString` は内容で比較・表示されます |
 
 ---
 
@@ -145,8 +168,18 @@ sealed interface Status {
 }
 ```
 
-### 3.5 `option<T>` と `result<T, E>` → `sealed interface WitOption` / `WitResult`
-Nullable (`T?`) や `kotlin.Result` の制約（`option<option<T>>` が潰れる問題や、任意のエラー型 `E` を持てない問題）を解消するため、一貫して `sealed interface` で表現します。
+### 3.5 `option<T>` → `T?`（ネストしたときだけ `WitOption`）
+
+`option<T>` は Kotlin の null 許容型 `T?` になります。`?.`、`?:`、スマートキャストなどがそのまま使えます。
+
+```kotlin
+val name: String? = MyWorld.findUser(id)    // option<string>
+val len = name?.length ?: 0
+val values: List<Int?> = MyWorld.samples()   // list<option<s32>>
+```
+
+`option<option<U>>` のように中身自体が null を取りうる場合は、`T??` にすると外側と内側の `none` を区別できないため、
+外側だけ `WitOption<T>` になります。
 
 ```kotlin
 sealed interface WitOption<out T> {
@@ -158,11 +191,34 @@ sealed interface WitOption<out T> {
     data object None : WitOption<Nothing>
 }
 
+val r: WitOption<Int?> = MyWorld.lookup(k)   // option<option<s32>>
+when (r) {
+    WitOption.None -> println("外側が none")
+    is WitOption.Some -> println(r.value ?: "内側が none")
+}
+```
+
+### 3.5.1 `result<T, E>` → `sealed interface WitResult`
+
+`kotlin.Result` はエラー型が `Throwable` に固定されるため、WIT の `E` を型付きで保持できる `WitResult` を使います。
+
+```kotlin
 sealed interface WitResult<out T, out E> {
     data class Ok<out T>(val value: T) : WitResult<T, Nothing>
     data class Err<out E>(val error: E) : WitResult<Nothing, E>
 }
 ```
+
+`kotlin.Result` に近い補助関数があります。
+
+| 関数 | 内容 |
+| :--- | :--- |
+| `getOrThrow()` | `ok` の値。`err` なら `WitResultException`（`error` に WIT のエラー値）を投げる |
+| `getOrNull()` / `errorOrNull()` | `ok` / `err` の値、そうでなければ `null` |
+| `getOrElse { e -> ... }` | `err` のときの代わりの値 |
+| `map { }` / `mapError { }` / `fold({ }, { })` | 値の変換と分岐 |
+| `isOk` / `isErr` | 判定 |
+
 * WIT で `result<_, string>` のように成功型や失敗型が省略された箇所は `kotlin.Unit` にマッピングされます（例: `WitResult<Unit, String>`）。
 
 ### 3.6 `tuple<T0, T1, ...>` と `type` エイリアス
@@ -218,7 +274,7 @@ class Counter internal constructor(
 ```
 
 ### 所有権のポイント
-1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`CounterWorldWorld.Counter(10)` と通常のコンストラクタ呼び出しのように書けます。
+1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`CounterWorld.Counter(10)` と通常のコンストラクタ呼び出しのように書けます。
 2. **`.use { ... }` とのシームレスな統合**: 生成時に `Session` を内部フィールド `private val session` にキャプチャするため、`override fun close()` には追加のコンテキストパラメータが不要で、Kotlin 標準の `.use { ... }` がそのまま使えます。
 3. **`borrow<T>` vs `own<T>`**:
    * `borrow<T>` 引数には `a.handle` が渡され、呼び出し後も `a` は引き続き使用可能です。

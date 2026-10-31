@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --locked --release --manifest-path decomposer/Cargo.toml
-for name in arithmetic counter live_calc roundtrip; do
+for name in arithmetic counter live_calc roundtrip types; do
   out="runtime-chicory/src/test/resources/components/$name"
   rm -rf "$out"
   decomposer/target/release/wasm2kt-decompose "fixtures/$name.wasm" "$out"

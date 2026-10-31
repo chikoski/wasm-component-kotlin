@@ -17,11 +17,11 @@ fun main() {
             }
             registerFunction("compute") { args ->
                 val p = args[0] as CalculatorWorld.Point
-                val opt = args[1] as WitOption<String>
-                val bytes = args[2] as List<UByte>
+                val opt = args[1] as String?
+                val bytes = args[2] as ByteArray
                 val tup = args[3] as Tuple2<UInt, String>
                 if (p.x < 0f) {
-                    WitResult.Err("negative x: ${opt.getOrNull()}")
+                    WitResult.Err("negative x: $opt")
                 } else {
                     WitResult.Ok(CalculatorWorld.Status.Code(tup.f0 + bytes.size.toUInt()))
                 }
@@ -39,8 +39,8 @@ fun main() {
 
         val res = CalculatorWorld.compute(
             p = CalculatorWorld.Point(1.5f, 2.5f),
-            opt = WitOption.Some("sample"),
-            listData = listOf(1u, 2u, 3u),
+            opt = "sample",
+            listData = byteArrayOf(1, 2, 3),
             tup = Tuple2(100u, "tag"),
         )
 

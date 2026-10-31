@@ -45,21 +45,21 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("fixtures/counter.wasm")
 
-    CounterWorldWorld.withSession(wasmPath) {
+    CounterWorld.withSession(wasmPath) {
         // 1. リソースの生成: companion object の invoke が Context Parameter から Session を受け取る
-        CounterWorldWorld.Counter(10).use { c1 ->
+        CounterWorld.Counter(10).use { c1 ->
             c1.increment()
             c1.increment()
             c1.add(5)
             println("c1 initial value = ${c1.getValue()}") // 17
 
-            val c2 = CounterWorldWorld.Counter(25)
+            val c2 = CounterWorld.Counter(25)
             c2.increment() // 26
 
             // 2. static 関数 merge(a: borrow<counter>, b: own<counter>) -> counter
             //    - c1 は borrow なので呼び出し後も引き続き有効
             //    - c2 は own なので所有権がゲストへ移動し、ホスト側では自動的に closed 扱いになる
-            CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+            CounterWorld.Counter.merge(c1, c2).use { merged ->
                 println("c1 after merge   = ${c1.getValue()}") // 17 (借用なので生存)
                 println("c2 isClosed      = ${c2.isClosed}")   // true (所有権移動済み)
                 println("merged value     = ${merged.getValue()}") // 43

@@ -80,11 +80,10 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 | 順 | Issue | ID | 内容 |
 | :--- | :--- | :--- | :--- |
-| 1 | [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) | A-14 | 型マッピングの方針決定（async の型 `Flow` / `suspend` も含む） |
-| 2 | [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) | A-15 | Canonical ABI の検証の厳密化（async の土台） |
-| 3 | [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource（WASI 0.3 の前提） |
-| 4 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
-| 5 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない） |
+| 1 | [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) | A-15 | Canonical ABI の検証の厳密化（async の土台） |
+| 2 | [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource（WASI 0.3 の前提） |
+| 3 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
+| 4 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない） |
 
 ### P2
 
@@ -97,6 +96,7 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 ### 完了
 
+* [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) 型マッピングの見直し — [ADR-0006](adr/0006-type-mapping.md)（option → `T?`、`list<u8>` → `ByteArray`、char → `CodePoint`、world 名、`WitResult` の補助関数、WIT シグネチャの KDoc）。async の型は #16 で実装
 * [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) ルートのモジュール分割 — ast / generator / cli / runtime-wasmtime / integration-tests、fixtures を共有ディレクトリに
 * [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) GitHub Actions で CI — #23
 * [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) `decomposer/dist` の検証 — 再現可能ビルド + CI の decomposer ジョブ
