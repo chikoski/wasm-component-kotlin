@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The Gradle daemon JVM comes from gradle/gradle-daemon-jvm.properties (JDK 21); setup-java provides it.
+
+jobs:
+  jvm:
+    name: JVM modules + Gradle plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      # Everything except the root project's tests, which need native tools (see the `native` job).
+      # Includes the gradle-plugin functional tests (TestKit builds of a consumer project).
+      - run: ./gradlew check -x :test --continue
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-test-reports
+          path: "**/build/reports/tests/"
+
+  native:
+    name: Generator + Wasmtime bridge
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-bridge
+      # The root tests generate bindings with wasm-tools (>= 1.220) and run them on Wasmtime.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+      - run: cargo build --release --manifest-path rust-bridge/Cargo.toml
+      - run: ./gradlew :test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-reports
+          path: build/reports/tests/
+
+  android:
+    name: Android sample (build, JVM tests, R8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      # The runner image ships the Android SDK and sets ANDROID_HOME.
+      - run: ./gradlew -p samples/android :app:testDebugUnitTest :app:assembleRelease :app:assembleDebugAndroidTest
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: samples/android/app/build/reports/
+
+  emulator:
+    name: Android sample on an emulator (ART)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Build first so the emulator only has to run the tests.
+      - run: ./gradlew -p samples/android :app:assembleDebug :app:assembleDebugAndroidTest
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: ./gradlew -p samples/android :app:connectedAndroidTest
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-reports
+          path: samples/android/app/build/reports/androidTests/
