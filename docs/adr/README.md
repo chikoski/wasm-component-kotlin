@@ -12,3 +12,4 @@
 | [0002](0002-wasmtime-environ-decomposer.md) | コンポーネントの分解に wasmtime-environ を使い、分解ツールを wasm で同梱する | 承認 |
 | [0003](0003-json-value-boundary.md) | バックエンド間の値の受け渡しに JSON 境界を共有する（フェーズ A） | 承認 |
 | [0004](0004-isolated-tooling-classloader.md) | ビルド時ツールを Gradle ワーカーの独立クラスローダーで実行する | 承認 |
+| [0005](0005-async-and-wasi03-chicory-only.md) | async と WASI 0.3 は Chicory バックエンドだけで進める | 承認 |

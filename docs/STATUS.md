@@ -55,6 +55,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
 * Chicory バックエンドの未対応機能: ホスト定義 resource、async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
+* async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
@@ -75,21 +76,24 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### P1
 
-なし
+async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。
+
+| 順 | Issue | ID | 内容 |
+| :--- | :--- | :--- | :--- |
+| 1 | [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) | A-14 | 型マッピングの方針決定（async の型 `Flow` / `suspend` も含む） |
+| 2 | [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) | A-15 | Canonical ABI の検証の厳密化（async の土台） |
+| 3 | [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource（WASI 0.3 の前提） |
+| 4 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
+| 5 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない） |
 
 ### P2
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
-| [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しないため P2） |
-| [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | Chicory 向け WASI ホスト実装 |
-| [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource |
-| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | フェーズ B: 静的な lift / lower 生成（ADR-0003） |
-| [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | async（WASI P3） |
-| [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) | A-14 | PHASE1 Step 1 の型マッピング変更の採否 |
-| [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) | A-15 | Canonical ABI の検証の厳密化 |
+| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成（JSON 境界は当面継続。#19 の結果で判断） |
 | [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) | A-16 | 性能・サイズの計測 |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
+| [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 
 ### 完了
 
