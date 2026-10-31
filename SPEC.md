@@ -135,7 +135,7 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
 | `u64` / `s64` | `kotlin.ULong` / `kotlin.Long` | |
 | `f32` (`float32`) | `kotlin.Float` | |
 | `f64` (`float64`) | `kotlin.Double` | |
-| `char` | `kotlin.Char` | Unicode Scalar Value (BMP mapped directly to `Char`) |
+| `char` | `CodePoint` (value class over `Int`) | Unicode Scalar Value; `kotlin.Char` cannot hold non-BMP code points ([ADR-0006](docs/adr/0006-type-mapping.md)) |
 | `string` | `kotlin.String` | UTF-8 encoded in Canonical ABI |
 
 ### 5.3 Composite & Algebraic Types
@@ -188,8 +188,9 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
     ```kotlin
     typealias UserId = ULong
     ```
-* **`option<T>` -> Sealed interface `WitOption<out T>`**
-  * Represented uniformly as a custom algebraic type (`sealed interface`) rather than Kotlin nullable `T?`, ensuring nested options (`option<option<T>>`) and Canonical ABI lifting/lowering work without ambiguity.
+* **`option<T>` -> Kotlin nullable `T?`** (superseded by [ADR-0006](docs/adr/0006-type-mapping.md))
+  * Only when `T` itself can be null (e.g. `option<option<U>>`) is the outer option a `WitOption<T>`, so nested options stay unambiguous.
+  * Originally this spec mapped every `option<T>` to `WitOption<out T>`.
     ```kotlin
     sealed interface WitOption<out T> {
         data class Some<out T>(val value: T) : WitOption<T>
@@ -204,7 +205,7 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
         data class Err<out E>(val error: E) : WitResult<Nothing, E>
     }
     ```
-* **`list<T>` -> `kotlin.collections.List<T>`** (with `ByteArray` / `UByteArray` optimization considered for `list<s8>` / `list<u8>`).
+* **`list<T>` -> `kotlin.collections.List<T>`**, except **`list<u8>` -> `ByteArray`** ([ADR-0006](docs/adr/0006-type-mapping.md)).
 
 ### 5.4 Functions & Interfaces
 * **Top-level exported functions**: Generated as extension functions on the world singleton `object` requiring `context(session: <WorldName>.Session)`.

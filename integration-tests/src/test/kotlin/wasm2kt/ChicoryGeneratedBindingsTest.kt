@@ -68,18 +68,18 @@ class ChicoryGeneratedBindingsTest {
     @Test
     fun `counter resources run on Chicory`(@TempDir tempDir: Path) {
         val out = generateCompileRun(
-            tempDir, "counter", "com.example.chicory.counter", "CounterWorldWorld.kt",
+            tempDir, "counter", "com.example.chicory.counter", "CounterWorld.kt",
             """
             fun run(component: ComponentBackendFactory): String =
-                CounterWorldWorld.withSession(component) {
-                    CounterWorldWorld.Counter(10).use { c1 ->
+                CounterWorld.withSession(component) {
+                    CounterWorld.Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
                         c1.add(5)
                         val v1 = c1.getValue()
-                        val c2 = CounterWorldWorld.Counter(25)
+                        val c2 = CounterWorld.Counter(25)
                         c2.increment()
-                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                        CounterWorld.Counter.merge(c1, c2).use { merged ->
                             "v1=${'$'}v1,v1After=${'$'}{c1.getValue()},c2Closed=${'$'}{c2.isClosed},merged=${'$'}{merged.getValue()}"
                         }
                     }
@@ -118,13 +118,21 @@ class ChicoryGeneratedBindingsTest {
                     val even = (RoundtripWorld.checkEven(84) as WitResult.Ok).value.toString() + ":" + (RoundtripWorld.checkEven(-7) as WitResult.Err).error
                     val ping = "${'$'}{RoundtripWorld.pingResult(true) is WitResult.Ok}:${'$'}{RoundtripWorld.pingResult(false) is WitResult.Err}"
                     val optNone = RoundtripWorld.nestedOption(WitOption.None)
-                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(WitOption.None))
-                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(23)))
+                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(null))
+                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(23))
                     val opt = listOf(
                         optNone is WitOption.None,
-                        optSomeNone is WitOption.Some && optSomeNone.value is WitOption.None,
-                        (optSomeVal as WitOption.Some).value.getOrNull() == 123,
+                        optSomeNone is WitOption.Some && optSomeNone.value == null,
+                        (optSomeVal as WitOption.Some).value == 123,
                     ).joinToString(",")
+                    // WitResult helpers (ADR-0006)
+                    check(RoundtripWorld.checkEven(84).getOrThrow() == 42u)
+                    check(RoundtripWorld.checkEven(-7).getOrNull() == null && RoundtripWorld.checkEven(-7).errorOrNull() == -7)
+                    check(RoundtripWorld.checkEven(-7).isErr && RoundtripWorld.checkEven(84).isOk)
+                    check(RoundtripWorld.checkEven(84).map { it * 2u }.getOrElse { 0u } == 84u)
+                    check(RoundtripWorld.checkEven(-7).fold({ "ok" }, { "err:${'$'}it" }) == "err:-7")
+                    val thrown = runCatching { RoundtripWorld.checkEven(-7).getOrThrow() }.exceptionOrNull()
+                    check(thrown is wasm2kt.runtime.WitResultException && thrown.error == -7)
                     val u64 = RoundtripWorld.echoU64(ULong.MAX_VALUE) == ULong.MAX_VALUE
                     "scaled=${'$'}scaled,tag=${'$'}tag,count=${'$'}{afterPrio.count},prio=${'$'}{afterPrio.prio},even=${'$'}even,ping=${'$'}ping,opt=${'$'}opt,u64Max=${'$'}u64"
                 }

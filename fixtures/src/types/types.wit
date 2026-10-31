@@ -1,0 +1,28 @@
+package example:types@0.1.0;
+
+/// Exercises the WIT -> Kotlin mappings decided in ADR-0006.
+world types-world {
+    record blob {
+        name: string,
+        data: list<u8>,
+        tag: option<u32>,
+    }
+
+    variant packet {
+        empty,
+        bytes(list<u8>),
+        text(string),
+    }
+
+    export echo-name: func(v: option<string>) -> option<string>;
+    export maybe-len: func(v: option<string>) -> option<u32>;
+    export echo-bytes: func(v: list<u8>) -> list<u8>;
+    export reverse-bytes: func(v: list<u8>) -> list<u8>;
+    export echo-char: func(c: char) -> char;
+    export next-char: func(c: char) -> char;
+    export echo-blob: func(b: blob) -> blob;
+    export echo-packet: func(p: packet) -> packet;
+    export compact: func(v: list<option<s32>>) -> list<s32>;
+    export echo-optional-list: func(v: list<option<s32>>) -> list<option<s32>>;
+    export nested: func(v: option<option<string>>) -> option<option<string>>;
+}

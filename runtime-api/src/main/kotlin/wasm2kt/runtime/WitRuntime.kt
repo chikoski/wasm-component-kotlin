@@ -30,3 +30,6 @@ interface WitHostImportDispatcher {
     fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement =
         error("Unknown host import: $importSpec")
 }
+
+/** Thrown by the generated `WitResult.getOrThrow()` for an `err`; [error] is the WIT error value. */
+class WitResultException(val error: Any?) : RuntimeException("WIT result error: $error")

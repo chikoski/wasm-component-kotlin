@@ -86,7 +86,7 @@ class WitToKotlinPoetConverterTest {
         assertTrue(worldFile.contains("context(session: CalculatorWorld.Session)"))
         assertTrue(worldFile.contains("fun CalculatorWorld.add(a: Int, b: Int): Int"))
         assertTrue(worldFile.contains("fun CalculatorWorld.compute("))
-        assertTrue(worldFile.contains("opt: WitOption<String>"))
+        assertTrue(worldFile.contains("opt: String?"))
         assertTrue(worldFile.contains("WitResult<CalculatorWorld.Status, String>"))
     }
 
@@ -175,10 +175,10 @@ class WitToKotlinPoetConverterTest {
                         }
                         registerFunction("compute") { args ->
                             val p = args[0] as CalculatorWorld.Point
-                            val opt = args[1] as WitOption<String>
-                            val bytes = args[2] as List<UByte>
+                            val opt = args[1] as String?
+                            val bytes = args[2] as ByteArray
                             val tup = args[3] as Tuple2<UInt, String>
-                            val label = opt.getOrNull() ?: "none"
+                            val label = opt ?: "none"
                             if (p.x < 0f) {
                                 WitResult.Err("negative x")
                             } else {
@@ -221,8 +221,8 @@ class WitToKotlinPoetConverterTest {
 
                     val computeRes = CalculatorWorld.compute(
                         p = CalculatorWorld.Point(1.5f, 2.5f),
-                        opt = WitOption.Some("hello"),
-                        listData = listOf(1u, 2u, 3u),
+                        opt = "hello",
+                        listData = byteArrayOf(1, 2, 3),
                         tup = Tuple2(100u, "tag"),
                     )
                     val codeVal = when (computeRes) {
@@ -475,7 +475,7 @@ class WitToKotlinPoetConverterTest {
         val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wit"))
         val witPath = Paths.get(witFixtureUrl.toURI())
 
-        // 1. Generate Kotlin host bindings from both counter.wit (CounterWorldWorld) and counter.wasm (RootWorld)
+        // 1. Generate Kotlin host bindings from both counter.wit (CounterWorld) and counter.wasm (RootWorld)
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
@@ -509,19 +509,19 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun runCounterComponent(wasmPath: Path): String {
-                return CounterWorldWorld.withSession(wasmPath) {
-                    CounterWorldWorld.Counter(10).use { c1 ->
+                return CounterWorld.withSession(wasmPath) {
+                    CounterWorld.Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
                         c1.add(5)
                         val v1 = c1.getValue() // 10 + 1 + 1 + 5 = 17
 
-                        val c2 = CounterWorldWorld.Counter(25)
+                        val c2 = CounterWorld.Counter(25)
                         c2.increment() // 26
 
                         // merge(a: borrow<counter>, b: own<counter>) -> own<counter>
                         // c1 is borrowed (remains usable), c2's ownership is consumed
-                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                        CounterWorld.Counter.merge(c1, c2).use { merged ->
                             val v1After = c1.getValue() // still 17
                             val vMerged = merged.getValue() // 17 + 26 = 43
                             "v1=${'$'}v1,v1After=${'$'}v1After,c2Closed=${'$'}{c2.isClosed},merged=${'$'}vMerged"
@@ -548,11 +548,11 @@ class WitToKotlinPoetConverterTest {
             "-d",
             classesOutDir.toString(),
             pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            pkgDir.resolve("CounterWorld.kt").toString(),
             pkgDir.resolve("RootWorld.kt").toString(),
             harnessPath.toString(),
         )
-        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated CounterWorldWorld & RootWorld bindings must compile cleanly")
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated CounterWorld & RootWorld bindings must compile cleanly")
 
         // 4. Execute on real Wasmtime via JVM Foreign Function & Memory (FFM) API
         val classLoader = java.net.URLClassLoader(
@@ -581,7 +581,7 @@ class WitToKotlinPoetConverterTest {
         val examples = listOf(
             ExampleSpec("01-arithmetic", "arithmetic.wit", "com.example.arithmetic", "ArithmeticWorld.kt"),
             ExampleSpec("02-host-imports", "live_calc.wit", "com.example.live", "LiveCalcWorld.kt"),
-            ExampleSpec("03-counter-resource", "counter.wit", "com.example.counter", "CounterWorldWorld.kt"),
+            ExampleSpec("03-counter-resource", "counter.wit", "com.example.counter", "CounterWorld.kt"),
             ExampleSpec("04-algebraic-types-and-mock", "calculator.wit", "com.example.wasm", "CalculatorWorld.kt"),
         )
 
@@ -714,13 +714,13 @@ class WitToKotlinPoetConverterTest {
 
                     // 5. Nested option<option<s32>> distinguishing None, Some(None), and Some(Some(v))
                     val optNone = RoundtripWorld.nestedOption(WitOption.None)
-                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(WitOption.None))
-                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(23)))
+                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(null))
+                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(23))
 
                     val optStr = listOf(
                         optNone is WitOption.None,
-                        optSomeNone is WitOption.Some && optSomeNone.value is WitOption.None,
-                        (optSomeVal as WitOption.Some).value.getOrNull() == 123,
+                        optSomeNone is WitOption.Some && optSomeNone.value == null,
+                        (optSomeVal as WitOption.Some).value == 123,
                     ).joinToString(",")
 
                     // 6. u64 boundary value (ULong.MAX_VALUE)
@@ -797,8 +797,8 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun verifyResourceSafety(wasmPath: Path): String {
-                return CounterWorldWorld.withSession(wasmPath) {
-                    val c1 = CounterWorldWorld.Counter(10)
+                return CounterWorld.withSession(wasmPath) {
+                    val c1 = CounterWorld.Counter(10)
                     c1.close()
                     val afterCloseError = try {
                         c1.increment()
@@ -807,9 +807,9 @@ class WitToKotlinPoetConverterTest {
                         "closed-error"
                     }
 
-                    val a = CounterWorldWorld.Counter(5)
-                    val b = CounterWorldWorld.Counter(7)
-                    val merged = CounterWorldWorld.Counter.merge(a, b)
+                    val a = CounterWorld.Counter(5)
+                    val b = CounterWorld.Counter(7)
+                    val merged = CounterWorld.Counter.merge(a, b)
                     val afterMoveError = try {
                         b.getValue()
                         "no-error"
@@ -840,7 +840,7 @@ class WitToKotlinPoetConverterTest {
             "-d",
             classesOutDir.toString(),
             pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            pkgDir.resolve("CounterWorld.kt").toString(),
             harnessPath.toString(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
@@ -900,7 +900,7 @@ class WitToKotlinPoetConverterTest {
         )
 
         val pkgDir = tempDir.resolve("com/example/flags64")
-        val worldFile = pkgDir.resolve("LargeFlagsWorldWorld.kt")
+        val worldFile = pkgDir.resolve("LargeFlagsWorld.kt")
         val content = Files.readString(worldFile)
 
         assertTrue(content.contains("val raw: ULong = 0uL"), "Flags > 32 must be backed by ULong")
@@ -913,7 +913,7 @@ class WitToKotlinPoetConverterTest {
             package com.example.flags64
 
             fun testLargeFlags(): Boolean {
-                val combined = LargeFlagsWorldWorld.Permissions64.FLAG_AA or LargeFlagsWorldWorld.Permissions64.FLAG_DF
+                val combined = LargeFlagsWorld.Permissions64.FLAG_AA or LargeFlagsWorld.Permissions64.FLAG_DF
                 return combined.flagAa && !combined.flagAb && combined.flagDf
             }
             """.trimIndent(),
@@ -977,7 +977,7 @@ class WitToKotlinPoetConverterTest {
         )
 
         val pkgDir = tempDir.resolve("com/example/kw")
-        val worldFile = pkgDir.resolve("KwWorldWorld.kt")
+        val worldFile = pkgDir.resolve("KwWorld.kt")
         val classesOutDir = tempDir.resolve("classes")
         Files.createDirectories(classesOutDir)
 
@@ -1245,17 +1245,17 @@ class WitToKotlinPoetConverterTest {
                 // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
                 val aotBytesSummary = RoundtripWorld.withSession(cwasmBytes, imports) {
                     val scaled = with(RoundtripWorld.MathApi) { scale(5) } // 5 * 7 = 35
-                    val optVal = RoundtripWorld.nestedOption(WitOption.Some(WitOption.Some(10)))
-                    val unwrapped = (optVal as WitOption.Some).value.getOrNull()
+                    val optVal = RoundtripWorld.nestedOption(WitOption.Some(10))
+                    val unwrapped = (optVal as WitOption.Some).value
                     "${'$'}scaled:${'$'}unwrapped"
                 }
 
                 // 3. Counter resource lifecycle over JNI
-                val counterSummary = CounterWorldWorld.withSession(counterWasmPath) {
-                    CounterWorldWorld.Counter(10).use { c1 ->
+                val counterSummary = CounterWorld.withSession(counterWasmPath) {
+                    CounterWorld.Counter(10).use { c1 ->
                         c1.add(5)
-                        val c2 = CounterWorldWorld.Counter(27)
-                        CounterWorldWorld.Counter.merge(c1, c2).use { merged ->
+                        val c2 = CounterWorld.Counter(27)
+                        CounterWorld.Counter.merge(c1, c2).use { merged ->
                             "${'$'}{c1.getValue()}:${'$'}{c2.isClosed}:${'$'}{merged.getValue()}"
                         }
                     }
@@ -1282,7 +1282,7 @@ class WitToKotlinPoetConverterTest {
             classesOutDir.toString(),
             pkgDir.resolve("WitSupport.kt").toString(),
             pkgDir.resolve("RoundtripWorld.kt").toString(),
-            pkgDir.resolve("CounterWorldWorld.kt").toString(),
+            pkgDir.resolve("CounterWorld.kt").toString(),
             harnessPath.toString(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "JniHarness must compile cleanly")
@@ -1352,7 +1352,7 @@ class WitToKotlinPoetConverterTest {
         )
 
         val pkgDir = tempDir.resolve("com/example/nestedres")
-        val worldFile = pkgDir.resolve("NestedResWorldWorld.kt")
+        val worldFile = pkgDir.resolve("NestedResWorld.kt")
         val classesOutDir = tempDir.resolve("classes")
         Files.createDirectories(classesOutDir)
 
@@ -1417,7 +1417,7 @@ class WitToKotlinPoetConverterTest {
         )
 
         val pkgDir = tempDir.resolve("com/example/collision")
-        val worldFile = pkgDir.resolve("CollisionWorldWorld.kt")
+        val worldFile = pkgDir.resolve("CollisionWorld.kt")
         val generatedCode = Files.readString(worldFile)
 
         assertTrue(generatedCode.contains("data class AlphaConfig("), "Alpha's config record should be disambiguated as AlphaConfig")
@@ -1578,7 +1578,7 @@ class WitToKotlinPoetConverterTest {
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.hostres", witFile.toString()),
         )
         val pkgDir = tempDir.resolve("com/example/hostres")
-        val worldFile = pkgDir.resolve("HostResWorldWorld.kt")
+        val worldFile = pkgDir.resolve("HostResWorld.kt")
         val harnessPath = pkgDir.resolve("HostResHarness.kt")
         Files.writeString(
             harnessPath,
@@ -1591,16 +1591,16 @@ class WitToKotlinPoetConverterTest {
             import kotlinx.serialization.json.jsonPrimitive
 
             fun runHostResScenario(): String {
-                val imports = object : HostResWorldWorld.Imports {
-                    override fun inspectPair(p: HostResWorldWorld.CounterPair): String {
+                val imports = object : HostResWorld.Imports {
+                    override fun inspectPair(p: HostResWorld.CounterPair): String {
                         val err = runCatching { p.primary.getValue() }.exceptionOrNull()
                         return "${'$'}{p.label}:${'$'}{p.primary.handle}:${'$'}{err?.message}"
                     }
-                    override fun inspectOutcome(o: HostResWorldWorld.CounterOutcome): Int = when (o) {
-                        is HostResWorldWorld.CounterOutcome.Created -> o.value.handle
-                        HostResWorldWorld.CounterOutcome.Empty -> -1
+                    override fun inspectOutcome(o: HostResWorld.CounterOutcome): Int = when (o) {
+                        is HostResWorld.CounterOutcome.Created -> o.value.handle
+                        HostResWorld.CounterOutcome.Empty -> -1
                     }
-                    override fun inspectCounter(c: HostResWorldWorld.Counter): Int = c.handle
+                    override fun inspectCounter(c: HostResWorld.Counter): Int = c.handle
                 }
                 val pair = imports.dispatchHostImport(
                     "inspect-pair",
@@ -1674,7 +1674,7 @@ class WitToKotlinPoetConverterTest {
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.collision2", witFile.toString()),
         )
         val pkgDir = tempDir.resolve("com/example/collision2")
-        val worldFile = pkgDir.resolve("Collision2WorldWorld.kt")
+        val worldFile = pkgDir.resolve("Collision2World.kt")
         val generatedCode = Files.readString(worldFile)
 
         assertEquals(1, Regex("""data class AlphaConfig\(""").findAll(generatedCode).count(), "Only gamma's alpha-config may claim AlphaConfig")

@@ -45,6 +45,7 @@ object FfmJsonCodec {
             is String -> JsonPrimitive(value)
             is Enum<*> -> JsonPrimitive(toKebabCase(value.name))
             is List<*> -> JsonArray(value.map { toJsonElement(it) })
+            is ByteArray -> JsonArray(value.map { JsonPrimitive(it.toInt() and 0xFF) })
             else -> error("Unsupported WIT value for JSON serialization: ${value::class.qualifiedName}")
         }
     }
@@ -128,6 +129,31 @@ object FfmJsonCodec {
     }
 
     fun decodeString(element: JsonElement): String = element.jsonPrimitive.content
+
+    /** WIT `char` as a code point (any Unicode scalar value, unlike [decodeChar]). */
+    fun decodeCodePoint(element: JsonElement): Int {
+        val str = element.jsonPrimitive.content
+        require(str.isNotEmpty()) { "Cannot decode empty string as WIT char" }
+        val codePoint = str.codePointAt(0)
+        require(Character.charCount(codePoint) == str.length) { "Expected single Unicode scalar value for WIT char, got: $str" }
+        return codePoint
+    }
+
+    /** `list<u8>`. */
+    fun decodeByteArray(element: JsonElement): ByteArray {
+        val arr = element.jsonArray
+        return ByteArray(arr.size) { i -> arr[i].jsonPrimitive.int.toByte() }
+    }
+
+    /**
+     * `option<T>` mapped to `T?` (ADR-0006): `null` for `none`. Accepts the tagged form
+     * (`{"option": "some", "value": ...}`) and bare values, like the backends do.
+     */
+    inline fun <T : Any> decodeNullableOption(element: JsonElement, decodeSome: (JsonElement) -> T): T? = when {
+        element is JsonNull -> null
+        element is JsonObject && "option" in element -> if (isOptionNone(element)) null else decodeSome(optionValue(element))
+        else -> decodeSome(element)
+    }
 
     inline fun <T> decodeList(element: JsonElement, itemDecoder: (JsonElement) -> T): List<T> =
         element.jsonArray.map(itemDecoder)

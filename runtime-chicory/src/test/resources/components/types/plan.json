@@ -1,0 +1,614 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 0,
+        "name": "memory"
+      }
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 0,
+        "name": "cabi_realloc",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 0,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-name",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 1,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-bytes",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 2,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-blob",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 3,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-packet",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 4,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_compact",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 5,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-optional-list",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 6,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_nested",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 0,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 1,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 4,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 2,
+      "async": false
+    },
+    {
+      "index": 5,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 3,
+      "async": false
+    },
+    {
+      "index": 6,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 4,
+      "async": false
+    },
+    {
+      "index": 7,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 5,
+      "async": false
+    },
+    {
+      "index": 8,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 6,
+      "async": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "echo-name",
+      "func": {
+        "instance": 0,
+        "name": "echo-name",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "string"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "maybe-len",
+      "func": {
+        "instance": 0,
+        "name": "maybe-len",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "string"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-bytes",
+      "func": {
+        "instance": 0,
+        "name": "echo-bytes",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "reverse-bytes",
+      "func": {
+        "instance": 0,
+        "name": "reverse-bytes",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-char",
+      "func": {
+        "instance": 0,
+        "name": "echo-char",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "c",
+            "type": {
+              "k": "char"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "char"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "next-char",
+      "func": {
+        "instance": 0,
+        "name": "next-char",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "c",
+            "type": {
+              "k": "char"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "char"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-blob",
+      "func": {
+        "instance": 0,
+        "name": "echo-blob",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "b",
+            "type": {
+              "k": "record",
+              "fields": [
+                {
+                  "name": "name",
+                  "type": {
+                    "k": "string"
+                  }
+                },
+                {
+                  "name": "data",
+                  "type": {
+                    "k": "list",
+                    "element": {
+                      "k": "u8"
+                    }
+                  }
+                },
+                {
+                  "name": "tag",
+                  "type": {
+                    "k": "option",
+                    "type": {
+                      "k": "u32"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "record",
+            "fields": [
+              {
+                "name": "name",
+                "type": {
+                  "k": "string"
+                }
+              },
+              {
+                "name": "data",
+                "type": {
+                  "k": "list",
+                  "element": {
+                    "k": "u8"
+                  }
+                }
+              },
+              {
+                "name": "tag",
+                "type": {
+                  "k": "option",
+                  "type": {
+                    "k": "u32"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-packet",
+      "func": {
+        "instance": 0,
+        "name": "echo-packet",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "p",
+            "type": {
+              "k": "variant",
+              "cases": [
+                {
+                  "name": "empty",
+                  "type": null
+                },
+                {
+                  "name": "bytes",
+                  "type": {
+                    "k": "list",
+                    "element": {
+                      "k": "u8"
+                    }
+                  }
+                },
+                {
+                  "name": "text",
+                  "type": {
+                    "k": "string"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "variant",
+            "cases": [
+              {
+                "name": "empty",
+                "type": null
+              },
+              {
+                "name": "bytes",
+                "type": {
+                  "k": "list",
+                  "element": {
+                    "k": "u8"
+                  }
+                }
+              },
+              {
+                "name": "text",
+                "type": {
+                  "k": "string"
+                }
+              }
+            ]
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "compact",
+      "func": {
+        "instance": 0,
+        "name": "compact",
+        "kind": "export"
+      },
+      "options": 6,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "s32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-optional-list",
+      "func": {
+        "instance": 0,
+        "name": "echo-optional-list",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "option",
+              "type": {
+                "k": "s32"
+              }
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "nested",
+      "func": {
+        "instance": 0,
+        "name": "nested",
+        "kind": "export"
+      },
+      "options": 8,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "option",
+                "type": {
+                  "k": "string"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "string"
+              }
+            }
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

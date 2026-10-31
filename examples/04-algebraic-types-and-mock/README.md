@@ -1,4 +1,4 @@
-# Example 04: 代数的データ型 (`Record`, `Variant`, `Flags`, `WitOption`, `WitResult`) と `InMemoryWasmtimeSession` による単体テスト
+# Example 04: 代数的データ型 (`Record`, `Variant`, `Flags`, `option` → `T?`, `WitResult`) と `InMemoryWasmtimeSession` による単体テスト
 
 WIT の豊富な型システム（`record`, `enum`, `flags`, `variant`, `tuple`, `typealias`, `option`, `result`, `resource`）の操作方法と、`.wasm` バイナリがなくても `InMemoryWasmtimeSession` を使ってホストアプリのロジックやリソース解放漏れを単体テストする方法を示すサンプルです。
 
@@ -73,11 +73,11 @@ fun main() {
             }
             registerFunction("compute") { args ->
                 val p = args[0] as CalculatorWorld.Point
-                val opt = args[1] as WitOption<String>
-                val bytes = args[2] as List<UByte>
+                val opt = args[1] as String?          // option<string>
+                val bytes = args[2] as ByteArray      // list<u8>
                 val tup = args[3] as Tuple2<UInt, String>
                 if (p.x < 0f) {
-                    WitResult.Err("negative x: ${opt.getOrNull()}")
+                    WitResult.Err("negative x: $opt")
                 } else {
                     WitResult.Ok(CalculatorWorld.Status.Code(tup.f0 + bytes.size.toUInt()))
                 }
@@ -95,11 +95,11 @@ fun main() {
         val perms = CalculatorWorld.Permissions.READ or CalculatorWorld.Permissions.EXECUTE
         println("Permissions: read=${perms.read}, write=${perms.write}, execute=${perms.execute}")
 
-        // Record, WitOption, List, Tuple2 を渡して WitResult<Status, String> を受け取る
+        // Record, String?（option）, ByteArray（list<u8>）, Tuple2 を渡して WitResult<Status, String> を受け取る
         val res = CalculatorWorld.compute(
             p = CalculatorWorld.Point(1.5f, 2.5f),
-            opt = WitOption.Some("sample"),
-            listData = listOf(1u, 2u, 3u),
+            opt = "sample",
+            listData = byteArrayOf(1, 2, 3),
             tup = Tuple2(100u, "tag"),
         )
 
