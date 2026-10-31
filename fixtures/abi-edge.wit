@@ -1,0 +1,16 @@
+package root:component;
+
+world root {
+  import ping: func();
+
+  export set-mode: func(mode: u32);
+  export char-from: func(n: u32) -> char;
+  export result-from: func(n: u32) -> result;
+  export option-from: func(disc: u32) -> option<u32>;
+  export string-at: func(ptr: u32, len: u32) -> string;
+  export utf16-at: func(ptr: u32, len: u32) -> string;
+  export list-at: func(ptr: u32, len: u32) -> list<u32>;
+  export string-ret: func(retptr: u32) -> string;
+  export list-len: func(items: list<u32>) -> u32;
+  export call-ping: func();
+}

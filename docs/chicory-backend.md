@@ -99,6 +99,19 @@ KotlinPoet）は Gradle ワーカー内の**独立したクラスローダー**�
   デストラクタ、ホスト側ハンドル）に対応
 * `ChicoryComponent.fromDirectory(dir)` を使うと、分解結果をインタプリタで直接実行することもできます（テスト・検証用）
 
+### エラーとトラップ
+
+Canonical ABI の検証は仕様（`definitions.py` の `trap_if`）に従います（[ADR-0007](adr/0007-canonical-abi-validation.md)）。
+
+| 状況 | 例外 | インスタンス |
+| :--- | :--- | :--- |
+| ゲストが規則を破った（不正な `char` / 判別子 / 文字列エンコーディング、範囲外やアラインされていないポインタ、上限を超える長さ、`cabi_realloc` や post-return 中の import 呼び出し、ホスト import からの再入）、core wasm のトラップ | `ComponentTrapException` | 使えなくなる（以降の呼び出しも `ComponentTrapException`） |
+| ゲストの実行中にホスト import が例外を投げた | その例外 | 使えなくなる |
+| ホストの値が WIT の型に合わない（範囲外の整数、1 文字でない `char`、孤立サロゲートを含む文字列など）、未知のハンドル、引数の数の違い | `IllegalArgumentException` / `IllegalStateException` | 使い続けられる |
+
+`ComponentTrapException`（`runtime-api`）は `IllegalStateException` を継承しています。トラップしたら新しいセッションを開いてください。
+浮動小数点の NaN は、lift / lower のどちらでも正規の NaN に揃えます。
+
 Wasmtime ブリッジとの差分テスト（`ChicoryDifferentialTest`）で、同じ呼び出し列に対して同じ結果になることを確認しています。
 
 ### 未対応

@@ -59,6 +59,7 @@ class ChicoryDifferentialTest {
                 try {
                     normalize(b.invoke(c.fn, JsonArray(c.args.toList()))).toString()
                 } catch (e: Exception) {
+                    System.err.println("DIFF ${b.javaClass.simpleName} ${c.fn}(${c.args.joinToString()}): ${e.message}")
                     "error"
                 }
             }
@@ -133,6 +134,81 @@ class ChicoryDifferentialTest {
             Call("[method]counter.get-value", JsonPrimitive(1)),
         )
         runBoth("counter", { null }, calls)
+    }
+
+    @Test
+    fun `borrowing and moving the same handle in one call matches Wasmtime`() {
+        val calls = listOf(
+            Call("[constructor]counter", JsonPrimitive(10)), // handle 1
+            Call("[static]counter.merge", JsonPrimitive(1), JsonPrimitive(1)), // borrow + own of one handle
+            Call("[method]counter.get-value", JsonPrimitive(1)),
+            Call("[constructor]counter", JsonPrimitive(5)),
+            Call("[method]counter.get-value", JsonPrimitive(1)),
+        )
+        runBoth("counter", { null }, calls)
+    }
+
+    private val ping = {
+        object : WitHostImportDispatcher {
+            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = JsonNull
+        }
+    }
+
+    private fun u(vararg v: Long) = v.map { JsonPrimitive(it) }.toTypedArray()
+
+    /**
+     * Canonical ABI validation (#18): the abi-edge fixture returns raw core values chosen by the
+     * test, so each scenario makes the guest hand back something the ABI must reject. Each
+     * scenario runs on a fresh instance because a trap poisons the instance.
+     */
+    @Test
+    fun `canonical ABI traps match Wasmtime`() {
+        val mem = 0x10000L
+        val scenarios = listOf(
+            // char: surrogates and values past U+10FFFF trap
+            listOf(Call("char-from", *u(0x41)), Call("char-from", *u(0x10FFFF))),
+            listOf(Call("char-from", *u(0xD800))),
+            listOf(Call("char-from", *u(0xDFFF))),
+            listOf(Call("char-from", *u(0x110000))),
+            listOf(Call("char-from", *u(0xFFFF_FFFF))),
+            // discriminants out of range trap (flat and in memory)
+            listOf(Call("result-from", *u(0)), Call("result-from", *u(1))),
+            listOf(Call("result-from", *u(2))),
+            listOf(Call("option-from", *u(0)), Call("option-from", *u(1))),
+            listOf(Call("option-from", *u(2))),
+            listOf(Call("option-from", *u(255))),
+            // strings: invalid encodings, bounds and the length limit
+            listOf(Call("string-at", *u(0x200, 5)), Call("string-at", *u(0x200, 0)), Call("string-at", *u(mem, 0))),
+            listOf(Call("string-at", *u(0x100, 3))),
+            listOf(Call("string-at", *u(mem - 1, 2))),
+            listOf(Call("string-at", *u(mem + 1, 0))),
+            listOf(Call("string-at", *u(0x200, 1L shl 28))),
+            listOf(Call("string-at", *u(0xFFFF_FFFF, 2))),
+            listOf(Call("utf16-at", *u(0x310, 1)), Call("utf16-at", *u(0x300, 2))),
+            listOf(Call("utf16-at", *u(0x310, 2))),
+            listOf(Call("utf16-at", *u(mem - 2, 2))),
+            // lists: alignment, bounds, and length * size overflow
+            listOf(Call("list-at", *u(0x300, 3)), Call("list-at", *u(0x300, 0)), Call("list-at", *u(mem, 0))),
+            listOf(Call("list-at", *u(0x302, 1))),
+            listOf(Call("list-at", *u(mem - 8, 4))),
+            listOf(Call("list-at", *u(0x300, 0x4000_0001))),
+            // return pointers: alignment and bounds
+            listOf(Call("string-ret", *u(0x40))),
+            listOf(Call("string-ret", *u(0x42))),
+            listOf(Call("string-ret", *u(mem - 4))),
+            // realloc results: misaligned, out of bounds, and leaving the instance during realloc
+            listOf(Call("list-len", j("[1,2,3]")), Call("set-mode", *u(0)), Call("list-len", j("[]"))),
+            listOf(Call("set-mode", *u(1)), Call("list-len", j("[1,2,3]"))),
+            listOf(Call("set-mode", *u(2)), Call("list-len", j("[1,2,3]"))),
+            listOf(Call("set-mode", *u(3)), Call("list-len", j("[1,2,3]"))),
+            listOf(Call("call-ping")),
+            // a trap poisons the instance: later calls fail too
+            listOf(Call("char-from", *u(0xD800)), Call("char-from", *u(0x41)), Call("call-ping")),
+            // host-side argument errors are not traps and leave the instance usable
+            listOf(Call("char-from", JsonPrimitive("x")), Call("char-from", *u(0x41))),
+            listOf(Call("list-len", j("[1,\"x\"]")), Call("list-len", j("[1]"))),
+        )
+        for (calls in scenarios) runBoth("abi-edge", ping, calls)
     }
 
     @Test
