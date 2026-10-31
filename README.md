@@ -1,5 +1,7 @@
 # wasm2kt (`wasm-component-kotlin`)
 
+[![CI](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml)
+
 **WebAssembly Component Model (WIT) から型安全でイディオマティックな Kotlin ホスト側バインディングを生成するコードジェネレータ**
 
 `wasm2kt` は、`.wit` 定義ファイルまたは `.wasm` コンポーネントバイナリを入力として受け取り、**Kotlin 2.2+ の Context Parameters (`context(session: Session)`)** と **Wasmtime (JVM Foreign Function & Memory API)** を活用した Kotlin ホストバインディングを自動生成します。

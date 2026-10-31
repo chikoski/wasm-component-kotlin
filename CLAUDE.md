@@ -32,6 +32,7 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml  # ルートのテ�
 decomposer/build-wasm.sh                        # decomposer を変更したら必ず実行（dist を更新）
 ```
 
+CI（`.github/workflows/ci.yml`）は jvm / native / android / emulator の 4 ジョブです。ローカルで同じことを確認するには上のコマンドを使います。
 ルートのテストには `wasm-tools` が必要です（1.220 以降。`WASM_TOOLS_BIN` か `~/.cargo/bin` か PATH から探します）。
 Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定で **JDK 21** で動きます（`./gradlew` を起動した JDK や `JAVA_HOME` とは無関係）。
 JDK 21 がインストールされていれば、Gradle が自動で見つけます。見つからない場合は `~/.gradle/gradle.properties` に
