@@ -36,17 +36,33 @@ class HostResourceTable : AutoCloseable {
     private var nextRep = 1
     private val lendScopes = ArrayDeque<MutableList<Int>>()
 
-    /** Moves [resource] to the component and returns its rep (the same rep while it stays in the table). */
+    /**
+     * Moves [resource] to the component and returns its rep.
+     *
+     * The host must still own [resource]: one the component already owns (moved earlier and not
+     * handed back) or one lent to a call in progress cannot be moved, as in the spec's `lift_own`
+     * (`trap_if(h.num_lends != 0)`). Both are host errors and fail here, before the component
+     * could end up with two owning handles for one object.
+     */
     fun lower(resource: WitHostResource): Int {
         val rep = repOf(resource)
-        entries.getValue(rep).owned = true
+        val entry = entries.getValue(rep)
+        check(!entry.owned) { "${describe(resource)} was already moved to the component and cannot be passed as own again" }
+        check(lendScopes.none { rep in it }) { "${describe(resource)} is lent to a call in progress and cannot be moved" }
+        entry.owned = true
         return rep
     }
 
-    /** Lends [resource] to the component for the current call. */
+    /**
+     * Lends [resource] to the component for the current call. Lending the same object twice in a
+     * call is fine; lending one the component already owns is a host error.
+     */
     fun lend(resource: WitHostResource): Int {
         val known = reps[resource]
-        if (known != null) return known
+        if (known != null) {
+            check(!entries.getValue(known).owned) { "${describe(resource)} was moved to the component and cannot be lent" }
+            return known
+        }
         val rep = repOf(resource)
         lendScopes.lastOrNull()?.add(rep)
         return rep
@@ -101,6 +117,8 @@ class HostResourceTable : AutoCloseable {
         entries[rep] = Entry(resource, owned = false)
         rep
     }
+
+    private fun describe(resource: WitHostResource) = "Host resource ${resource.javaClass.name}"
 
     private fun entry(rep: Int): Entry = entries[rep] ?: throw IllegalStateException("Unknown host resource rep $rep")
 
