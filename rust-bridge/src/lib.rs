@@ -36,6 +36,25 @@ pub struct StoreData {
     pub lent_host_resources: Vec<ResourceAny>,
 }
 
+/// Whether `obj` is the tagged form of an option (`{"option": "none"}` / `{"option": "some",
+/// "value": ...}`) rather than a bare `some` payload. Generated code sends `some` bare (ADR-0006), so
+/// a payload that is itself a record with an `option` field must not be taken for a tag (#36): an
+/// object is a tag only if its keys are exactly those of the tagged form, and never when every
+/// field of the payload record would fit in it. Must match the Chicory backend (`isTaggedOption`).
+fn is_tagged_option(obj: &serde_json::Map<String, JsonValue>, payload: &Type) -> bool {
+    const TAGGED_KEYS: [&str; 2] = ["option", "value"];
+    if !matches!(obj.get("option").and_then(|v| v.as_str()), Some("some" | "none")) {
+        return false;
+    }
+    if !obj.keys().all(|k| TAGGED_KEYS.contains(&k.as_str())) {
+        return false;
+    }
+    match payload {
+        Type::Record(rec) => !rec.fields().all(|f| TAGGED_KEYS.contains(&f.name)),
+        _ => true,
+    }
+}
+
 /// Whether `rt` is a host-defined resource: the host type itself (export signatures of an instance)
 /// or an imported resource type as it appears in the component's import signatures.
 fn is_host_resource(rt: &ResourceType, store: &StoreContextMut<'_, StoreData>) -> bool {
@@ -215,7 +234,7 @@ fn json_to_val(
             if j.is_null() {
                 return Ok(Val::Option(None));
             }
-            if let Some(obj) = j.as_object() {
+            if let Some(obj) = j.as_object().filter(|obj| is_tagged_option(obj, &opt_ty.ty())) {
                 if let Some(case_str) = obj.get("option").and_then(|v| v.as_str()) {
                     return match case_str {
                         "none" => Ok(Val::Option(None)),

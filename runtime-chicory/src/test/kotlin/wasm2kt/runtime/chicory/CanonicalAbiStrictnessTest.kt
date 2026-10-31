@@ -45,6 +45,22 @@ class CanonicalAbiStrictnessTest {
     }
 
     @Test
+    fun `host values must have the JSON type of their WIT type`() {
+        // #36: null or a number for a string used to be stored as its text ("null", "5").
+        component("types").instantiate(null).use { c ->
+            for (bad in listOf("""{"name":null,"data":[],"tag":null}""", """{"name":5,"data":[],"tag":null}""")) {
+                assertThrows<IllegalArgumentException> { c.invoke("echo-blob", JsonArray(listOf(j(bad)))) }
+            }
+            assertThrows<IllegalArgumentException> { c.invoke("echo-char", JsonArray(listOf(JsonPrimitive(65)))) }
+            assertThrows<IllegalArgumentException> { c.invoke("echo-name", JsonArray(listOf(JsonPrimitive(true)))) }
+            // Host errors do not poison the instance.
+            assertEquals("ok", c.invoke("echo-name", JsonArray(listOf(JsonPrimitive("ok")))).let { r ->
+                (r as? kotlinx.serialization.json.JsonObject)?.get("value")?.jsonPrimitive?.content ?: r.jsonPrimitive.content
+            })
+        }
+    }
+
+    @Test
     fun `a host import may not re-enter the instance`() {
         lateinit var backend: ComponentBackend
         var inner: Throwable? = null

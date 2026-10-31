@@ -93,6 +93,15 @@
         "name": "cabi_post_nested",
         "kind": "export"
       }
+    },
+    {
+      "op": "extract-post-return",
+      "index": 7,
+      "def": {
+        "instance": 0,
+        "name": "cabi_post_echo-flagged",
+        "kind": "export"
+      }
     }
   ],
   "trampolines": [],
@@ -134,7 +143,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 0,
+      "postReturn": 7,
       "async": false
     },
     {
@@ -142,7 +151,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 5,
+      "postReturn": 0,
       "async": false
     },
     {
@@ -150,7 +159,7 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": 3,
+      "postReturn": 5,
       "async": false
     },
     {
@@ -158,11 +167,19 @@
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
-      "postReturn": null,
+      "postReturn": 3,
       "async": false
     },
     {
       "index": 8,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 9,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
@@ -346,13 +363,85 @@
     },
     {
       "instance": null,
+      "name": "echo-flagged",
+      "func": {
+        "instance": 0,
+        "name": "echo-flagged",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "record",
+                "fields": [
+                  {
+                    "name": "option",
+                    "type": {
+                      "k": "string"
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "k": "u32"
+                    }
+                  },
+                  {
+                    "name": "note",
+                    "type": {
+                      "k": "string"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "record",
+              "fields": [
+                {
+                  "name": "option",
+                  "type": {
+                    "k": "string"
+                  }
+                },
+                {
+                  "name": "value",
+                  "type": {
+                    "k": "u32"
+                  }
+                },
+                {
+                  "name": "note",
+                  "type": {
+                    "k": "string"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
       "name": "echo-name",
       "func": {
         "instance": 0,
         "name": "echo-name",
         "kind": "export"
       },
-      "options": 4,
+      "options": 5,
       "type": {
         "params": [
           {
@@ -384,7 +473,7 @@
         "name": "echo-optional-list",
         "kind": "export"
       },
-      "options": 5,
+      "options": 6,
       "type": {
         "params": [
           {
@@ -422,7 +511,7 @@
         "name": "echo-packet",
         "kind": "export"
       },
-      "options": 6,
+      "options": 7,
       "type": {
         "params": [
           {
@@ -490,7 +579,7 @@
         "name": "maybe-len",
         "kind": "export"
       },
-      "options": 7,
+      "options": 8,
       "type": {
         "params": [
           {
@@ -522,7 +611,7 @@
         "name": "nested",
         "kind": "export"
       },
-      "options": 8,
+      "options": 9,
       "type": {
         "params": [
           {

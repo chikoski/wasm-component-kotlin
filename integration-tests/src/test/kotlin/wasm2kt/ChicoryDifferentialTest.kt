@@ -238,6 +238,33 @@ class ChicoryDifferentialTest {
     }
 
     @Test
+    fun `option payloads shaped like the tagged form and mistyped host values match Wasmtime`() {
+        // #36: a bare `some` whose record has `option`/`value` fields is not a tag, and host values
+        // must have the JSON type of their WIT type (no `null` or number for a string).
+        val flagged = """{"option":"none","value":1,"note":"n"}"""
+        runBoth(
+            "types",
+            { null },
+            listOf(
+                Call("echo-flagged", j(flagged)),
+                Call("echo-flagged", j("""{"option":"some","value":$flagged}""")),
+                Call("echo-flagged", j("""{"option":"none"}""")),
+                Call("echo-flagged", JsonNull),
+                Call("echo-name", JsonPrimitive(5)),
+                Call("echo-name", j("""{"option":"some","value":null}""")),
+                Call("echo-char", JsonPrimitive(65)),
+                Call("echo-blob", j("""{"name":null,"data":[],"tag":null}""")),
+                Call("echo-blob", j("""{"name":"ok","data":[1,2],"tag":7}""")),
+            ),
+        )
+        ChicoryComponent.fromDirectory(chicoryPlanDir("types")).instantiate(null).use { c ->
+            val result = c.invoke("echo-flagged", JsonArray(listOf(j(flagged)))).jsonObject
+            assertEquals("some", result.getValue("option").jsonPrimitive.content)
+            assertEquals(j(flagged), result.getValue("value"))
+        }
+    }
+
+    @Test
     fun `a long error message from a host import is reported in full`() {
         val message = "x".repeat(100_000) + "-end"
         val failing = object : WitHostImportDispatcher {
