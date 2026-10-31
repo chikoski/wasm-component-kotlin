@@ -1,0 +1,141 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {},
+      "exports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        }
+      },
+      "package": 1
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "counter-api",
+      "types": {
+        "counter": 0
+      },
+      "functions": {
+        "[constructor]counter": {
+          "name": "[constructor]counter",
+          "kind": {
+            "constructor": 0
+          },
+          "params": [
+            {
+              "name": "init",
+              "type": "s32"
+            }
+          ],
+          "result": 1
+        },
+        "[method]counter.increment": {
+          "name": "[method]counter.increment",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 2
+            }
+          ]
+        },
+        "[method]counter.add": {
+          "name": "[method]counter.add",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 2
+            },
+            {
+              "name": "delta",
+              "type": "s32"
+            }
+          ]
+        },
+        "[method]counter.get-value": {
+          "name": "[method]counter.get-value",
+          "kind": {
+            "method": 0
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 2
+            }
+          ],
+          "result": "s32"
+        },
+        "[static]counter.merge": {
+          "name": "[static]counter.merge",
+          "kind": {
+            "static": 0
+          },
+          "params": [
+            {
+              "name": "a",
+              "type": 2
+            },
+            {
+              "name": "b",
+              "type": 1
+            }
+          ],
+          "result": 1
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": "counter",
+      "kind": "resource",
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 0
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 0
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:counter@0.1.0",
+      "interfaces": {
+        "counter-api": 0
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

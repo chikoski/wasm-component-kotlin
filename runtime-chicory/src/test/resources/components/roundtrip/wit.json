@@ -1,0 +1,311 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "permissions": {
+          "type": 0
+        },
+        "priority": {
+          "type": 1
+        },
+        "item-summary": {
+          "type": 2
+        },
+        "action": {
+          "type": 3
+        }
+      },
+      "exports": {
+        "transform-summary": {
+          "function": {
+            "name": "transform-summary",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": 2
+              },
+              {
+                "name": "act",
+                "type": 3
+              }
+            ],
+            "result": 2
+          }
+        },
+        "check-even": {
+          "function": {
+            "name": "check-even",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": "s32"
+              }
+            ],
+            "result": 4
+          }
+        },
+        "ping-result": {
+          "function": {
+            "name": "ping-result",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "ok",
+                "type": "bool"
+              }
+            ],
+            "result": 5
+          }
+        },
+        "nested-option": {
+          "function": {
+            "name": "nested-option",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 7
+              }
+            ],
+            "result": 7
+          }
+        },
+        "echo-u64": {
+          "function": {
+            "name": "echo-u64",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": "u64"
+              }
+            ],
+            "result": "u64"
+          }
+        },
+        "describe-code": {
+          "function": {
+            "name": "describe-code",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "prefix",
+                "type": "string"
+              },
+              {
+                "name": "code",
+                "type": "u32"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        }
+      },
+      "package": 1
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "env-provider",
+      "types": {},
+      "functions": {
+        "get-multiplier": {
+          "name": "get-multiplier",
+          "kind": "freestanding",
+          "params": [],
+          "result": "s32"
+        },
+        "format-tag": {
+          "name": "format-tag",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "prefix",
+              "type": "string"
+            },
+            {
+              "name": "code",
+              "type": "u32"
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "math-api",
+      "types": {},
+      "functions": {
+        "scale": {
+          "name": "scale",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "v",
+              "type": "s32"
+            }
+          ],
+          "result": "s32"
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": "permissions",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "read"
+            },
+            {
+              "name": "write"
+            },
+            {
+              "name": "execute"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "priority",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "low"
+            },
+            {
+              "name": "medium"
+            },
+            {
+              "name": "high"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "item-summary",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "count",
+              "type": "u32"
+            },
+            {
+              "name": "perms",
+              "type": 0
+            },
+            {
+              "name": "prio",
+              "type": 1
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "action",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "reset",
+              "type": null
+            },
+            {
+              "name": "add-count",
+              "type": "u32"
+            },
+            {
+              "name": "set-priority",
+              "type": 1
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": "u32",
+          "err": "s32"
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 6
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:roundtrip@0.1.0",
+      "interfaces": {
+        "env-provider": 0,
+        "math-api": 1
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

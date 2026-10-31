@@ -53,7 +53,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * Chicory バックエンドの未対応機能: ホスト定義 resource、async（WASI P3）、WASI のホスト実装。いずれも使用時に例外になる
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
-* 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）
+* 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
 * ルートのテストには `wasm-tools`（1.220 以降推奨）と、ビルド済みの `rust-bridge` が必要
 
 ## 3. アクションアイテム
@@ -73,15 +73,13 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
-| [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) | A-5 | GitHub Actions で CI |
-| [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備 |
 | [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) | A-8 | ルートのモジュール分割（ast / generator / cli / runtime-wasmtime） |
-| [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) | A-9 | `decomposer/dist` の wasm が最新かを CI で検証 |
 
 ### P2
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
+| [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しないため P2） |
 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | Chicory 向け WASI ホスト実装 |
 | [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource |
 | [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | フェーズ B: 静的な lift / lower 生成（ADR-0003） |
@@ -93,6 +91,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### 完了
 
+* [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) GitHub Actions で CI — #23
+* [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) `decomposer/dist` の検証 — 再現可能ビルド + CI の decomposer ジョブ
 * [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5) ART での動作確認 — ヘッドレスエミュレーターで debug / release とも確認（2026-10-31）
 * [#6](https://github.com/chikoski/wasm-component-kotlin/issues/6) `feat/gradle-plugin` を `main` にマージ — #21
 * [#7](https://github.com/chikoski/wasm-component-kotlin/issues/7) 計画メモ 2 件の扱い — `docs/notes/` にコミット

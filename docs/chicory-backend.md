@@ -130,7 +130,7 @@ Android CLI でヘッドレスエミュレーターを使う手順や、release 
 
 | モジュール | 役割 |
 | :--- | :--- |
-| `decomposer/` | 分解ツール（Rust）。`build-wasm.sh` で `dist/wasm2kt-decompose.wasm` を再生成 |
+| `decomposer/` | 分解ツール（Rust）。`build-wasm.sh` で `dist/wasm2kt-decompose.wasm` を再生成（再現可能ビルド。CI で検証）、`regenerate-fixtures.sh` でテスト用の分解結果を再生成 |
 | `runtime-api` | `ComponentBackend` / `WitHostImportDispatcher` / `FfmJsonCodec`（JVM 11） |
 | `runtime-chicory` | Chicory バックエンド（JVM 11、Android 対応） |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン（`ComponentBuild.run` で一括実行も可） |

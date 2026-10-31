@@ -36,6 +36,30 @@ jobs:
           name: jvm-test-reports
           path: "**/build/reports/tests/"
 
+  decomposer:
+    name: Decomposer outputs are up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain (decomposer/rust-toolchain.toml)
+        working-directory: decomposer
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: decomposer
+      # The bundled wasm and runtime-chicory's test components are generated and committed;
+      # rebuild both and require that nothing changes. The wasm build is reproducible (see build-wasm.sh).
+      - run: decomposer/build-wasm.sh
+      - run: decomposer/regenerate-fixtures.sh
+      - name: Check for stale generated files
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "::error::Generated decomposer outputs are stale. Run decomposer/build-wasm.sh and decomposer/regenerate-fixtures.sh, then commit the result."
+            exit 1
+          fi
+
   native:
     name: Generator + Wasmtime bridge
     runs-on: ubuntu-latest
