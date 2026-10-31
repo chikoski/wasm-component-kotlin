@@ -129,22 +129,15 @@
   "exports": [
     {
       "instance": null,
-      "name": "set-mode",
+      "name": "call-ping",
       "func": {
         "instance": 0,
-        "name": "set-mode",
+        "name": "call-ping",
         "kind": "export"
       },
-      "options": 1,
+      "options": 0,
       "type": {
-        "params": [
-          {
-            "name": "mode",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
+        "params": [],
         "results": [],
         "async": false
       }
@@ -170,127 +163,6 @@
         "results": [
           {
             "k": "char"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "result-from",
-      "func": {
-        "instance": 0,
-        "name": "result-from",
-        "kind": "export"
-      },
-      "options": 2,
-      "type": {
-        "params": [
-          {
-            "name": "n",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "result",
-            "ok": null,
-            "err": null
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "option-from",
-      "func": {
-        "instance": 0,
-        "name": "option-from",
-        "kind": "export"
-      },
-      "options": 3,
-      "type": {
-        "params": [
-          {
-            "name": "disc",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "option",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "string-at",
-      "func": {
-        "instance": 0,
-        "name": "string-at",
-        "kind": "export"
-      },
-      "options": 4,
-      "type": {
-        "params": [
-          {
-            "name": "ptr",
-            "type": {
-              "k": "u32"
-            }
-          },
-          {
-            "name": "len",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "string"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "utf16-at",
-      "func": {
-        "instance": 0,
-        "name": "string-at",
-        "kind": "export"
-      },
-      "options": 5,
-      "type": {
-        "params": [
-          {
-            "name": "ptr",
-            "type": {
-              "k": "u32"
-            }
-          },
-          {
-            "name": "len",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "string"
           }
         ],
         "async": false
@@ -333,32 +205,6 @@
     },
     {
       "instance": null,
-      "name": "string-ret",
-      "func": {
-        "instance": 0,
-        "name": "string-ret",
-        "kind": "export"
-      },
-      "options": 3,
-      "type": {
-        "params": [
-          {
-            "name": "retptr",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "string"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
       "name": "list-len",
       "func": {
         "instance": 0,
@@ -388,16 +234,170 @@
     },
     {
       "instance": null,
-      "name": "call-ping",
+      "name": "option-from",
       "func": {
         "instance": 0,
-        "name": "call-ping",
+        "name": "option-from",
         "kind": "export"
       },
-      "options": 0,
+      "options": 3,
       "type": {
-        "params": [],
+        "params": [
+          {
+            "name": "disc",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "result-from",
+      "func": {
+        "instance": 0,
+        "name": "result-from",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "n",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": null,
+            "err": null
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "set-mode",
+      "func": {
+        "instance": 0,
+        "name": "set-mode",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "mode",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
         "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "string-at",
+      "func": {
+        "instance": 0,
+        "name": "string-at",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "ptr",
+            "type": {
+              "k": "u32"
+            }
+          },
+          {
+            "name": "len",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "string-ret",
+      "func": {
+        "instance": 0,
+        "name": "string-ret",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "retptr",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "utf16-at",
+      "func": {
+        "instance": 0,
+        "name": "string-at",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "ptr",
+            "type": {
+              "k": "u32"
+            }
+          },
+          {
+            "name": "len",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
         "async": false
       }
     }

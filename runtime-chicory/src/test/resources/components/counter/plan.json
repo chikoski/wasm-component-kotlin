@@ -209,29 +209,6 @@
     },
     {
       "instance": "example:counter/counter-api@0.1.0",
-      "name": "[method]counter.increment",
-      "func": {
-        "instance": 1,
-        "name": "example:counter/counter-api@0.1.0#[method]counter.increment",
-        "kind": "export"
-      },
-      "options": 1,
-      "type": {
-        "params": [
-          {
-            "name": "self",
-            "type": {
-              "k": "borrow",
-              "table": 0
-            }
-          }
-        ],
-        "results": [],
-        "async": false
-      }
-    },
-    {
-      "instance": "example:counter/counter-api@0.1.0",
       "name": "[method]counter.add",
       "func": {
         "instance": 1,
@@ -283,6 +260,29 @@
             "k": "s32"
           }
         ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:counter/counter-api@0.1.0",
+      "name": "[method]counter.increment",
+      "func": {
+        "instance": 1,
+        "name": "example:counter/counter-api@0.1.0#[method]counter.increment",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [],
         "async": false
       }
     },

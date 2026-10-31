@@ -155,13 +155,13 @@
   "exports": [
     {
       "instance": "example:res-edge/api",
-      "name": "same",
+      "name": "drop-raw",
       "func": {
         "instance": 1,
-        "name": "same",
+        "name": "drop-raw",
         "kind": "export"
       },
-      "options": 0,
+      "options": 2,
       "type": {
         "params": [
           {
@@ -171,10 +171,24 @@
             }
           }
         ],
+        "results": [],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "last-dropped",
+      "func": {
+        "instance": 1,
+        "name": "last-dropped",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [],
         "results": [
           {
-            "k": "own",
-            "table": 0
+            "k": "u32"
           }
         ],
         "async": false
@@ -209,66 +223,6 @@
     },
     {
       "instance": "example:res-edge/api",
-      "name": "rep-raw",
-      "func": {
-        "instance": 1,
-        "name": "rep-raw",
-        "kind": "export"
-      },
-      "options": 0,
-      "type": {
-        "params": [
-          {
-            "name": "handle",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u32"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": "example:res-edge/api",
-      "name": "take2",
-      "func": {
-        "instance": 1,
-        "name": "take2",
-        "kind": "export"
-      },
-      "options": 1,
-      "type": {
-        "params": [
-          {
-            "name": "a",
-            "type": {
-              "k": "own",
-              "table": 0
-            }
-          },
-          {
-            "name": "b",
-            "type": {
-              "k": "own",
-              "table": 0
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u32"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": "example:res-edge/api",
       "name": "peek",
       "func": {
         "instance": 1,
@@ -296,18 +250,52 @@
     },
     {
       "instance": "example:res-edge/api",
-      "name": "last-dropped",
+      "name": "rep-raw",
       "func": {
         "instance": 1,
-        "name": "last-dropped",
+        "name": "rep-raw",
         "kind": "export"
       },
-      "options": 2,
+      "options": 0,
       "type": {
-        "params": [],
+        "params": [
+          {
+            "name": "handle",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
         "results": [
           {
             "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:res-edge/api",
+      "name": "same",
+      "func": {
+        "instance": 1,
+        "name": "same",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "handle",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
           }
         ],
         "async": false
@@ -342,23 +330,35 @@
     },
     {
       "instance": "example:res-edge/api",
-      "name": "drop-raw",
+      "name": "take2",
       "func": {
         "instance": 1,
-        "name": "drop-raw",
+        "name": "take2",
         "kind": "export"
       },
       "options": 3,
       "type": {
         "params": [
           {
-            "name": "handle",
+            "name": "a",
             "type": {
-              "k": "u32"
+              "k": "own",
+              "table": 0
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "own",
+              "table": 0
             }
           }
         ],
-        "results": [],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
         "async": false
       }
     }

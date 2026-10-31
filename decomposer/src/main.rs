@@ -196,8 +196,8 @@ impl Ctx<'_, '_> {
             .collect();
 
         let mut exports = Vec::new();
-        for (name, (export_idx, _)) in self.component.exports.raw_iter() {
-            self.collect_export(None, &name.to_string(), *export_idx, &mut exports)?;
+        for (name, export_idx) in sorted_exports(self.component.exports.raw_iter()) {
+            self.collect_export(None, &name, export_idx, &mut exports)?;
         }
 
         // ComponentTypes has no public iterator over resource tables, so we
@@ -250,8 +250,8 @@ impl Ctx<'_, '_> {
                 if instance.is_some() {
                     bail!("nested exported instances are not supported ({name})");
                 }
-                for (inner, (inner_idx, _)) in exports.raw_iter() {
-                    self.collect_export(Some(name), &inner.to_string(), *inner_idx, out)?;
+                for (inner, inner_idx) in sorted_exports(exports.raw_iter()) {
+                    self.collect_export(Some(name), &inner, inner_idx, out)?;
                 }
             }
             // Types and modules carry no runtime behaviour for a host binding.
@@ -366,4 +366,16 @@ fn entity_kind(ty: &EntityType) -> &'static str {
         EntityType::Global(_) => "global",
         EntityType::Tag(_) => "tag",
     }
+}
+
+/// Export names with their indices, sorted by name. Name maps iterate in hash order, and plan.json
+/// must be deterministic (CI checks the committed fixtures; Gradle caches the decompose output).
+fn sorted_exports<'a, K, T>(entries: impl Iterator<Item = (&'a K, &'a (ExportIndex, T))>) -> Vec<(String, ExportIndex)>
+where
+    K: ToString + ?Sized + 'a,
+    T: 'a,
+{
+    let mut sorted: Vec<(String, ExportIndex)> = entries.map(|(name, (idx, _))| (name.to_string(), *idx)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted
 }

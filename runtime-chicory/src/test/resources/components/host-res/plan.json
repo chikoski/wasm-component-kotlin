@@ -788,101 +788,6 @@
   "exports": [
     {
       "instance": null,
-      "name": "make-and-measure",
-      "func": {
-        "instance": 1,
-        "name": "make-and-measure",
-        "kind": "export"
-      },
-      "options": 6,
-      "type": {
-        "params": [
-          {
-            "name": "init",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          },
-          {
-            "name": "extra",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u32"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "keep",
-      "func": {
-        "instance": 1,
-        "name": "keep",
-        "kind": "export"
-      },
-      "options": 7,
-      "type": {
-        "params": [
-          {
-            "name": "init",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "own",
-            "table": 0
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "measure",
-      "func": {
-        "instance": 1,
-        "name": "consume",
-        "kind": "export"
-      },
-      "options": 0,
-      "type": {
-        "params": [
-          {
-            "name": "b",
-            "type": {
-              "k": "borrow",
-              "table": 0
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u32"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
       "name": "consume",
       "func": {
         "instance": 1,
@@ -903,77 +808,6 @@
         "results": [
           {
             "k": "u32"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "merge-new",
-      "func": {
-        "instance": 1,
-        "name": "merge-new",
-        "kind": "export"
-      },
-      "options": 8,
-      "type": {
-        "params": [
-          {
-            "name": "a",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          },
-          {
-            "name": "b",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "list",
-            "element": {
-              "k": "u8"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "lookup",
-      "func": {
-        "instance": 1,
-        "name": "lookup",
-        "kind": "export"
-      },
-      "options": 7,
-      "type": {
-        "params": [
-          {
-            "name": "name",
-            "type": {
-              "k": "string"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "option",
-            "type": {
-              "k": "own",
-              "table": 0
-            }
           }
         ],
         "async": false
@@ -1008,32 +842,6 @@
             "err": {
               "k": "string"
             }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "ticket-id",
-      "func": {
-        "instance": 1,
-        "name": "ticket-id",
-        "kind": "export"
-      },
-      "options": 0,
-      "type": {
-        "params": [
-          {
-            "name": "n",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "u32"
           }
         ],
         "async": false
@@ -1111,6 +919,198 @@
         "results": [
           {
             "k": "s32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "keep",
+      "func": {
+        "instance": 1,
+        "name": "keep",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "lookup",
+      "func": {
+        "instance": 1,
+        "name": "lookup",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "name",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "own",
+              "table": 0
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "make-and-measure",
+      "func": {
+        "instance": 1,
+        "name": "make-and-measure",
+        "kind": "export"
+      },
+      "options": 6,
+      "type": {
+        "params": [
+          {
+            "name": "init",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          },
+          {
+            "name": "extra",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "measure",
+      "func": {
+        "instance": 1,
+        "name": "consume",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "b",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "merge-new",
+      "func": {
+        "instance": 1,
+        "name": "merge-new",
+        "kind": "export"
+      },
+      "options": 8,
+      "type": {
+        "params": [
+          {
+            "name": "a",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "ticket-id",
+      "func": {
+        "instance": 1,
+        "name": "ticket-id",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "n",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
           }
         ],
         "async": false

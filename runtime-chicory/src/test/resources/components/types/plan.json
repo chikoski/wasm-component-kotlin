@@ -175,77 +175,13 @@
   "exports": [
     {
       "instance": null,
-      "name": "echo-name",
+      "name": "compact",
       "func": {
         "instance": 0,
-        "name": "echo-name",
+        "name": "compact",
         "kind": "export"
       },
-      "options": 0,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "option",
-              "type": {
-                "k": "string"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "option",
-            "type": {
-              "k": "string"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "maybe-len",
-      "func": {
-        "instance": 0,
-        "name": "maybe-len",
-        "kind": "export"
-      },
-      "options": 1,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "option",
-              "type": {
-                "k": "string"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "option",
-            "type": {
-              "k": "u32"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "echo-bytes",
-      "func": {
-        "instance": 0,
-        "name": "echo-bytes",
-        "kind": "export"
-      },
-      "options": 2,
+      "options": 6,
       "type": {
         "params": [
           {
@@ -253,7 +189,10 @@
             "type": {
               "k": "list",
               "element": {
-                "k": "u8"
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
               }
             }
           }
@@ -262,92 +201,8 @@
           {
             "k": "list",
             "element": {
-              "k": "u8"
+              "k": "s32"
             }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "reverse-bytes",
-      "func": {
-        "instance": 0,
-        "name": "reverse-bytes",
-        "kind": "export"
-      },
-      "options": 2,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "u8"
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "list",
-            "element": {
-              "k": "u8"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "echo-char",
-      "func": {
-        "instance": 0,
-        "name": "echo-char",
-        "kind": "export"
-      },
-      "options": 3,
-      "type": {
-        "params": [
-          {
-            "name": "c",
-            "type": {
-              "k": "char"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "char"
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "next-char",
-      "func": {
-        "instance": 0,
-        "name": "next-char",
-        "kind": "export"
-      },
-      "options": 3,
-      "type": {
-        "params": [
-          {
-            "name": "c",
-            "type": {
-              "k": "char"
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "char"
           }
         ],
         "async": false
@@ -433,6 +288,134 @@
     },
     {
       "instance": null,
+      "name": "echo-bytes",
+      "func": {
+        "instance": 0,
+        "name": "echo-bytes",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-char",
+      "func": {
+        "instance": 0,
+        "name": "echo-char",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "c",
+            "type": {
+              "k": "char"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "char"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-name",
+      "func": {
+        "instance": 0,
+        "name": "echo-name",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "option",
+              "type": {
+                "k": "string"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-optional-list",
+      "func": {
+        "instance": 0,
+        "name": "echo-optional-list",
+        "kind": "export"
+      },
+      "options": 7,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "option",
+                "type": {
+                  "k": "s32"
+                }
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "option",
+              "type": {
+                "k": "s32"
+              }
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
       "name": "echo-packet",
       "func": {
         "instance": 0,
@@ -501,71 +484,30 @@
     },
     {
       "instance": null,
-      "name": "compact",
+      "name": "maybe-len",
       "func": {
         "instance": 0,
-        "name": "compact",
+        "name": "maybe-len",
         "kind": "export"
       },
-      "options": 6,
+      "options": 1,
       "type": {
         "params": [
           {
             "name": "v",
             "type": {
-              "k": "list",
-              "element": {
-                "k": "option",
-                "type": {
-                  "k": "s32"
-                }
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "list",
-            "element": {
-              "k": "s32"
-            }
-          }
-        ],
-        "async": false
-      }
-    },
-    {
-      "instance": null,
-      "name": "echo-optional-list",
-      "func": {
-        "instance": 0,
-        "name": "echo-optional-list",
-        "kind": "export"
-      },
-      "options": 7,
-      "type": {
-        "params": [
-          {
-            "name": "v",
-            "type": {
-              "k": "list",
-              "element": {
-                "k": "option",
-                "type": {
-                  "k": "s32"
-                }
-              }
-            }
-          }
-        ],
-        "results": [
-          {
-            "k": "list",
-            "element": {
               "k": "option",
               "type": {
-                "k": "s32"
+                "k": "string"
               }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "option",
+            "type": {
+              "k": "u32"
             }
           }
         ],
@@ -604,6 +546,64 @@
               "type": {
                 "k": "string"
               }
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "next-char",
+      "func": {
+        "instance": 0,
+        "name": "next-char",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "c",
+            "type": {
+              "k": "char"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "char"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "reverse-bytes",
+      "func": {
+        "instance": 0,
+        "name": "reverse-bytes",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "v",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u8"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u8"
             }
           }
         ],

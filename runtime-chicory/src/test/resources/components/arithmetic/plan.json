@@ -63,10 +63,10 @@
     },
     {
       "instance": null,
-      "name": "sub",
+      "name": "div",
       "func": {
         "instance": 0,
-        "name": "sub",
+        "name": "div",
         "kind": "export"
       },
       "options": 0,
@@ -127,10 +127,10 @@
     },
     {
       "instance": null,
-      "name": "div",
+      "name": "sub",
       "func": {
         "instance": 0,
-        "name": "div",
+        "name": "sub",
         "kind": "export"
       },
       "options": 0,
