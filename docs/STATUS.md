@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-10-30 / 対象ブランチ: `feat/gradle-plugin`（`main` へのマージ待ち）
+> 最終更新: 2026-10-31 / 対象ブランチ: `feat/gradle-plugin`（`main` へのマージ待ち）
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -29,14 +29,14 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 | モジュール | 役割 | JVM | 状態 |
 | :--- | :--- | :--- | :--- |
-| `:`（ルート） | AST・ジェネレータ・CLI・Wasmtime ブリッジ（Kotlin 側） | 21 | 稼働。分割は未完（→ A-8） |
+| `:`（ルート） | AST・ジェネレータ・CLI・Wasmtime ブリッジ（Kotlin 側） | 21 | 稼働。分割は未完（→ [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11)） |
 | `rust-bridge/` | Wasmtime ブリッジ（Rust, cdylib） | — | 稼働 |
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
 | `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 11 | 稼働 |
 | `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 11 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
-| `samples/android` | Android サンプルアプリ（composite build） | 11 | ART 実機は未確認（→ A-1） |
+| `samples/android` | Android サンプルアプリ（composite build） | 11 | ART 実機は未確認（→ [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5)） |
 
 ## 2. 現在の状態
 
@@ -59,34 +59,47 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ## 3. アクションアイテム
 
-優先度: **P0** = すぐ、**P1** = 公開・運用の前提、**P2** = 機能拡張。完了したらチェックを付け、PR や commit へのリンクを添えてください。
-可能なら GitHub Issues に移し、ここには Issue へのリンクだけを残す運用を推奨します。
+アクションアイテムは **GitHub Issues** で管理します。進捗・議論・担当者は Issue 側が正本で、ここには一覧だけを置きます。
+優先度はラベル `P0`（すぐ）/ `P1`（公開・運用の前提）/ `P2`（機能拡張）、分野は `area:*` ラベルで表します。
+新しい作業は Issue を作り、重要なものだけこの一覧にも追加してください。ID（`A-n`）は過去の記録との対応のために残しています。
+
+* [未完了の Issue 一覧](https://github.com/chikoski/wasm-component-kotlin/issues)
+* [P0 の Issue](https://github.com/chikoski/wasm-component-kotlin/issues?q=is%3Aissue+is%3Aopen+label%3AP0)
 
 ### P0
 
-- [ ] **A-1** ART での動作確認: `./gradlew -p samples/android :app:connectedAndroidTest`（debug）と、release APK を端末にインストールしての確認（R8）
-- [ ] **A-2** `feat/gradle-plugin` を push → PR → `main` にマージ
-- [ ] **A-3** ローカルの `main` を `origin/main` に同期する（`feat/chicory-backend` のマージ分）
-- [ ] **A-4** 未コミットの `PHASE1_IMPLEMENTATION_TASKS.md`、`WIT_ASYNC_GUIDE.md` を `docs/` 配下にコミットするか判断する
+| Issue | ID | 内容 |
+| :--- | :--- | :--- |
+| [#5](https://github.com/chikoski/wasm-component-kotlin/issues/5) | A-1 | ART（実機 / エミュレータ）での動作確認 |
+| [#6](https://github.com/chikoski/wasm-component-kotlin/issues/6) | A-2 | `feat/gradle-plugin` を `main` にマージ |
+| [#7](https://github.com/chikoski/wasm-component-kotlin/issues/7) | A-4 | 未コミットの PHASE1 / WIT_ASYNC ドキュメントの扱い |
 
 ### P1
 
-- [ ] **A-5** CI（GitHub Actions）: `check`、functionalTest、`samples/android` の assemble。wasm-tools と rust-bridge が必要なテストは別ジョブに分ける
-- [ ] **A-6** `gradle.properties` から macOS 固有の `org.gradle.java.home` を外す（toolchain 指定などに置き換える）
-- [ ] **A-7** 公開設定: Maven Central（runtime-api / runtime-chicory / tooling / ジェネレータ）と Gradle Plugin Portal（plugin）。署名と POM 情報。ルートの成果物名 `wasm-component-kotlin` の見直し
-- [ ] **A-8** モジュール分割の残り: ルートから `ast` / `generator` / `cli` / `runtime-wasmtime` を切り出す（現状はルート成果物全体が tooling 経由でプラグインの依存に入っている）
-- [ ] **A-9** `decomposer/dist/wasm2kt-decompose.wasm` が最新か CI で検証する（`build-wasm.sh` を実行して差分を検出）
+| Issue | ID | 内容 |
+| :--- | :--- | :--- |
+| [#8](https://github.com/chikoski/wasm-component-kotlin/issues/8) | A-5 | GitHub Actions で CI |
+| [#9](https://github.com/chikoski/wasm-component-kotlin/issues/9) | A-6 | `org.gradle.java.home` の固定を外す |
+| [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備 |
+| [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) | A-8 | ルートのモジュール分割（ast / generator / cli / runtime-wasmtime） |
+| [#12](https://github.com/chikoski/wasm-component-kotlin/issues/12) | A-9 | `decomposer/dist` の wasm が最新かを CI で検証 |
 
 ### P2
 
-- [ ] **A-10** Chicory 向け WASI ホスト実装（`wasi:cli` / `clocks` / `random` / `io` から）。普通にビルドした Rust コンポーネントを動かすのに必要
-- [ ] **A-11** ホスト定義 resource（import された resource の own / borrow の受け渡し）
-- [ ] **A-12** フェーズ B: JSON 境界をやめ、線形メモリを直接読み書きする静的 lift / lower を生成する（性能）。→ [ADR-0003](adr/0003-json-value-boundary.md)
-- [ ] **A-13** async（WASI P3）: `async func` → `suspend`、`stream` → `Flow`、`future`。→ `WIT_ASYNC_GUIDE.md`、PHASE1 Step 2
-- [ ] **A-14** PHASE1 Step 1 の型マッピング変更（`option` → `T?`、`result` → `Result`、resource の value class 化、`list<u8>` → `ByteArray`）。現行設計（`WitOption` / `WitResult`）と相反するため、**採否を決めて ADR に残す**
-- [ ] **A-15** Canonical ABI の厳密化（borrow の lend count、範囲外値の trap 条件、NaN の正規化）
-- [ ] **A-16** 計測: 呼び出しのオーバーヘッド、初回インスタンス化の時間、APK サイズ、大きなコンポーネントでの dex 制限とインタプリタへのフォールバック
-- [ ] **A-17** AGP 9 / Gradle 9 対応の確認（`variant.sources.kotlin` の扱いを含む）
+| Issue | ID | 内容 |
+| :--- | :--- | :--- |
+| [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | Chicory 向け WASI ホスト実装 |
+| [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) | A-11 | ホスト定義 resource |
+| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | フェーズ B: 静的な lift / lower 生成（ADR-0003） |
+| [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | async（WASI P3） |
+| [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) | A-14 | PHASE1 Step 1 の型マッピング変更の採否 |
+| [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) | A-15 | Canonical ABI の検証の厳密化 |
+| [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) | A-16 | 性能・サイズの計測 |
+| [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
+
+### 完了
+
+* A-3 ローカルの `main` を `origin/main` に同期する — `feat/chicory-backend` は PR #4 でマージ済み。手元で `git switch main && git pull` するだけなので、Issue にはしていません
 
 ## 4. 既存ドキュメントの位置づけ
 
@@ -98,5 +111,5 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `SPEC.md`、`SPEC_REVIEW.md` | 当初の仕様と決定事項 |
 | `ANDROID_INTEGRATION_PLAN.md` | Wasmtime を Android で動かす計画。Android の主路線は Chicory に移った（→ [ADR-0001](adr/0001-chicory-backend-for-android.md)） |
 | `CODE_REVIEW.md`、`TEST_PROPOSALS.md` | 過去のレビュー記録 |
-| `PHASE1_IMPLEMENTATION_TASKS.md`（未コミット） | フェーズ 1 の作業計画。Step 3（モジュール分割の一部、Gradle プラグイン、AGP、キャッシュ、TestKit）は実施済み。Step 1 / 2 / 4 は A-13 / A-14 などに引き継ぎ |
-| `WIT_ASYNC_GUIDE.md`（未コミット） | async 対応の調査メモ（A-13 の前提資料） |
+| `PHASE1_IMPLEMENTATION_TASKS.md`（未コミット） | フェーズ 1 の作業計画。Step 3（モジュール分割の一部、Gradle プラグイン、AGP、キャッシュ、TestKit）は実施済み。Step 1 / 2 / 4 は #16 / #17 などに引き継ぎ |
+| `WIT_ASYNC_GUIDE.md`（未コミット） | async 対応の調査メモ（#16 の前提資料） |

@@ -26,4 +26,4 @@ Gradle の中で Chicory（WASI）上で実行する。
 * プラグインの利用者に Rust、wasm-tools、ネイティブバイナリは不要
 * `plan.json` の形式を変えたら `PLAN_VERSION`（Rust 側）と `ComponentPlan.SUPPORTED_VERSION`（Kotlin 側）を同時に上げる
 * `wasmtime-environ` を更新するときは `decomposer/build-wasm.sh` で wasm を再生成し、差分テストで確認する
-* ビルド済みの wasm バイナリ（約 1.7MB）をリポジトリに含める。最新かどうかを CI で検証する必要がある（STATUS の A-9）
+* ビルド済みの wasm バイナリ（約 1.7MB）をリポジトリに含める。最新かどうかを CI で検証する必要がある（#12）
