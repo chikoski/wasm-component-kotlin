@@ -8,7 +8,7 @@
     public java.lang.String onHostCall(java.lang.String, java.lang.String);
 }
 -keep class wasm2kt.runtime.HostCallbackDispatcher {
-    public int onHostCall(java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, long);
+    public int onHostCall(java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment);
 }
 -keep class wasm2kt.runtime.JniWasmtimeBridge {
     *;

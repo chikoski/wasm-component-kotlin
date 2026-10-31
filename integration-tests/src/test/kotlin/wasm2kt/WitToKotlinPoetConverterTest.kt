@@ -1446,7 +1446,7 @@ class WitToKotlinPoetConverterTest {
     }
 
     @Test
-    fun `JNI host callback exception preserves Kotlin exception message and FFM buffer overflow or invalid char throws descriptive error`(@TempDir tempDir: Path) {
+    fun `JNI host callback exception preserves Kotlin exception message and invalid char throws descriptive error`(@TempDir tempDir: Path) {
         val roundtripWasmPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm")).toURI())
 
         // 1. Verify JNI host callback exception preserves the Kotlin exception message
@@ -1473,7 +1473,8 @@ class WitToKotlinPoetConverterTest {
             wasm2kt.runtime.JniWasmtimeBridge.nativeSessionClose(jniSessionPtr)
         }
 
-        // 2. HostCallbackDispatcher's buffer overflow handling is tested in runtime-wasmtime (it is internal there).
+        // 2. FFM responses of any size (no fixed buffer, #35) are tested in runtime-wasmtime's HostCallbackDispatcherTest
+        //    and end to end in ChicoryDifferentialTest.
 
         // 3. Verify FfmJsonCodec.decodeChar validates single BMP code point
         assertEquals('A', wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive("A")))
