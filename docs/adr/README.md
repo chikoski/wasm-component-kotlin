@@ -14,3 +14,4 @@
 | [0004](0004-isolated-tooling-classloader.md) | ビルド時ツールを Gradle ワーカーの独立クラスローダーで実行する | 承認 |
 | [0005](0005-async-and-wasi03-chicory-only.md) | async と WASI 0.3 は Chicory バックエンドだけで進める | 承認 |
 | [0006](0006-type-mapping.md) | WIT → Kotlin の型マッピングを見直す | 承認 |
+| [0007](0007-canonical-abi-validation.md) | Canonical ABI の検証は仕様に従い、トラップとホストのエラーを分ける | 承認 |

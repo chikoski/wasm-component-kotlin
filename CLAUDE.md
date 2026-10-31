@@ -53,6 +53,7 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない
 * 値の JSON 形式、関数名の解決、ホスト import のキーは Wasmtime ブリッジに揃える（ADR-0003）。Chicory 側の挙動を変えたら差分テストを通す
+* `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する。Wasmtime バックエンドは同期の機能の参照実装として維持する（ADR-0005）
 * 生成コードの公開 API（ワールド DSL）を変えるときは、Wasmtime 側と Chicory 側の両方の E2E テストを確認する
 * commit メッセージは Conventional Commits 形式（`feat(scope): ...`、`fix: ...`）。本文に理由を書く

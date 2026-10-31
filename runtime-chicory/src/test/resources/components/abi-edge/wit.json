@@ -1,0 +1,197 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "ping": {
+          "function": {
+            "name": "ping",
+            "kind": "freestanding",
+            "params": []
+          }
+        }
+      },
+      "exports": {
+        "set-mode": {
+          "function": {
+            "name": "set-mode",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "mode",
+                "type": "u32"
+              }
+            ]
+          }
+        },
+        "char-from": {
+          "function": {
+            "name": "char-from",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "n",
+                "type": "u32"
+              }
+            ],
+            "result": "char"
+          }
+        },
+        "result-from": {
+          "function": {
+            "name": "result-from",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "n",
+                "type": "u32"
+              }
+            ],
+            "result": 0
+          }
+        },
+        "option-from": {
+          "function": {
+            "name": "option-from",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "disc",
+                "type": "u32"
+              }
+            ],
+            "result": 1
+          }
+        },
+        "string-at": {
+          "function": {
+            "name": "string-at",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "ptr",
+                "type": "u32"
+              },
+              {
+                "name": "len",
+                "type": "u32"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "utf16-at": {
+          "function": {
+            "name": "utf16-at",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "ptr",
+                "type": "u32"
+              },
+              {
+                "name": "len",
+                "type": "u32"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "list-at": {
+          "function": {
+            "name": "list-at",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "ptr",
+                "type": "u32"
+              },
+              {
+                "name": "len",
+                "type": "u32"
+              }
+            ],
+            "result": 2
+          }
+        },
+        "string-ret": {
+          "function": {
+            "name": "string-ret",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "retptr",
+                "type": "u32"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "list-len": {
+          "function": {
+            "name": "list-len",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "items",
+                "type": 3
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "call-ping": {
+          "function": {
+            "name": "call-ping",
+            "kind": "freestanding",
+            "params": []
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u32"
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}
