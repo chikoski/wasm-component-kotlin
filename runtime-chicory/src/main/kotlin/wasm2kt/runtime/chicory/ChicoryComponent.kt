@@ -24,6 +24,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -164,6 +165,7 @@ internal class ChicoryComponentInstance(
             cx.commitMoves()
 
             val coreResults = guest { coreFunction(export.func).apply(*coreArgs.toLongArray()) ?: LongArray(0) }
+            cx.checkBorrowsDropped()
 
             val results: List<JsonElement> = guest {
                 val lifter = Lifter(cx)
@@ -382,13 +384,22 @@ internal class ChicoryComponentInstance(
     private fun table(index: Int): ResourceTable = guestTables.getOrPut(index) { ResourceTable() }
 
     private fun dropGuestHandle(tableIndex: Int, guestHandle: Int) {
-        val rep = table(tableIndex).remove(guestHandle)
-        val info = plan.resourceTables[tableIndex]
-        val dtor = info?.resource?.let { resourceDtors[it] }
-        if (info != null && !info.imported && dtor != null) dtor.apply(rep.toLong())
+        val slot = table(tableIndex).remove(guestHandle)
+        if (!slot.own) return // dropping a borrow handle only ends the borrow
+        val info = plan.resourceTables[tableIndex] ?: return
+        if (info.imported) {
+            // The host defined this resource: tell it the component dropped its owning handle.
+            val import = info.import?.let { plan.imports[it] } ?: return
+            val dispatcher = imports ?: throw IllegalStateException("Component drops host resource '${import.dispatchKey}' but no host imports were provided")
+            dispatcher.dispatchHostImport(import.resourceDropKey, JsonArray(listOf(JsonPrimitive(slot.rep))))
+        } else {
+            info.resource?.let { resourceDtors[it] }?.apply(slot.rep.toLong())
+        }
     }
 
     private fun isDefinedHere(tableIndex: Int): Boolean = plan.resourceTables[tableIndex]?.imported == false
+
+    private fun isImported(tableIndex: Int): Boolean = plan.resourceTables[tableIndex]?.imported == true
 
     private fun hasDestructor(tableIndex: Int): Boolean =
         plan.resourceTables[tableIndex]?.let { !it.imported && it.resource?.let(resourceDtors::containsKey) == true } == true
@@ -407,6 +418,17 @@ internal class ChicoryComponentInstance(
         /** Host handles passed as `borrow` in this call; released when the call returns. */
         private val lent = mutableListOf<HostHandle>()
 
+        /** Borrow handles of host resources created in the guest for this call: (table, handle, slot). */
+        private val borrowsIn = mutableListOf<Triple<Int, Int, ResourceTable.Slot>>()
+
+        /** The spec's `trap_if(num_borrows != 0)` when a call returns: the callee must drop borrows it received. */
+        fun checkBorrowsDropped() {
+            for ((t, h, slot) in borrowsIn) {
+                if (table(t).slotOrNull(h) === slot) poison("Borrowed resource handle $h was not dropped before the call returned")
+            }
+            borrowsIn.clear()
+        }
+
         override fun realloc(align: Int, size: Int): Int {
             val f = opts.realloc?.let { reallocs.getValue(it) }
                 ?: throw IllegalStateException("This function needs cabi_realloc but its canonical options declare none")
@@ -424,6 +446,8 @@ internal class ChicoryComponentInstance(
         }
 
         override fun lowerOwn(table: Int, value: JsonElement): Int {
+            // A host resource moves into the component as its rep.
+            if (isImported(table)) return table(table).insert(handleOf(value), own = true)
             requireDefinedResource(table)
             val id = handleOf(value)
             val h = hostHandle(id, table)
@@ -434,6 +458,13 @@ internal class ChicoryComponentInstance(
         }
 
         override fun lowerBorrow(table: Int, value: JsonElement): Int {
+            if (isImported(table)) {
+                check(direction == Direction.HOST_TO_GUEST) { "Host imports cannot return borrow<T>" }
+                val t = table(table)
+                val handle = t.insert(handleOf(value), own = false)
+                borrowsIn += Triple(table, handle, checkNotNull(t.slotOrNull(handle)))
+                return handle
+            }
             requireDefinedResource(table)
             val id = handleOf(value)
             val h = hostHandle(id, table)
@@ -451,16 +482,24 @@ internal class ChicoryComponentInstance(
         }
 
         override fun liftOwn(table: Int, handle: Int): JsonElement {
+            if (isImported(table)) {
+                // The component hands a host resource back: the host owns its rep again.
+                val t = table(table)
+                if (t.slotOrNull(handle)?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
+                return JsonPrimitive(t.remove(handle).rep)
+            }
             requireDefinedResource(table)
             check(direction == Direction.HOST_TO_GUEST) { "Host imports receiving own<T> are not supported yet" }
             table(table).rep(handle) // traps on an invalid handle
             val hostHandle = nextHostHandle++
             hostHandles[hostHandle] = HostHandle(table, handle)
-            return kotlinx.serialization.json.JsonPrimitive(hostHandle)
+            return JsonPrimitive(hostHandle)
         }
 
-        override fun liftBorrow(table: Int, handle: Int): JsonElement =
-            throw UnsupportedOperationException("Host imports receiving borrow<T> are not supported by the Chicory backend yet")
+        override fun liftBorrow(table: Int, handle: Int): JsonElement {
+            if (isImported(table)) return JsonPrimitive(table(table).rep(handle))
+            throw UnsupportedOperationException("Host imports receiving borrow<T> of a component-defined resource are not supported by the Chicory backend yet")
+        }
 
         private fun requireDefinedResource(table: Int) {
             if (!isDefinedHere(table)) {
@@ -492,23 +531,30 @@ internal class ChicoryComponentInstance(
     }
 }
 
-/** A component-level resource table: guest handles (starting at 1) mapped to representations. */
+/**
+ * A component-level resource table: guest handles (starting at 1) mapped to representations.
+ * Handles of host resources lent for one call are `borrow` handles ([Slot.own] = false).
+ */
 internal class ResourceTable {
-    private val reps = HashMap<Int, Int>()
+    class Slot(val rep: Int, val own: Boolean)
+
+    private val slots = HashMap<Int, Slot>()
     private val free = ArrayDeque<Int>()
     private var next = 1
 
-    fun insert(rep: Int): Int {
+    fun insert(rep: Int, own: Boolean = true): Int {
         val h = free.removeFirstOrNull() ?: next++
-        reps[h] = rep
+        slots[h] = Slot(rep, own)
         return h
     }
 
-    fun rep(handle: Int): Int = reps[handle] ?: trap("Unknown resource handle $handle")
+    fun rep(handle: Int): Int = (slots[handle] ?: trap("Unknown resource handle $handle")).rep
 
-    fun remove(handle: Int): Int {
-        val rep = reps.remove(handle) ?: trap("Unknown resource handle $handle")
+    fun slotOrNull(handle: Int): Slot? = slots[handle]
+
+    fun remove(handle: Int): Slot {
+        val slot = slots.remove(handle) ?: trap("Unknown resource handle $handle")
         free.addLast(handle)
-        return rep
+        return slot
     }
 }

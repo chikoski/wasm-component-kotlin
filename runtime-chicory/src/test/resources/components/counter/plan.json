@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "modules": [
     {
       "index": 0,
@@ -175,7 +175,8 @@
       "index": 0,
       "resource": 0,
       "instance": 0,
-      "imported": false
+      "imported": false,
+      "import": null
     }
   ],
   "exports": [

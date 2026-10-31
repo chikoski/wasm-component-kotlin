@@ -24,7 +24,7 @@ class ComponentPlan(
     val exports: List<PlanExport>,
 ) {
     companion object {
-        const val SUPPORTED_VERSION = 1
+        const val SUPPORTED_VERSION = 2
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
@@ -71,6 +71,7 @@ class ComponentPlan(
                         resource = o.optInt("resource"),
                         imported = o["imported"]?.jsonPrimitive?.boolean ?: false,
                         abstract = o["abstract"]?.jsonPrimitive?.boolean ?: false,
+                        import = o.optInt("import"),
                     )
                 },
                 exports = root.array("exports").map { e ->
@@ -141,6 +142,10 @@ class PlanImport(val name: String, val path: List<String>) {
      */
     val dispatchKey: String
         get() = if (path.isEmpty()) name else "${shortInterfaceName(name)}#${path.joinToString("#")}"
+
+    /** Key for dropping a host resource this import names, matching the Wasmtime bridge. */
+    val resourceDropKey: String
+        get() = if (path.isEmpty()) "[resource-drop]$name" else "${shortInterfaceName(name)}#[resource-drop]${path.last()}"
 }
 
 class PlanExport(
@@ -159,7 +164,8 @@ class CanonOptions(
     val async: Boolean,
 )
 
-class ResourceTableInfo(val index: Int, val resource: Int?, val imported: Boolean, val abstract: Boolean)
+/** [import] names the runtime import of an imported (host-defined) resource. */
+class ResourceTableInfo(val index: Int, val resource: Int?, val imported: Boolean, val abstract: Boolean, val import: Int? = null)
 
 class CoreExportRef(val instance: Int, val name: String)
 

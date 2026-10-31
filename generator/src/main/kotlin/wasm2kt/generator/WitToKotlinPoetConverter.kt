@@ -94,6 +94,13 @@ class WitToKotlinPoetConverter(
     private val generatedTupleArities = mutableSetOf<Int>()
     private var currentWorldTypeNames: Map<Int, String> = emptyMap()
 
+    /** Root type indices of the resources the current world imports (implemented by the host). */
+    private var currentHostResources: Set<Int> = emptySet()
+    private val hostResourceTableClass = ClassName("wasm2kt.runtime", "HostResourceTable")
+    private val witHostResourceClass = ClassName("wasm2kt.runtime", "WitHostResource")
+    private val witBorrowedClass = ClassName("wasm2kt.runtime", "WitBorrowed")
+    private val hostResourceBoundSessionClass = ClassName(targetPackage, "HostResourceBoundSession")
+
     private val witJsonSerializableClass = ClassName("wasm2kt.runtime", "WitJsonSerializable")
     private val witHostImportDispatcherClass = ClassName("wasm2kt.runtime", "WitHostImportDispatcher")
     private val ffmCodecClass = ClassName("wasm2kt.runtime", "FfmJsonCodec")
@@ -184,6 +191,16 @@ class WitToKotlinPoetConverter(
         }
         currentWorldTypeNames = allocateWorldTypeNames(byPascal)
 
+        // Resources owned by the world itself, or by an interface the world imports (and does not
+        // export), are defined by the host: the host implements them (ADR-0008).
+        val exportedIfaceIds = world.exports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { it.id }.toSet()
+        val importedIfaceIds = world.imports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { it.id }.toSet() - exportedIfaceIds
+        currentHostResources = resolve.types.indices.filter { idx ->
+            val def = resolve.types[idx]
+            def.kind is WitTypeDefKind.Resource &&
+                ((worldId >= 0 && def.owner?.world == worldId) || def.owner?.`interface`?.let { it in importedIfaceIds } == true)
+        }.toSet()
+
         // Group resource functions by resource type index
         val resourceFunctions = collectResourceFunctions(referencedInterfaceIds, world)
 
@@ -245,13 +262,17 @@ class WitToKotlinPoetConverter(
                             worldClassName = worldClassName,
                         )
                         hasImports = true
+                    } else if (isHostResourceFunction(fn)) {
+                        addHostResourceFunction(fn, importsBuilder, dispatchBranches, keyPrefix = "", receiverProperty = null, worldClassName = worldClassName)
+                        hasImports = true
                     }
                 }
                 is WitWorldItem.InterfaceRef -> {
                     val iface = resolve.interfaces.getOrNull(item.id) ?: continue
                     val rawIfaceName = iface.name ?: importKey
                     val shortIfaceName = rawIfaceName.substringAfter('/').substringBefore('@')
-                    if (iface.functions.values.any { it.kind is WitFunctionKind.Freestanding }) {
+                    val ifaceHostResources = iface.types.values.map { resolveRootTypeIndex(it) }.filter { it in currentHostResources }.distinct()
+                    if (iface.functions.values.any { it.kind is WitFunctionKind.Freestanding || isHostResourceFunction(it) } || ifaceHostResources.isNotEmpty()) {
                         val subIfacePascal = NamingConventions.toPascalCase(shortIfaceName)
                         val subIfacePropName = NamingConventions.toCamelCase(shortIfaceName)
                         val subIfaceBuilder = TypeSpec.interfaceBuilder(subIfacePascal)
@@ -265,8 +286,11 @@ class WitToKotlinPoetConverter(
                                     fn = fn,
                                     worldClassName = worldClassName,
                                 )
+                            } else if (isHostResourceFunction(fn)) {
+                                addHostResourceFunction(fn, subIfaceBuilder, dispatchBranches, "$shortIfaceName#", subIfacePropName, worldClassName)
                             }
                         }
+                        for (res in ifaceHostResources) dispatchBranches += buildHostResourceDropBranch(res, "$shortIfaceName#")
                         worldObjBuilder.addType(subIfaceBuilder.build())
                         importsBuilder.addProperty(
                             PropertySpec.builder(
@@ -278,6 +302,12 @@ class WitToKotlinPoetConverter(
                     }
                 }
                 is WitWorldItem.TypeRef -> Unit
+            }
+        }
+        for (res in currentHostResources) {
+            if (worldId >= 0 && resolve.types[res].owner?.world == worldId) {
+                dispatchBranches += buildHostResourceDropBranch(res, "")
+                hasImports = true
             }
         }
         if (!hasImports) {
@@ -350,7 +380,8 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .returns(sessionClassName)
-            .addStatement("return Session(%T.open(wasmPath, imports))", runtimeSessionClass)
+            .addStatement("val resources = %T()", hostResourceTableClass)
+            .addStatement("return Session(%T(resources.bind { %T.open(wasmPath, imports) }, resources))", hostResourceBoundSessionClass, runtimeSessionClass)
         worldObjBuilder.addFunction(openSessionBuilder.build())
 
         val openSessionBytesBuilder = FunSpec.builder("openSession")
@@ -361,7 +392,8 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .returns(sessionClassName)
-            .addStatement("return Session(%T.open(wasmBytes, imports))", runtimeSessionClass)
+            .addStatement("val resources = %T()", hostResourceTableClass)
+            .addStatement("return Session(%T(resources.bind { %T.open(wasmBytes, imports) }, resources))", hostResourceBoundSessionClass, runtimeSessionClass)
         worldObjBuilder.addFunction(openSessionBytesBuilder.build())
 
         // Backend-agnostic overload: any runtime implementing ComponentBackendFactory (e.g. the Chicory
@@ -377,7 +409,12 @@ class WitToKotlinPoetConverter(
                         .build(),
                 )
                 .returns(sessionClassName)
-                .addStatement("return Session(%T(component.instantiate(imports)))", backendSessionClass)
+                .addStatement("val resources = %T()", hostResourceTableClass)
+                .addStatement(
+                    "return Session(%T(%T(resources.bind { component.instantiate(imports) }), resources))",
+                    hostResourceBoundSessionClass,
+                    backendSessionClass,
+                )
                 .build(),
         )
 
@@ -521,6 +558,109 @@ class WitToKotlinPoetConverter(
                 .addStatement("%S -> %T.toJsonElement(%L)", importSpecKey, ffmCodecClass, callExpr)
                 .build()
         }
+    }
+
+    private fun isHostResource(resourceIdx: Int): Boolean = resolveRootTypeIndex(resourceIdx) in currentHostResources
+
+    private fun resourceIdOf(fn: WitFunction): Int? = when (val k = fn.kind) {
+        is WitFunctionKind.Constructor -> k.resourceId
+        is WitFunctionKind.Method -> k.resourceId
+        is WitFunctionKind.Static -> k.resourceId
+        WitFunctionKind.Freestanding -> null
+    }
+
+    private fun isHostResourceFunction(fn: WitFunction): Boolean = resourceIdOf(fn)?.let { isHostResource(it) } == true
+
+    /** `Imports` member name for a host resource's constructor (`newBlob`) or static (`blobMerge`). */
+    private fun hostResourceImportName(fn: WitFunction): String {
+        val pascal = resolveKotlinTypeSimpleName(checkNotNull(resourceIdOf(fn)))
+        return when (fn.kind) {
+            is WitFunctionKind.Constructor -> "new$pascal"
+            else -> pascal.replaceFirstChar { it.lowercaseChar() } +
+                NamingConventions.extractResourceMemberName(fn.name).replaceFirstChar { it.uppercaseChar() }
+        }
+    }
+
+    /**
+     * A host resource function imported by the component: constructors and statics become `Imports`
+     * members, methods are called on the host object behind `self`.
+     */
+    private fun addHostResourceFunction(
+        fn: WitFunction,
+        importsBuilder: TypeSpec.Builder,
+        dispatchBranches: MutableList<CodeBlock>,
+        keyPrefix: String,
+        receiverProperty: String?,
+        worldClassName: ClassName,
+    ) {
+        val key = "$keyPrefix${fn.name}"
+        val decodedArgs = fn.params.mapIndexed { idx, param ->
+            buildDecodeExpression(param.type, CodeBlock.of("args[$idx]"), worldClassName)
+        }
+        val callExpr = when (fn.kind) {
+            is WitFunctionKind.Method -> {
+                val member = NamingConventions.extractResourceMemberName(fn.name)
+                CodeBlock.of("%L.%N(%L)", decodedArgs.first(), member, decodedArgs.drop(1).joinToCode(", "))
+            }
+            else -> {
+                val name = hostResourceImportName(fn)
+                val spec = FunSpec.builder(name).addModifiers(KModifier.ABSTRACT)
+                addFunctionKdoc(spec, fn)
+                for (param in fn.params) spec.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
+                spec.returns(
+                    if (fn.kind is WitFunctionKind.Constructor) mapTypeDefByIndex(checkNotNull(resourceIdOf(fn)), worldClassName)
+                    else mapFunctionReturnType(fn, worldClassName),
+                )
+                importsBuilder.addFunction(spec.build())
+                if (receiverProperty != null) CodeBlock.of("%N.%N(%L)", receiverProperty, name, decodedArgs.joinToCode(", "))
+                else CodeBlock.of("%N(%L)", name, decodedArgs.joinToCode(", "))
+            }
+        }
+        dispatchBranches += if (fn.results.isEmpty() && fn.kind !is WitFunctionKind.Constructor) {
+            CodeBlock.builder()
+                .beginControlFlow("%S ->", key)
+                .addStatement("%L", callExpr)
+                .addStatement("%T", jsonNullClass)
+                .endControlFlow()
+                .build()
+        } else {
+            CodeBlock.builder().addStatement("%S -> %T.toJsonElement(%L)", key, ffmCodecClass, callExpr).build()
+        }
+    }
+
+    /** The component dropped its last owning handle to a host resource. */
+    private fun buildHostResourceDropBranch(resourceIdx: Int, keyPrefix: String): CodeBlock {
+        val rawName = checkNotNull(resolve.types[resourceIdx].name)
+        return CodeBlock.builder()
+            .beginControlFlow("%S ->", "$keyPrefix[resource-drop]$rawName")
+            .addStatement("%T.current().drop(%T.decodeInt(args[0]))", hostResourceTableClass, ffmCodecClass)
+            .addStatement("%T", jsonNullClass)
+            .endControlFlow()
+            .build()
+    }
+
+    /** An interface the host implements for a resource the component imports. */
+    private fun buildHostResourceTypeSpec(
+        resourcePascalName: String,
+        docs: WitDocs?,
+        worldClassName: ClassName,
+        functions: List<WitFunction>,
+    ): TypeSpec {
+        val builder = TypeSpec.interfaceBuilder(resourcePascalName).addSuperinterface(witHostResourceClass)
+        docs?.contents?.let { builder.addKdoc("%L\n\n", it.trim()) }
+        builder.addKdoc(
+            "Implemented by the host. Constructors and static functions are members of `Imports`; " +
+                "[close] runs when the component drops its last owning handle.\n",
+        )
+        for (fn in functions) {
+            if (fn.kind !is WitFunctionKind.Method) continue
+            val method = FunSpec.builder(NamingConventions.extractResourceMemberName(fn.name)).addModifiers(KModifier.ABSTRACT)
+            addFunctionKdoc(method, fn)
+            for (param in fn.params.drop(1)) method.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
+            method.returns(mapFunctionReturnType(fn, worldClassName))
+            builder.addFunction(method.build())
+        }
+        return builder.build()
     }
 
     private fun generateStandaloneInterfacesFile(): FileSpec {
@@ -708,6 +848,12 @@ class WitToKotlinPoetConverter(
             }
             is WitTypeDefKind.Resource -> {
                 val typePascalName = resolveKotlinTypeSimpleName(typeIdx)
+                if (isHostResource(typeIdx)) {
+                    ownerContainer.addType(
+                        buildHostResourceTypeSpec(typePascalName, typeDef.docs, worldClassName, resourceFunctions[typeIdx].orEmpty()),
+                    )
+                    return
+                }
                 ownerContainer.addType(
                     buildResourceTypeSpec(
                         resourceWitName = rawName,
@@ -1162,7 +1308,7 @@ class WitToKotlinPoetConverter(
                         invokeBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
                         val (fmt, argVal) = formatArgumentCode(paramName, param.type)
                         argFormatPlaceholders += fmt
-                        formatArgs += argVal
+                        formatArgs.addAll(argVal)
                     }
                     val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
                     invokeBuilder.addStatement(
@@ -1184,7 +1330,7 @@ class WitToKotlinPoetConverter(
                         methodBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
                         val (fmt, argVal) = formatArgumentCode(paramName, param.type)
                         argFormatPlaceholders += fmt
-                        extraFormatArgs += argVal
+                        extraFormatArgs.addAll(argVal)
                     }
                     methodBuilder.addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
                     val returnType = mapFunctionReturnType(fn, worldClassName)
@@ -1223,7 +1369,7 @@ class WitToKotlinPoetConverter(
                         staticBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
                         val (fmt, argVal) = formatArgumentCode(paramName, param.type)
                         argFormatPlaceholders += fmt
-                        extraFormatArgs += argVal
+                        extraFormatArgs.addAll(argVal)
                     }
                     val returnType = mapFunctionReturnType(fn, worldClassName)
                     staticBuilder.returns(returnType)
@@ -1304,7 +1450,7 @@ class WitToKotlinPoetConverter(
             builder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
             val (fmt, argVal) = formatArgumentCode(paramName, param.type)
             argFormatPlaceholders += fmt
-            extraFormatArgs += argVal
+            extraFormatArgs.addAll(argVal)
         }
 
         val returnType = mapFunctionReturnType(fn, worldClassName)
@@ -1407,12 +1553,16 @@ class WitToKotlinPoetConverter(
                         buildDecodeExpression(kind.type, elemExpr, worldClassName, depth, sessionExpr)
                     }
                     is WitTypeDefKind.Resource -> {
+                        if (isHostResource(typeRef.index)) return hostResourceDecode(typeRef.index, own = true, elemExpr, worldClassName)
                         // Host-side decoding (no client Session) yields an unbound resource wrapper.
                         val pascal = resolveKotlinTypeSimpleName(typeRef.index)
                         val resourceClass = worldClassName.nestedClass(pascal)
                         CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
                     }
                     is WitTypeDefKind.Handle -> {
+                        if (isHostResource(kind.resourceId)) {
+                            return hostResourceDecode(kind.resourceId, own = kind.kind == wasm2kt.ast.HandleKind.OWN, elemExpr, worldClassName)
+                        }
                         val pascal = resolveKotlinTypeSimpleName(kind.resourceId)
                         val resourceClass = worldClassName.nestedClass(pascal)
                         CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
@@ -1485,18 +1635,36 @@ class WitToKotlinPoetConverter(
         }
     }
 
-    private fun formatArgumentCode(paramName: String, typeRef: WitTypeRef): Pair<String, String> {
+    /** A host resource coming back from the component: `own` returns it to the host, `borrow` lends it. */
+    private fun hostResourceDecode(resourceIdx: Int, own: Boolean, elemExpr: CodeBlock, worldClassName: ClassName): CodeBlock =
+        CodeBlock.of(
+            "%T.current().%N(%T.decodeInt(%L), %T::class.java)",
+            hostResourceTableClass,
+            if (own) "take" else "borrow",
+            ffmCodecClass,
+            elemExpr,
+            mapTypeDefByIndex(resourceIdx, worldClassName),
+        )
+
+    private fun formatArgumentCode(paramName: String, typeRef: WitTypeRef): Pair<String, List<Any>> {
         if (typeRef is WitTypeRef.Id) {
             val def = resolve.types.getOrNull(typeRef.index)
             val kind = def?.kind
             if (kind is WitTypeDefKind.Handle) {
+                if (isHostResource(kind.resourceId)) {
+                    // Host objects are moved by the codec; a borrow is only lent for the call.
+                    return when (kind.kind) {
+                        wasm2kt.ast.HandleKind.OWN -> "%N" to listOf(paramName)
+                        wasm2kt.ast.HandleKind.BORROW -> "%T(%N)" to listOf(witBorrowedClass, paramName)
+                    }
+                }
                 return when (kind.kind) {
-                    wasm2kt.ast.HandleKind.OWN -> "%N.consumeOwnership()" to paramName
-                    wasm2kt.ast.HandleKind.BORROW -> "%N.handle" to paramName
+                    wasm2kt.ast.HandleKind.OWN -> "%N.consumeOwnership()" to listOf(paramName)
+                    wasm2kt.ast.HandleKind.BORROW -> "%N.handle" to listOf(paramName)
                 }
             }
         }
-        return "%N" to paramName
+        return "%N" to listOf(paramName)
     }
 
     private fun returnsOwnedResource(fn: WitFunction): Boolean {
@@ -1504,8 +1672,10 @@ class WitToKotlinPoetConverter(
         val ref = fn.results.first().type
         if (ref is WitTypeRef.Id) {
             val def = resolve.types.getOrNull(ref.index)
-            if (def?.kind is WitTypeDefKind.Handle || def?.kind is WitTypeDefKind.Resource) {
-                return true
+            when (val kind = def?.kind) {
+                is WitTypeDefKind.Handle -> return !isHostResource(kind.resourceId)
+                is WitTypeDefKind.Resource -> return !isHostResource(ref.index)
+                else -> Unit
             }
         }
         return false
@@ -1752,8 +1922,63 @@ class WitToKotlinPoetConverter(
         }
         fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
+        fileBuilder.addType(buildHostResourceBoundSessionTypeSpec())
 
         return fileBuilder.build()
+    }
+
+    /** Binds the session's [HostResourceTable] around every call into the component (ADR-0008). */
+    private fun buildHostResourceBoundSessionTypeSpec(): TypeSpec {
+        val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val typeR = TypeVariableName("R")
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val decoderType = LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(jsonElementClass)), returnType = typeR)
+        return TypeSpec.classBuilder("HostResourceBoundSession")
+            .addModifiers(KModifier.INTERNAL)
+            .addSuperinterface(runtimeSessionClass)
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter("delegate", runtimeSessionClass)
+                    .addParameter("resources", hostResourceTableClass)
+                    .build(),
+            )
+            .addProperty(PropertySpec.builder("delegate", runtimeSessionClass, KModifier.PRIVATE).initializer("delegate").build())
+            .addProperty(PropertySpec.builder("resources", hostResourceTableClass, KModifier.PRIVATE).initializer("resources").build())
+            .addFunction(
+                FunSpec.builder("invoke").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
+                    .addParameter("functionName", STRING).addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG).returns(typeR)
+                    .addStatement("return resources.bind { delegate.invoke(functionName, decoder, *args) }")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("newResource").addModifiers(KModifier.OVERRIDE)
+                    .addParameter("resourceName", STRING).addParameter("args", anyNullable, KModifier.VARARG).returns(INT)
+                    .addStatement("return resources.bind { delegate.newResource(resourceName, *args) }")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("invokeMethod").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
+                    .addParameter("handle", INT).addParameter("methodName", STRING).addParameter("decoder", decoderType)
+                    .addParameter("args", anyNullable, KModifier.VARARG).returns(typeR)
+                    .addStatement("return resources.bind { delegate.invokeMethod(handle, methodName, decoder, *args) }")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("dropResource").addModifiers(KModifier.OVERRIDE).addParameter("handle", INT)
+                    .addStatement("resources.bind { delegate.dropResource(handle) }")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("close").addModifiers(KModifier.OVERRIDE)
+                    .beginControlFlow("try")
+                    .addStatement("delegate.close()")
+                    .nextControlFlow("finally")
+                    .addStatement("resources.close()")
+                    .endControlFlow()
+                    .build(),
+            )
+            .build()
     }
 
     private fun buildWitOptionTypeSpec(): TypeSpec {

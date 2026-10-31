@@ -40,8 +40,7 @@ class WitToKotlinPoetConverterTest {
 
         assertEquals(1, resolve.worlds.size)
         assertEquals("calculator", resolve.worlds.first().name)
-        assertEquals(1, resolve.interfaces.size)
-        assertEquals("types", resolve.interfaces.first().name)
+        assertEquals(listOf("types", "counters"), resolve.interfaces.map { it.name })
 
         val converter = WitToKotlinPoetConverter(
             resolve = resolve,
@@ -1590,32 +1589,47 @@ class WitToKotlinPoetConverterTest {
             import kotlinx.serialization.json.JsonPrimitive
             import kotlinx.serialization.json.jsonPrimitive
 
+            class HostCounter(private val v: Int) : HostResWorld.Counter {
+                var closed = false
+                override fun getValue(): Int = v
+                override fun close() { closed = true }
+            }
+
             fun runHostResScenario(): String {
+                // A world-level resource is imported: the host implements it (ADR-0008).
+                val made = mutableListOf<HostCounter>()
                 val imports = object : HostResWorld.Imports {
-                    override fun inspectPair(p: HostResWorld.CounterPair): String {
-                        val err = runCatching { p.primary.getValue() }.exceptionOrNull()
-                        return "${'$'}{p.label}:${'$'}{p.primary.handle}:${'$'}{err?.message}"
-                    }
+                    override fun newCounter(init: Int): HostResWorld.Counter = HostCounter(init).also { made += it }
+                    override fun inspectPair(p: HostResWorld.CounterPair): String = "${'$'}{p.label}:${'$'}{p.primary.getValue()}"
                     override fun inspectOutcome(o: HostResWorld.CounterOutcome): Int = when (o) {
-                        is HostResWorld.CounterOutcome.Created -> o.value.handle
+                        is HostResWorld.CounterOutcome.Created -> o.value.getValue()
                         HostResWorld.CounterOutcome.Empty -> -1
                     }
-                    override fun inspectCounter(c: HostResWorld.Counter): Int = c.handle
+                    override fun inspectCounter(c: HostResWorld.Counter): Int = c.getValue()
                 }
-                val pair = imports.dispatchHostImport(
-                    "inspect-pair",
-                    JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(7), "label" to JsonPrimitive("lbl"))))),
-                ).jsonPrimitive.content
-                val created = imports.dispatchHostImport(
-                    "inspect-outcome",
-                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(9))))),
-                ).jsonPrimitive.content
-                val empty = imports.dispatchHostImport(
-                    "inspect-outcome",
-                    JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
-                ).jsonPrimitive.content
-                val borrowed = imports.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(3)))).jsonPrimitive.content
-                return "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed"
+                val table = wasm2kt.runtime.HostResourceTable()
+                return table.bind {
+                    fun new(v: Int) = imports.dispatchHostImport("[constructor]counter", JsonArray(listOf(JsonPrimitive(v)))).jsonPrimitive.content.toInt()
+                    val seven = new(7)
+                    val nine = new(9)
+                    val three = new(3)
+                    val pair = imports.dispatchHostImport(
+                        "inspect-pair",
+                        JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(seven), "label" to JsonPrimitive("lbl"))))),
+                    ).jsonPrimitive.content
+                    val created = imports.dispatchHostImport(
+                        "inspect-outcome",
+                        JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(nine))))),
+                    ).jsonPrimitive.content
+                    val empty = imports.dispatchHostImport(
+                        "inspect-outcome",
+                        JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
+                    ).jsonPrimitive.content
+                    val borrowed = imports.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(three)))).jsonPrimitive.content
+                    val left = table.size
+                    imports.dispatchHostImport("[resource-drop]counter", JsonArray(listOf(JsonPrimitive(three))))
+                    "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed|${'$'}left|${'$'}{table.size}|${'$'}{made.map { it.closed }}"
+                }
             }
             """.trimIndent(),
         )
@@ -1631,7 +1645,8 @@ class WitToKotlinPoetConverterTest {
             .getDeclaredMethod("runHostResScenario")
             .invoke(null) as String
         assertEquals(
-            "lbl:7:Resource Counter(handle=7) is not bound to an active client Session|9|-1|3",
+            // own<counter> moved to the host (7 and 9 leave the table), borrow keeps 3 until the drop.
+            "lbl:7|9|-1|3|1|0|[false, false, true]",
             output,
         )
     }

@@ -19,7 +19,8 @@
 | `result<T, E>` | `WitResult<T, E>`（`getOrThrow()` / `getOrNull()` / `errorOrNull()` / `fold` / `map` …） |
 | `tuple<A, B>` | `Tuple2<A, B>` |
 | `record` / `variant` / `enum` / `flags` | `data class` / `sealed interface` / `enum class` / `value class` |
-| `resource` | `AutoCloseable` なクラス |
+| `resource`（コンポーネントが export） | `AutoCloseable` なクラス（ホストはハンドルを持つ） |
+| `resource`（コンポーネントが import。world 直下か import した interface） | ホストが実装する `interface`（`WitHostResource`）。constructor / static は `Imports` のメンバー |
 | `async func` / `future<T>` / `stream<T>` | `suspend fun` / `Deferred<T>` / `Flow<T>`（予定。Chicory のみ。#16） |
 
 生成される関数の KDoc には、元の WIT の定義（例: ``WIT: `lookup: func(k: string) -> option<option<s32>>` ``）が書き出されます。
@@ -272,6 +273,56 @@ class Counter internal constructor(
     }
 }
 ```
+
+### 4.1 ホスト定義 resource（コンポーネントが import する resource）
+
+world 直下の `resource`、または world が import する interface の `resource` は、**ホストが実装します**
+（[ADR-0008](adr/0008-host-defined-resources.md)）。生成されるのは `WitHostResource` を継承した `interface` で、
+メソッドだけを持ちます。constructor と static 関数は `Imports`（interface なら `Imports` の該当プロパティ）のメンバーになります。
+
+```wit
+interface store {
+    resource blob {
+        constructor(init: list<u8>);
+        size: func() -> u32;
+        merge: static func(a: borrow<blob>, b: own<blob>) -> blob;
+    }
+}
+world host-res { import store; export measure: func(b: borrow<blob>) -> u32; }
+```
+
+```kotlin
+// 生成コード（抜粋）
+interface Blob : WitHostResource {
+    fun size(): UInt
+}
+interface Store {
+    fun newBlob(init: ByteArray): Blob            // constructor
+    fun blobMerge(a: Blob, b: Blob): Blob         // static
+}
+
+// ホスト側の実装
+class MyBlob(var bytes: ByteArray) : HostResWorld.Blob {
+    override fun size() = bytes.size.toUInt()
+    override fun close() { /* コンポーネントが最後の own ハンドルを drop したとき */ }
+}
+val imports = object : HostResWorld.Imports {
+    override val store = object : HostResWorld.Store {
+        override fun newBlob(init: ByteArray) = MyBlob(init)
+        override fun blobMerge(a: HostResWorld.Blob, b: HostResWorld.Blob) = MyBlob(a.read() + b.read())
+    }
+}
+HostResWorld.withSession(component, imports) {
+    HostResWorld.measure(MyBlob(byteArrayOf(1, 2)))   // borrow: その呼び出しの間だけ貸す
+}
+```
+
+* **own**: オブジェクトをコンポーネントに渡すと所有権が移ります。コンポーネントが drop すると `close()` が呼ばれます。
+  コンポーネントが own で返したオブジェクトは、ホストの手元に戻ります（`close()` は呼ばれません）
+* **borrow**: その呼び出しの間だけ貸します。呼び出し後もホストがそのまま使えます
+* セッションを閉じたとき、コンポーネントがまだ持っているオブジェクトは `close()` されます
+* オブジェクトと整数（rep）の対応は、セッションごとの `HostResourceTable` が管理します。ホスト resource の受け渡しは、
+  そのセッションの呼び出し中（同じスレッド）に限られます
 
 ### 所有権のポイント
 1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`CounterWorld.Counter(10)` と通常のコンストラクタ呼び出しのように書けます。

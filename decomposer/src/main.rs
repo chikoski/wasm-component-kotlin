@@ -24,7 +24,7 @@ use wasmtime_environ::wasmparser::{Validator, WasmFeatures};
 use wasmtime_environ::{EntityIndex, EntityType, ModuleTranslation, PrimaryMap, ScopeVec, Tunables};
 
 /// Bump whenever the plan.json schema changes incompatibly.
-const PLAN_VERSION: u32 = 1;
+const PLAN_VERSION: u32 = 2;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -215,6 +215,8 @@ impl Ctx<'_, '_> {
                         json!({
                             "index": i, "resource": res.as_u32(), "instance": t.unwrap_concrete_instance().as_u32(),
                             "imported": self.component.defined_resource_index(res).is_none(),
+                            // For imported (host-defined) resources: the runtime import naming it.
+                            "import": self.component.imported_resources.get(res).map(|i| i.as_u32()),
                         })
                     }
                     TypeResourceTable::Abstract(_) => json!({ "index": i, "abstract": true }),

@@ -23,9 +23,6 @@
         "user-id": {
           "type": 11
         },
-        "counter": {
-          "type": 12
-        },
         "log": {
           "function": {
             "name": "log",
@@ -35,8 +32,7 @@
                 "name": "msg",
                 "type": "string"
               }
-            ],
-            "results": []
+            ]
           }
         }
       },
@@ -55,11 +51,7 @@
                 "type": "s32"
               }
             ],
-            "results": [
-              {
-                "type": "s32"
-              }
-            ]
+            "result": "s32"
           }
         },
         "compute": {
@@ -73,22 +65,23 @@
               },
               {
                 "name": "opt",
-                "type": 13
+                "type": 12
               },
               {
                 "name": "list-data",
-                "type": 14
+                "type": 13
               },
               {
                 "name": "tup",
-                "type": 15
+                "type": 14
               }
             ],
-            "results": [
-              {
-                "type": 16
-              }
-            ]
+            "result": 15
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
           }
         }
       },
@@ -103,7 +96,17 @@
         "color": 1,
         "permissions": 2,
         "status": 3,
-        "user-id": 4,
+        "user-id": 4
+      },
+      "functions": {},
+      "docs": {
+        "contents": "A simple calculator interface"
+      },
+      "package": 0
+    },
+    {
+      "name": "counters",
+      "types": {
         "counter": 5
       },
       "functions": {
@@ -118,11 +121,7 @@
               "type": "u32"
             }
           ],
-          "results": [
-            {
-              "type": 17
-            }
-          ]
+          "result": 16
         },
         "[method]counter.increment": {
           "name": "[method]counter.increment",
@@ -134,8 +133,7 @@
               "name": "self",
               "type": 6
             }
-          ],
-          "results": []
+          ]
         },
         "[method]counter.get-value": {
           "name": "[method]counter.get-value",
@@ -148,11 +146,7 @@
               "type": 6
             }
           ],
-          "results": [
-            {
-              "type": "u32"
-            }
-          ]
+          "result": "u32"
         },
         "[static]counter.merge": {
           "name": "[static]counter.merge",
@@ -166,18 +160,14 @@
             },
             {
               "name": "b",
-              "type": 17
+              "type": 16
             }
           ],
-          "results": [
-            {
-              "type": 17
-            }
-          ]
+          "result": 16
         }
       },
       "docs": {
-        "contents": "A simple calculator interface"
+        "contents": "Resources the component defines (exported): the host holds handles to them."
       },
       "package": 0
     }
@@ -285,7 +275,7 @@
       "name": "counter",
       "kind": "resource",
       "owner": {
-        "interface": 0
+        "interface": 1
       }
     },
     {
@@ -343,15 +333,6 @@
       }
     },
     {
-      "name": "counter",
-      "kind": {
-        "type": 5
-      },
-      "owner": {
-        "world": 0
-      }
-    },
-    {
       "name": null,
       "kind": {
         "option": "string"
@@ -401,7 +382,8 @@
     {
       "name": "example:calc@0.1.0",
       "interfaces": {
-        "types": 0
+        "types": 0,
+        "counters": 1
       },
       "worlds": {
         "calculator": 0
