@@ -1061,7 +1061,7 @@ class WitToKotlinPoetConverterTest {
     }
 
     @Test
-    fun `ByteArray and AOT precompiled cwasm execution via openSession and withSession`(@TempDir tempDir: Path) {
+    fun `ByteArray and AOT precompiled cwasm execution via withSession and withPrecompiledSession`(@TempDir tempDir: Path) {
         val wasmFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wasm"))
         val wasmPath = Paths.get(wasmFixtureUrl.toURI())
         val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/roundtrip.wit"))
@@ -1090,8 +1090,9 @@ class WitToKotlinPoetConverterTest {
 
         // 3. Write a harness testing:
         //    (a) withSession(wasmBytes: ByteArray) with raw .wasm bytes
-        //    (b) withSession(cwasmBytes: ByteArray) with AOT .cwasm bytes
-        //    (c) withSession(cwasmPath: Path) with AOT .cwasm file path
+        //    (b) withPrecompiledSession(cwasmBytes: ByteArray) with AOT .cwasm bytes
+        //    (c) withPrecompiledSession(cwasmPath: Path) with AOT .cwasm file path
+        //    (d) withSession rejects .cwasm and withPrecompiledSession rejects .wasm (#33)
         val harnessPath = tempDir.resolve("com/example/cwasm/CwasmHarness.kt")
         Files.writeString(
             harnessPath,
@@ -1116,20 +1117,33 @@ class WitToKotlinPoetConverterTest {
                 }
 
                 // Mode B: Precompiled AOT .cwasm ByteArray
-                val resCwasmBytes = RoundtripWorld.withSession(cwasmBytes, imports) {
+                val resCwasmBytes = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
                     val scaled = with(RoundtripWorld.MathApi) { scale(8) }
                     val tag = RoundtripWorld.describeCode("AOT_BYTES", 201u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
                 // Mode C: Precompiled AOT .cwasm Path
-                val resCwasmPath = RoundtripWorld.withSession(cwasmPath, imports) {
+                val resCwasmPath = RoundtripWorld.withPrecompiledSession(cwasmPath, imports) {
                     val scaled = with(RoundtripWorld.MathApi) { scale(9) }
                     val tag = RoundtripWorld.describeCode("AOT_PATH", 202u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
-                return "rawBytes=${'$'}resRawBytes|cwasmBytes=${'$'}resCwasmBytes|cwasmPath=${'$'}resCwasmPath"
+                // Mode D: the plain entry points refuse native code, and the precompiled ones refuse .wasm
+                fun refused(open: () -> Unit): String = try {
+                    open()
+                    "opened"
+                } catch (e: IllegalStateException) {
+                    if ("precompiled" in (e.message ?: "")) "refused" else "other: ${'$'}{e.message}"
+                }
+                val refusals = listOf(
+                    refused { RoundtripWorld.openSession(cwasmBytes, imports).close() },
+                    refused { RoundtripWorld.openSession(cwasmPath, imports).close() },
+                    refused { RoundtripWorld.openPrecompiledSession(rawWasmBytes, imports).close() },
+                ).joinToString(",")
+
+                return "rawBytes=${'$'}resRawBytes|cwasmBytes=${'$'}resCwasmBytes|cwasmPath=${'$'}resCwasmPath|${'$'}refusals"
             }
             """.trimIndent(),
         )
@@ -1168,7 +1182,7 @@ class WitToKotlinPoetConverterTest {
         val actualOutput = method.invoke(null, rawWasmBytes, cwasmBytes, cwasmPath) as String
 
         assertEquals(
-            "rawBytes=42:RAW#200|cwasmBytes=48:AOT_BYTES#201|cwasmPath=54:AOT_PATH#202",
+            "rawBytes=42:RAW#200|cwasmBytes=48:AOT_BYTES#201|cwasmPath=54:AOT_PATH#202|refused,refused,refused",
             actualOutput,
         )
     }
@@ -1242,7 +1256,7 @@ class WitToKotlinPoetConverterTest {
                 }
 
                 // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
-                val aotBytesSummary = RoundtripWorld.withSession(cwasmBytes, imports) {
+                val aotBytesSummary = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
                     val scaled = with(RoundtripWorld.MathApi) { scale(5) } // 5 * 7 = 35
                     val optVal = RoundtripWorld.nestedOption(WitOption.Some(10))
                     val unwrapped = (optVal as WitOption.Some).value

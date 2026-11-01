@@ -81,18 +81,34 @@ object JniWasmtimeBridge {
         return candidates.firstOrNull { it.exists() }?.absoluteFile
     }
 
-    fun openSession(wasmPath: Path, imports: Any?): Long {
+    /** Opens a session on a `.wasm` component; a precompiled `.cwasm` is rejected (see [openPrecompiledSession]). */
+    fun openSession(wasmPath: Path, imports: Any?): Long = openSession(wasmPath, imports, precompiled = false)
+
+    /**
+     * Opens a session on a `.cwasm` written by [precompileComponent] with this bridge's Wasmtime build.
+     * Its native code runs without validation: pass only files from a trusted source.
+     */
+    fun openPrecompiledSession(cwasmPath: Path, imports: Any?): Long = openSession(cwasmPath, imports, precompiled = true)
+
+    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean): Long {
         ensureLoaded()
         val callback = if (imports != null) JniHostCallback(imports) else null
-        val ptr = nativeSessionOpen(wasmPath.toAbsolutePath().toString(), "[]", callback)
+        val ptr = nativeSessionOpen(wasmPath.toAbsolutePath().toString(), "[]", callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from $wasmPath" }
         return ptr
     }
 
-    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long {
+    /** Like [openSession] for a `.wasm` component in memory; precompiled bytes are rejected. */
+    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long = openSessionBytes(wasmBytes, imports, precompiled = false)
+
+    /** Like [openPrecompiledSession] for `.cwasm` bytes in memory; the same trust requirement applies. */
+    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?): Long =
+        openSessionBytes(cwasmBytes, imports, precompiled = true)
+
+    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean): Long {
         ensureLoaded()
         val callback = if (imports != null) JniHostCallback(imports) else null
-        val ptr = nativeSessionOpenBytes(wasmBytes, "[]", callback)
+        val ptr = nativeSessionOpenBytes(wasmBytes, "[]", callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from ByteArray" }
         return ptr
     }
@@ -116,6 +132,7 @@ object JniWasmtimeBridge {
         wasmPath: String,
         importsJson: String,
         hostCallback: JniHostCallback?,
+        precompiled: Boolean,
     ): Long
 
     @JvmStatic
@@ -123,6 +140,7 @@ object JniWasmtimeBridge {
         wasmBytes: ByteArray,
         importsJson: String,
         hostCallback: JniHostCallback?,
+        precompiled: Boolean,
     ): Long
 
     @JvmStatic
