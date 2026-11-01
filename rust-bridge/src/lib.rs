@@ -11,14 +11,18 @@ use std::ptr;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Config, Engine, Precompiled, Store, StoreContextMut};
 
-/// Host callback function pointer type:
-/// Receives `(user_data, import_name_json_or_str, args_json_cstr)` and returns a newly allocated C string JSON response
-/// (freed by Rust via `wasm2kt_free_host_string` or written into a callback buffer).
+/// Host callback function pointer type (FFM).
+///
+/// Receives the import name and the JSON arguments as C strings. The host writes its UTF-8
+/// response (JSON on success, an error message when it returns non-zero) into a buffer it obtains
+/// from [`wasm2kt_alloc_bytes`], and stores the pointer and length in `out_ptr` / `out_len`; Rust
+/// takes ownership and frees it. No response (or an empty one) leaves `out_ptr` null. There is no
+/// size limit (#35).
 pub type HostCallbackFn = extern "C" fn(
     import_name: *const c_char,
     args_json: *const c_char,
-    out_buf: *mut c_char,
-    out_buf_cap: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
 ) -> i32;
 
 pub struct StoreData {
@@ -568,23 +572,21 @@ fn invoke_host_callback(
     let resp_str_opt: Option<String> = if let Some(cb) = ctx.data().host_callback {
         let c_import = CString::new(import_name)?;
         let c_args = CString::new(args_json_str)?;
-        let mut out_buf = vec![0u8; 65536];
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: usize = 0;
 
-        let status = cb(
-            c_import.as_ptr(),
-            c_args.as_ptr(),
-            out_buf.as_mut_ptr() as *mut c_char,
-            out_buf.len(),
-        );
+        let status = cb(c_import.as_ptr(), c_args.as_ptr(), &mut out_ptr, &mut out_len);
+        let response = if out_ptr.is_null() {
+            Vec::new()
+        } else {
+            // Allocated by wasm2kt_alloc_bytes on the host's request; ownership returns to Rust here.
+            unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(out_ptr, out_len)) }.into_vec()
+        };
         if status != 0 {
-            let err_str = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }
-                .to_string_lossy()
-                .into_owned();
-            bail!("Host import '{}' failed: {}", import_name, err_str);
+            bail!("Host import '{}' failed: {}", import_name, String::from_utf8_lossy(&response));
         }
-        let s = unsafe { CStr::from_ptr(out_buf.as_ptr() as *const c_char) }
-            .to_str()?
-            .to_string();
+        let s = String::from_utf8(response)
+            .with_context(|| format!("Host import '{}' returned a response that is not UTF-8", import_name))?;
         if s.is_empty() {
             None
         } else {
@@ -982,6 +984,16 @@ pub extern "C" fn wasm2kt_precompile_component(
             ptr::null_mut()
         }
     }
+}
+
+/// Allocates `len` zeroed bytes for a host callback response (see [`HostCallbackFn`]); Rust frees
+/// them after reading the response. Returns null for `len == 0` or if allocation panics.
+#[no_mangle]
+pub extern "C" fn wasm2kt_alloc_bytes(len: usize) -> *mut u8 {
+    if len == 0 {
+        return ptr::null_mut();
+    }
+    std::panic::catch_unwind(|| Box::into_raw(vec![0u8; len].into_boxed_slice()) as *mut u8).unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]

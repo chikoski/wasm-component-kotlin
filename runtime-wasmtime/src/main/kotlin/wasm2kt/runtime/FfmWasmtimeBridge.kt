@@ -102,6 +102,12 @@ class FfmWasmtimeBridge private constructor(
         ),
     )
 
+    // extern "C" fn wasm2kt_alloc_bytes(len: usize) -> *mut u8
+    val allocBytesHandle: MethodHandle = linker.downcallHandle(
+        lookup.find("wasm2kt_alloc_bytes").orElseThrow(),
+        FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG),
+    )
+
     // extern "C" fn wasm2kt_free_bytes(ptr: *mut u8, len: usize)
     val freeBytesHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_free_bytes").orElseThrow(),
@@ -319,7 +325,7 @@ class FfmWasmtimeBridge private constructor(
 
     fun createHostCallbackStub(sessionArena: Arena, importsInstance: Any?): MemorySegment {
         if (importsInstance == null) return MemorySegment.NULL
-        val handler = HostCallbackDispatcher(importsInstance)
+        val handler = HostCallbackDispatcher(importsInstance, ::allocateNativeResponse)
         val callbackMethodHandle = MethodHandles.lookup().bind(
             handler,
             "onHostCall",
@@ -328,17 +334,26 @@ class FfmWasmtimeBridge private constructor(
                 MemorySegment::class.java,
                 MemorySegment::class.java,
                 MemorySegment::class.java,
-                Long::class.javaPrimitiveType,
+                MemorySegment::class.java,
             ),
         )
+        // fn(import_name, args_json, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32
         val descriptor = FunctionDescriptor.of(
             ValueLayout.JAVA_INT,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
-            ValueLayout.JAVA_LONG,
+            ValueLayout.ADDRESS,
         )
         return linker.upcallStub(callbackMethodHandle, descriptor, sessionArena)
+    }
+
+    /** Copies [bytes] into memory allocated by the bridge (`wasm2kt_alloc_bytes`), which Rust frees. */
+    private fun allocateNativeResponse(bytes: ByteArray): MemorySegment {
+        val ptr = allocBytesHandle.invokeExact(bytes.size.toLong()) as MemorySegment
+        check(ptr != MemorySegment.NULL) { "Could not allocate ${bytes.size} bytes for a host import response" }
+        MemorySegment.copy(bytes, 0, ptr.reinterpret(bytes.size.toLong()), ValueLayout.JAVA_BYTE, 0L, bytes.size)
+        return ptr
     }
 
     fun readAndFreeCString(ptr: MemorySegment): String {
@@ -467,14 +482,20 @@ class FfmWasmtimeBridge private constructor(
     }
 }
 
+/**
+ * Runs a host import for the native bridge. The response (JSON, or an error message when the
+ * result is non-zero) goes into memory from [allocate] and its address and length into
+ * `outPtrPtr` / `outLenPtr`, so responses of any size cross the boundary (#35).
+ */
 internal class HostCallbackDispatcher(
     private val importsInstance: Any,
+    private val allocate: (ByteArray) -> MemorySegment,
 ) {
     fun onHostCall(
         importNamePtr: MemorySegment,
         argsJsonPtr: MemorySegment,
-        outBufPtr: MemorySegment,
-        outBufCap: Long,
+        outPtrPtr: MemorySegment,
+        outLenPtr: MemorySegment,
     ): Int {
         return try {
             val importName = FfmWasmtimeBridge.readNullTerminatedUtf8(importNamePtr)
@@ -486,28 +507,20 @@ internal class HostCallbackDispatcher(
             val jsonElem = dispatcher.dispatchHostImport(importName, argsArray)
 
             if (jsonElem !is JsonNull) {
-                val bytes = Json.encodeToString(JsonElement.serializer(), jsonElem).toByteArray(StandardCharsets.UTF_8)
-                if (bytes.size >= outBufCap) {
-                    error(
-                        "Host import '$importName' response size (${bytes.size} bytes) exceeds callback buffer capacity ($outBufCap bytes)",
-                    )
-                }
-                val outSlice = outBufPtr.reinterpret(outBufCap)
-                MemorySegment.copy(bytes, 0, outSlice, ValueLayout.JAVA_BYTE, 0, bytes.size)
-                outSlice.set(ValueLayout.JAVA_BYTE, bytes.size.toLong(), 0.toByte())
-            } else if (outBufCap > 0) {
-                outBufPtr.reinterpret(outBufCap).set(ValueLayout.JAVA_BYTE, 0L, 0.toByte())
+                respond(Json.encodeToString(JsonElement.serializer(), jsonElem), outPtrPtr, outLenPtr)
             }
             0
         } catch (t: Throwable) {
-            val msgBytes = (t.message ?: t.toString()).toByteArray(StandardCharsets.UTF_8)
-            if (outBufCap > 1) {
-                val outSlice = outBufPtr.reinterpret(outBufCap)
-                val len = minOf(msgBytes.size, (outBufCap - 1).toInt())
-                MemorySegment.copy(msgBytes, 0, outSlice, ValueLayout.JAVA_BYTE, 0, len)
-                outSlice.set(ValueLayout.JAVA_BYTE, len.toLong(), 0.toByte())
-            }
+            runCatching { respond(t.message ?: t.toString(), outPtrPtr, outLenPtr) }
             1
         }
+    }
+
+    private fun respond(text: String, outPtrPtr: MemorySegment, outLenPtr: MemorySegment) {
+        val bytes = text.toByteArray(StandardCharsets.UTF_8)
+        if (bytes.isEmpty()) return
+        val ptr = allocate(bytes)
+        outPtrPtr.reinterpret(ValueLayout.ADDRESS.byteSize()).set(ValueLayout.ADDRESS, 0L, ptr)
+        outLenPtr.reinterpret(ValueLayout.JAVA_LONG.byteSize()).set(ValueLayout.JAVA_LONG, 0L, bytes.size.toLong())
     }
 }
