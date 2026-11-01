@@ -17,3 +17,4 @@
 | [0007](0007-canonical-abi-validation.md) | Canonical ABI の検証は仕様に従い、トラップとホストのエラーを分ける | 承認 |
 | [0008](0008-host-defined-resources.md) | ホスト定義 resource を interface + Imports で表し、rep の表で受け渡す | 承認 |
 | [0009](0009-json-boundary-option-tag-and-scalar-types.md) | JSON 境界で option のタグを型に基づいて判定し、スカラーの JSON 型を検査する | 承認 |
+| [0010](0010-wasmtime-lts.md) | decomposer と rust-bridge を同じ Wasmtime の LTS に揃える | 承認 |

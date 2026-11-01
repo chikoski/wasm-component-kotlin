@@ -55,7 +55,7 @@ JNI（Java Native Interface）のボイラープレートや C ヘッダ生成�
   * これにより、Wasm コンポーネント内部からホストの `Imports` インターフェースのメソッドが呼ばれた際、シームレスに Kotlin 側の実装がコールバックされます。
 
 ### 3.3 Rust Wasmtime ブリッジ ([rust-bridge/src/lib.rs](../rust-bridge/src/lib.rs))
-* Wasmtime の公式 C API (`libwasmtime`) は現時点で Core Wasm が中心であり Component Model の高レベル型 (`wasmtime::component::Val` や `ResourceAny`) の操作が難しいため、Rust の `wasmtime` クレート（`29.0.1`, `component-model` feature 有効）を直接ラップした薄い `cdylib` を採用しています。
+* Wasmtime の公式 C API (`libwasmtime`) は現時点で Core Wasm が中心であり Component Model の高レベル型 (`wasmtime::component::Val` や `ResourceAny`) の操作が難しいため、Rust の `wasmtime` クレート（`48.0.8` LTS、`component-model` feature 有効。版の方針は [ADR-0010](adr/0010-wasmtime-lts.md)）を直接ラップした薄い `cdylib` を採用しています。
 * **名前解決の柔軟性**:
   * `.wit` から生成したバインディングと `.wasm` から生成したバインディングの両方で動くよう、`resolve_exported_func` はトップレベルエクスポートだけでなく、エクスポートされたインターフェース（例: `example:counter/counter-api@0.1.0`）内部の関数やリソースメソッド（`[constructor]counter`, `[method]counter.increment`, `[static]counter.merge`）も自動探索して解決します。
 * **リソーステーブル管理**:

@@ -83,8 +83,8 @@ jobs:
         with:
           workspaces: rust-bridge
       # integration-tests generate bindings with wasm-tools and run them on Wasmtime and Chicory.
-      # Pinned to the wasm-tools family the decomposer uses (wasmparser 0.258), so results don't
-      # change when a new release tightens validation.
+      # Pinned so results don't change when a new release tightens validation. Independent of the
+      # Wasmtime LTS that the decomposer and the bridge share (ADR-0010).
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0

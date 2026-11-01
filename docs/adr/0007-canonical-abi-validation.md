@@ -3,6 +3,8 @@
 * ステータス: 承認
 * 日付: 2026-10-31
 
+> 補足（2026-11-01）: 参照実装は [ADR-0010](0010-wasmtime-lts.md) で Wasmtime 48 LTS になった。下の「Wasmtime と違う 2 点」はどちらも一致するようになり、代わりに「lift で見つかったトラップの後の poison」だけが違う。同じ呼び出しで borrow しているハンドルの move は、ホストのエラー（poison しない）として扱う。
+
 ## 背景
 
 Chicory バックエンドの Canonical ABI 実装（`runtime-chicory`）は、正しいゲストを動かすことだけを考えていた。
