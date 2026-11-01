@@ -52,8 +52,11 @@ pub fn wit_json(component_bytes: &[u8]) -> Result<String> {
     }
 }
 
-/// Returns the plan and the list of `(file name, core module bytes)`.
-pub fn decompose(component_bytes: &[u8]) -> Result<(Value, Vec<(String, Vec<u8>)>)> {
+/// Core module files of a decomposed component: `(file name, core module bytes)`.
+type ModuleFiles = Vec<(String, Vec<u8>)>;
+
+/// Returns the plan and the core module files.
+pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
     let scope = ScopeVec::new();
     let tunables = Tunables::default_u32();
     // Chicory executes plain core wasm; keep exceptions off so wasmtime's
@@ -82,7 +85,7 @@ struct Ctx<'a, 'data> {
 }
 
 impl Ctx<'_, '_> {
-    fn build(mut self, translation: &ComponentTranslation) -> Result<(Value, Vec<(String, Vec<u8>)>)> {
+    fn build(mut self, translation: &ComponentTranslation) -> Result<(Value, ModuleFiles)> {
         let mut files = Vec::new();
         let mut module_json = Vec::new();
         for (idx, m) in self.modules.iter() {
@@ -386,7 +389,7 @@ where
 /// ones in their original order. wasmtime-environ numbers options in translation order, which for
 /// some components (e.g. an exported instance bundled from lifted functions) follows hash order,
 /// so the raw indices would make plan.json differ between runs.
-fn renumber_options(options: &mut Vec<Value>, exports: &mut [Value], trampolines: &mut [Value]) {
+fn renumber_options(options: &mut [Value], exports: &mut [Value], trampolines: &mut [Value]) {
     let mut map: HashMap<u64, u64> = HashMap::new();
     let assign = |old: u64, map: &mut HashMap<u64, u64>| {
         let next = map.len() as u64;
@@ -413,4 +416,46 @@ fn renumber_options(options: &mut Vec<Value>, exports: &mut [Value], trampolines
         }
     }
     options.sort_by_key(|o| o.get("index").and_then(Value::as_u64));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures").join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+    }
+
+    /// plan.json must not depend on hash iteration order (committed fixtures, Gradle build cache).
+    #[test]
+    fn plans_are_deterministic() {
+        for name in ["res-edge.wasm", "roundtrip.wasm", "host-res.wasm", "types.wasm"] {
+            let bytes = fixture(name);
+            let first = decompose(&bytes).unwrap().0;
+            for _ in 0..5 {
+                assert_eq!(first, decompose(&bytes).unwrap().0, "{name}: plan changed between runs");
+            }
+        }
+    }
+
+    #[test]
+    fn options_are_numbered_by_first_use() {
+        let mut options = vec![json!({ "index": 0 }), json!({ "index": 1 }), json!({ "index": 2 })];
+        let mut exports = vec![json!({ "name": "a", "options": 2 }), json!({ "name": "b", "options": 0 })];
+        let mut trampolines = vec![json!({ "index": 0, "options": 2 })];
+        renumber_options(&mut options, &mut exports, &mut trampolines);
+        assert_eq!(exports[0]["options"], 0);
+        assert_eq!(exports[1]["options"], 1);
+        assert_eq!(trampolines[0]["options"], 0);
+        let indices: Vec<_> = options.iter().map(|o| o["index"].as_u64().unwrap()).collect();
+        assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn exports_are_sorted_by_name() {
+        let entries = [("b".to_string(), (ExportIndex::from_u32(1), ())), ("a".to_string(), (ExportIndex::from_u32(0), ()))];
+        let sorted = sorted_exports(entries.iter().map(|(k, v)| (k, v)));
+        assert_eq!(sorted.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+    }
 }

@@ -16,4 +16,6 @@ decomposer（`decomposer/regenerate-fixtures.sh`）で共有しています。
 | `composed-res` | 子コンポーネントの間で resource を受け渡す合成コンポーネント。アダプターが Chicory 未対応の組み込み関数を使う（#39） | [`src/composed-res`](src/composed-res)（手書きの WAT。`build.sh` で再ビルド） |
 | `calculator` | WIT のみ（コード生成と InMemory セッションのテスト用）。`calculator.json` は `wasm-tools component wit calculator.wit --json` の出力 | — |
 
+`calculator.json`、`types.json`、`host-res.json`、`roundtrip.json` は、`generator` のユニットテストの入力です（`wasm-tools component wit <name>.wit --json` の出力。wasm-tools を使わずに実行できるよう、コミットしています）。`.wit` を変えたら、同じコマンドで作り直してください。
+
 `src/` 以下にソースがあるものは、Rust（`types`、`host-res`）と wasm-tools で再ビルドできます。再ビルドしたら `decomposer/regenerate-fixtures.sh` も実行してください。

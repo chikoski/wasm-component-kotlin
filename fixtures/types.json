@@ -1,0 +1,323 @@
+{
+  "worlds": [
+    {
+      "name": "types-world",
+      "imports": {
+        "blob": {
+          "type": 2
+        },
+        "packet": {
+          "type": 3
+        },
+        "flagged": {
+          "type": 4
+        }
+      },
+      "exports": {
+        "echo-name": {
+          "function": {
+            "name": "echo-name",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 5
+              }
+            ],
+            "result": 5
+          }
+        },
+        "maybe-len": {
+          "function": {
+            "name": "maybe-len",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 5
+              }
+            ],
+            "result": 1
+          }
+        },
+        "echo-bytes": {
+          "function": {
+            "name": "echo-bytes",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 0
+              }
+            ],
+            "result": 0
+          }
+        },
+        "reverse-bytes": {
+          "function": {
+            "name": "reverse-bytes",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 0
+              }
+            ],
+            "result": 0
+          }
+        },
+        "echo-char": {
+          "function": {
+            "name": "echo-char",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "c",
+                "type": "char"
+              }
+            ],
+            "result": "char"
+          }
+        },
+        "next-char": {
+          "function": {
+            "name": "next-char",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "c",
+                "type": "char"
+              }
+            ],
+            "result": "char"
+          }
+        },
+        "echo-blob": {
+          "function": {
+            "name": "echo-blob",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "b",
+                "type": 2
+              }
+            ],
+            "result": 2
+          }
+        },
+        "echo-packet": {
+          "function": {
+            "name": "echo-packet",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "p",
+                "type": 3
+              }
+            ],
+            "result": 3
+          }
+        },
+        "compact": {
+          "function": {
+            "name": "compact",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 7
+              }
+            ],
+            "result": 8
+          }
+        },
+        "echo-optional-list": {
+          "function": {
+            "name": "echo-optional-list",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 7
+              }
+            ],
+            "result": 7
+          }
+        },
+        "nested": {
+          "function": {
+            "name": "nested",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 9
+              }
+            ],
+            "result": 9
+          }
+        },
+        "echo-flagged": {
+          "function": {
+            "name": "echo-flagged",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 10
+              }
+            ],
+            "result": 10
+          }
+        }
+      },
+      "package": 0,
+      "docs": {
+        "contents": "Exercises the WIT -> Kotlin mappings decided in ADR-0006."
+      }
+    }
+  ],
+  "interfaces": [],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": "blob",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": 0
+            },
+            {
+              "name": "tag",
+              "type": 1
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "packet",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "empty",
+              "type": null
+            },
+            {
+              "name": "bytes",
+              "type": 0
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      }
+    },
+    {
+      "name": "flagged",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "option",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "u32"
+            },
+            {
+              "name": "note",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      },
+      "docs": {
+        "contents": "Fields shaped like the tagged option form, so `option<flagged>` must not mistake a bare\nvalue for a tag (#36)."
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 6
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 5
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 4
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:types@0.1.0",
+      "interfaces": {},
+      "worlds": {
+        "types-world": 0
+      }
+    }
+  ]
+}
