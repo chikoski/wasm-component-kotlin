@@ -50,6 +50,7 @@ wasm2kt {
 
 * `io.github.wasm2kt:runtime-chicory`（プラグインと同じバージョン）を `implementation` に追加（`wasm2kt { addRuntimeDependency.set(false) }` で無効化）
 * Kotlin コンパイラに `-Xcontext-parameters` を追加（生成 DSL が Context Parameters を使うため）
+* コンポーネントが Chicory バックエンドの未対応の機能（コンポーネントの組み込み関数、型、async）を使っていれば、分解のタスクで警告する。`wasm2kt { failOnUnsupportedFeatures.set(true) }` にすると、ビルドを失敗させる
 
 > `.wasm` から生成した場合、ワールド名はコンポーネント自身の world（通常 `root` → `RootWorld`）になります。
 
@@ -119,8 +120,9 @@ Wasmtime ブリッジとの差分テスト（`ChicoryDifferentialTest`）で、�
 
 * async（WASI P3: `future` / `stream`）とコールバック
 * WASI のホスト実装（`wasi:cli` などを import するコンポーネントは、現時点では import をホストで実装する必要があります）
+* 子コンポーネントの間で resource を受け渡す合成コンポーネント（アダプターが resource の移動や同期呼び出しの組み込み関数を使うため）
 
-未対応の機能は、使われた時点で分かりやすい例外になります。
+未対応の機能は、使われた時点で分かりやすい例外になります。Gradle プラグインは、plan から分かるもの（未対応の組み込み関数・型・async）を、ビルド時に警告として表示します（`failOnUnsupportedFeatures` でエラーにもできます）。ビルドのキャッシュから復元されたときは、警告は表示されません。
 
 ---
 

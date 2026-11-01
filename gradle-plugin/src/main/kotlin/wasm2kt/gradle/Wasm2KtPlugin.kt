@@ -33,6 +33,13 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
      */
     abstract val addRuntimeDependency: Property<Boolean>
 
+    /**
+     * Fail the build when a component uses features the Chicory backend does not support yet
+     * (component intrinsics, types or async). Off by default: the build only warns, and calls that
+     * reach those features throw at run time.
+     */
+    abstract val failOnUnsupportedFeatures: Property<Boolean>
+
     fun components(action: org.gradle.api.Action<NamedDomainObjectContainer<Wasm2KtComponent>>) = action.execute(components)
 }
 
@@ -53,6 +60,7 @@ class Wasm2KtPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
         extension.addRuntimeDependency.convention(true)
+        extension.failOnUnsupportedFeatures.convention(false)
 
         // The tooling runs in workers with its own class path (see Wasm2KtToolingTask).
         val tooling = project.configurations.create(TOOLING_CONFIGURATION) { c ->
@@ -65,10 +73,14 @@ class Wasm2KtPlugin : Plugin<Project> {
         project.tasks.withType(Wasm2KtToolingTask::class.java).configureEach { it.toolingClasspath.from(tooling) }
 
         val wired = project.objects.domainObjectSet(ComponentTasks::class.java)
-        extension.components.all { component -> wired.add(registerTasks(project, component)) }
+        extension.components.all { component -> wired.add(registerTasks(project, extension, component)) }
 
         project.afterEvaluate {
-            if (extension.addRuntimeDependency.get() && extension.components.isNotEmpty()) {
+            // Only projects with a JVM or Android plugin have `implementation`; without one there is
+            // nothing to compile against, but the wasm2kt tasks still work on their own.
+            if (extension.addRuntimeDependency.get() && extension.components.isNotEmpty() &&
+                project.configurations.findByName("implementation") != null
+            ) {
                 project.dependencies.add("implementation", "io.github.wasm2kt:runtime-chicory:${pluginVersion()}")
             }
         }
@@ -81,7 +93,7 @@ class Wasm2KtPlugin : Plugin<Project> {
         }
     }
 
-    private fun registerTasks(project: Project, component: Wasm2KtComponent): ComponentTasks {
+    private fun registerTasks(project: Project, extension: Wasm2KtExtension, component: Wasm2KtComponent): ComponentTasks {
         val cap = component.name.split(Regex("[^A-Za-z0-9]+")).filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar(Char::uppercaseChar) }
         val base = project.layout.buildDirectory.dir("wasm2kt/${component.name}")
@@ -91,6 +103,7 @@ class Wasm2KtPlugin : Plugin<Project> {
             t.group = GROUP
             t.description = "Decomposes the '${component.name}' WebAssembly component into core modules."
             t.component.set(component.source)
+            t.failOnUnsupportedFeatures.set(extension.failOnUnsupportedFeatures)
             t.outputDir.set(base.map { it.dir("decomposed") })
         }
         val compile = project.tasks.register("wasm2ktCompile$cap", Wasm2KtCompileTask::class.java) { t ->

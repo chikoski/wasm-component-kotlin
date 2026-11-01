@@ -27,6 +27,48 @@ class ComponentBuildTest {
     }
 
     @Test
+    fun `unsupported features are found in the plan`(@TempDir dir: Path) {
+        Decomposer.decompose(fixtures.resolve("roundtrip.wasm"), dir.resolve("rt"))
+        assertEquals(emptyList(), PlanCheck.unsupportedFeatures(dir.resolve("rt")))
+
+        // Two nested components passing a resource: the fused adapter needs intrinsics Chicory lacks.
+        Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir.resolve("composed"))
+        val problems = PlanCheck.unsupportedFeatures(dir.resolve("composed"))
+        assertTrue(problems.any { "ResourceTransferOwn" in it }, "got $problems")
+        assertTrue(problems.all { it.startsWith("component intrinsic not supported by the Chicory backend: ") }, "got $problems")
+        assertEquals(problems.distinct(), problems)
+    }
+
+    @Test
+    fun `unsupported types and async options are reported with the function that uses them`(@TempDir dir: Path) {
+        Files.writeString(
+            dir.resolve("plan.json"),
+            """
+            {"version": 2,
+             "options": [{"index": 0, "async": false}, {"index": 1, "async": true}],
+             "imports": [{"index": 0, "name": "my:pkg/io", "path": ["read"]}],
+             "trampolines": [
+               {"index": 0, "kind": "lower-import", "import": 0, "options": 0,
+                "type": {"params": [], "results": [{"k": "unsupported", "detail": "Future(0)"}]}}
+             ],
+             "exports": [
+               {"instance": null, "name": "run", "options": 1, "type": {"params": [], "results": []}},
+               {"instance": "my:pkg/api", "name": "stream", "options": 0,
+                "type": {"params": [{"name": "s", "type": {"k": "list", "element": {"k": "unsupported", "detail": "Stream(0)"}}}], "results": []}}
+             ]}
+            """.trimIndent(),
+        )
+        assertEquals(
+            listOf(
+                "export 'run' is async, which the Chicory backend does not support yet",
+                "export 'my:pkg/api#stream' uses a type the Chicory backend does not support: Stream(0)",
+                "import 'my:pkg/io#read' uses a type the Chicory backend does not support: Future(0)",
+            ),
+            PlanCheck.unsupportedFeatures(dir),
+        )
+    }
+
+    @Test
     fun `decomposer errors are reported`(@TempDir dir: Path) {
         val notAComponent = dir.resolve("bad.wasm")
         Files.write(notAComponent, byteArrayOf(0, 'a'.code.toByte(), 's'.code.toByte(), 'm'.code.toByte(), 1, 0, 0, 0))
