@@ -8,6 +8,9 @@
         },
         "packet": {
           "type": 3
+        },
+        "flagged": {
+          "type": 4
         }
       },
       "exports": {
@@ -18,10 +21,10 @@
             "params": [
               {
                 "name": "v",
-                "type": 4
+                "type": 5
               }
             ],
-            "result": 4
+            "result": 5
           }
         },
         "maybe-len": {
@@ -31,7 +34,7 @@
             "params": [
               {
                 "name": "v",
-                "type": 4
+                "type": 5
               }
             ],
             "result": 1
@@ -122,10 +125,10 @@
             "params": [
               {
                 "name": "v",
-                "type": 6
+                "type": 7
               }
             ],
-            "result": 7
+            "result": 8
           }
         },
         "echo-optional-list": {
@@ -135,10 +138,10 @@
             "params": [
               {
                 "name": "v",
-                "type": 6
+                "type": 7
               }
             ],
-            "result": 6
+            "result": 7
           }
         },
         "nested": {
@@ -148,10 +151,23 @@
             "params": [
               {
                 "name": "v",
-                "type": 8
+                "type": 9
               }
             ],
-            "result": 8
+            "result": 9
+          }
+        },
+        "echo-flagged": {
+          "function": {
+            "name": "echo-flagged",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "v",
+                "type": 10
+              }
+            ],
+            "result": 10
           }
         }
       },
@@ -226,6 +242,33 @@
       }
     },
     {
+      "name": "flagged",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "option",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "u32"
+            },
+            {
+              "name": "note",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "world": 0
+      },
+      "docs": {
+        "contents": "Fields shaped like the tagged option form, so `option<flagged>` must not mistake a bare\nvalue for a tag (#36)."
+      }
+    },
+    {
       "name": null,
       "kind": {
         "option": "string"
@@ -242,7 +285,7 @@
     {
       "name": null,
       "kind": {
-        "list": 5
+        "list": 6
       },
       "owner": null
     },
@@ -250,6 +293,13 @@
       "name": null,
       "kind": {
         "list": "s32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 5
       },
       "owner": null
     },
