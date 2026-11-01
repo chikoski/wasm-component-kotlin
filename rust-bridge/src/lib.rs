@@ -1,4 +1,5 @@
-use anyhow::{anyhow, bail, Context, Result};
+use wasmtime::error::Context;
+use wasmtime::{bail, format_err as anyhow, Result};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
@@ -8,7 +9,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny, ResourceType, Type, Val};
+use wasmtime::component::{Component, Instance, Linker, ResourceAny, ResourceDynamic, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Config, Engine, Precompiled, Store, StoreContextMut};
 
 /// Host callback function pointer type (FFM).
@@ -31,9 +32,15 @@ pub struct StoreData {
     pub resources: HashMap<i32, ResourceAny>,
     pub next_handle: i32,
     /// Resource types the component imports, as they appear in import signatures (uninstantiated).
+    /// The position of each is its host type's payload: it is linked as `host_dynamic(position)`.
     pub imported_resource_types: Vec<ResourceType>,
     /// Owned handles standing in for host borrows during the current call.
     pub lent_host_resources: Vec<ResourceAny>,
+    /// Component-defined resources the current call moves out of `resources` as `own`. They go
+    /// back into `resources` if the call fails, so a rejected call does not lose the host's handle.
+    pub moved_handles: Vec<(i32, ResourceAny)>,
+    /// Component-defined resources the current call passes as `borrow`.
+    pub borrowed_handles: Vec<i32>,
 }
 
 /// Whether `obj` is the tagged form of an option (`{"option": "none"}` / `{"option": "some",
@@ -55,10 +62,15 @@ fn is_tagged_option(obj: &serde_json::Map<String, JsonValue>, payload: &Type) ->
     }
 }
 
-/// Whether `rt` is a host-defined resource: the host type itself (export signatures of an instance)
-/// or an imported resource type as it appears in the component's import signatures.
-fn is_host_resource(rt: &ResourceType, store: &StoreContextMut<'_, StoreData>) -> bool {
-    *rt == host_resource_type() || store.data().imported_resource_types.contains(rt)
+/// The host type payload of `rt` if it is a host-defined resource: either an imported resource
+/// type as it appears in the component's import signatures, or the linked host type itself (as it
+/// appears in an instance's export signatures).
+fn host_resource_payload(rt: &ResourceType, store: &StoreContextMut<'_, StoreData>) -> Option<u32> {
+    let imported = &store.data().imported_resource_types;
+    if let Some(i) = imported.iter().position(|t| t == rt) {
+        return Some(i as u32);
+    }
+    (0..imported.len() as u32).find(|&i| *rt == host_resource_type(i))
 }
 
 pub struct BridgeSession {
@@ -100,18 +112,29 @@ fn err_response(err: impl ToString) -> *mut c_char {
     })
 }
 
-/// Marker type for every host-defined resource. The JVM side identifies the object by its rep;
-/// all imported resource types share this host type (Wasmtime 29 has no dynamic host types).
-struct HostRes;
-
-fn host_resource_type() -> ResourceType {
-    ResourceType::host::<HostRes>()
+/// The host type linked for the `payload`-th imported resource type. Each imported resource gets
+/// its own type, so Wasmtime keeps them apart; the JVM side identifies objects by their rep.
+fn host_resource_type(payload: u32) -> ResourceType {
+    ResourceType::host_dynamic(payload)
 }
 
 fn json_handle(j: &JsonValue, what: &str) -> Result<i64> {
     j.as_i64()
         .or_else(|| j.get("handle")?.as_i64())
         .ok_or_else(|| anyhow!("Expected integer handle for {}<resource>, got {}", what, j))
+}
+
+/// A JSON integer that fits `T`; anything else (another JSON type, a fraction, or a value out of
+/// range) is an error naming the WIT type.
+fn int_in_range<T: TryFrom<i64> + TryFrom<u64>>(j: &JsonValue, wit: &str) -> Result<T> {
+    let fits = if let Some(v) = j.as_i64() {
+        T::try_from(v).ok()
+    } else if let Some(v) = j.as_u64() {
+        T::try_from(v).ok()
+    } else {
+        bail!("Expected {}, got {}", wit, j)
+    };
+    fits.ok_or_else(|| anyhow!("Value {} is out of range for {}", j, wit))
 }
 
 /// Convert JSON representation + expected `wasmtime::component::Type` into `wasmtime::component::Val`.
@@ -124,42 +147,20 @@ fn json_to_val(
         Type::Bool => Ok(Val::Bool(
             j.as_bool().ok_or_else(|| anyhow!("Expected bool, got {}", j))?,
         )),
-        Type::S8 => Ok(Val::S8(
-            j.as_i64().ok_or_else(|| anyhow!("Expected s8, got {}", j))? as i8,
-        )),
-        Type::U8 => Ok(Val::U8(
-            j.as_u64()
-                .map(|v| v as u8)
-                .or_else(|| j.as_i64().map(|v| v as u8))
-                .ok_or_else(|| anyhow!("Expected u8, got {}", j))?,
-        )),
-        Type::S16 => Ok(Val::S16(
-            j.as_i64().ok_or_else(|| anyhow!("Expected s16, got {}", j))? as i16,
-        )),
-        Type::U16 => Ok(Val::U16(
-            j.as_u64()
-                .map(|v| v as u16)
-                .or_else(|| j.as_i64().map(|v| v as u16))
-                .ok_or_else(|| anyhow!("Expected u16, got {}", j))?,
-        )),
-        Type::S32 => Ok(Val::S32(
-            j.as_i64().ok_or_else(|| anyhow!("Expected s32, got {}", j))? as i32,
-        )),
-        Type::U32 => Ok(Val::U32(
-            j.as_u64()
-                .map(|v| v as u32)
-                .or_else(|| j.as_i64().map(|v| v as u32))
-                .ok_or_else(|| anyhow!("Expected u32, got {}", j))?,
-        )),
-        Type::S64 => Ok(Val::S64(
-            j.as_i64().ok_or_else(|| anyhow!("Expected s64, got {}", j))?,
-        )),
-        Type::U64 => Ok(Val::U64(
-            j.as_u64()
-                .or_else(|| j.as_i64().map(|v| v as u64))
-                .or_else(|| j.as_str()?.parse::<u64>().ok())
-                .ok_or_else(|| anyhow!("Expected u64, got {}", j))?,
-        )),
+        // Integers must fit the WIT type, as in the Chicory backend (ADR-0007): a host value out
+        // of range is an error, not silently wrapped.
+        Type::S8 => Ok(Val::S8(int_in_range(j, "s8")?)),
+        Type::U8 => Ok(Val::U8(int_in_range(j, "u8")?)),
+        Type::S16 => Ok(Val::S16(int_in_range(j, "s16")?)),
+        Type::U16 => Ok(Val::U16(int_in_range(j, "u16")?)),
+        Type::S32 => Ok(Val::S32(int_in_range(j, "s32")?)),
+        Type::U32 => Ok(Val::U32(int_in_range(j, "u32")?)),
+        Type::S64 => Ok(Val::S64(int_in_range(j, "s64")?)),
+        Type::U64 => Ok(Val::U64(match j.as_str() {
+            // u64 also accepts a decimal string, for values JSON numbers cannot carry exactly.
+            Some(text) => text.parse::<u64>().map_err(|_| anyhow!("Expected u64, got {}", j))?,
+            None => int_in_range(j, "u64")?,
+        })),
         Type::Float32 => Ok(Val::Float32(
             j.as_f64().ok_or_else(|| anyhow!("Expected f32, got {}", j))? as f32,
         )),
@@ -303,30 +304,40 @@ fn json_to_val(
                 bail!("Expected array or u64 bitmask for flags, got {}", j)
             }
         }
-        Type::Own(rt) if is_host_resource(rt, store) => {
+        Type::Own(rt) if host_resource_payload(rt, store).is_some() => {
             // A host resource, identified by the rep the JVM side assigned.
+            let payload = host_resource_payload(rt, store).unwrap_or_default();
             let rep = json_handle(j, "own")? as u32;
-            Ok(Val::Resource(ResourceAny::try_from_resource(Resource::<HostRes>::new_own(rep), &mut *store)?))
+            Ok(Val::Resource(ResourceDynamic::new_own(rep, payload).try_into_resource_any(&mut *store)?))
         }
-        Type::Borrow(rt) if is_host_resource(rt, store) => {
-            // Wasmtime 29 cannot lower a host-made borrow outside a host call, so lend an owned
-            // handle instead and release it once the call returns (see session_invoke_internal).
+        Type::Borrow(rt) if host_resource_payload(rt, store).is_some() => {
+            // Wasmtime (still in 48) cannot lower a host-made borrow outside a host call, so lend an
+            // owned handle instead and release it once the call returns (see session_invoke_internal).
+            let payload = host_resource_payload(rt, store).unwrap_or_default();
             let rep = json_handle(j, "borrow")? as u32;
-            let any = ResourceAny::try_from_resource(Resource::<HostRes>::new_own(rep), &mut *store)?;
+            let any = ResourceDynamic::new_own(rep, payload).try_into_resource_any(&mut *store)?;
             store.data_mut().lent_host_resources.push(any);
             Ok(Val::Resource(any))
         }
         Type::Own(_) => {
             let handle = json_handle(j, "own")? as i32;
+            // The spec's lift_own: trap_if(h.num_lends != 0). Checked here, before Wasmtime sees the
+            // call: Wasmtime 48 refuses it too, but leaves the handle's lend count raised, so the
+            // host could never drop it afterwards. Same check and message as the Chicory backend.
+            if store.data().borrowed_handles.contains(&handle) {
+                bail!("Cannot move resource handle {} while it is borrowed by the same call", handle);
+            }
             let res = store
                 .data_mut()
                 .resources
                 .remove(&handle)
                 .ok_or_else(|| anyhow!("Resource handle {} not found or already consumed", handle))?;
+            store.data_mut().moved_handles.push((handle, res));
             Ok(Val::Resource(res))
         }
         Type::Borrow(_) => {
             let handle = json_handle(j, "borrow")? as i32;
+            store.data_mut().borrowed_handles.push(handle);
             let res = store
                 .data()
                 .resources
@@ -335,6 +346,9 @@ fn json_to_val(
                 .ok_or_else(|| anyhow!("Resource handle {} not found", handle))?;
             Ok(Val::Resource(res))
         }
+        // async types (#16) and newer value types are not part of the JSON boundary yet; the
+        // Wasmtime backend stays the reference for the synchronous features (ADR-0005).
+        other => bail!("WIT type {:?} is not supported by the Wasmtime bridge", other),
     }
 }
 
@@ -442,10 +456,9 @@ fn val_to_json(
             }
             Ok(json!(mask))
         }
-        (Val::Resource(res_any), _) if res_any.ty() == host_resource_type() => {
+        (Val::Resource(res_any), _) if host_resource_payload(&res_any.ty(), store).is_some() => {
             // A host resource coming back from the guest: report its rep.
-            let res: Resource<HostRes> = res_any.try_into_resource(&mut *store)?;
-            Ok(json!(res.rep()))
+            Ok(json!(ResourceDynamic::try_from_resource_any(*res_any, &mut *store)?.rep()))
         }
         (Val::Resource(res_any), _) => {
             let data = store.data_mut();
@@ -465,20 +478,23 @@ fn register_host_imports(
     component: &Component,
     imports_list: &[String],
 ) -> Result<Vec<ResourceType>> {
-    let mut imported_resource_types = Vec::new();
+    let mut imported_resource_types: Vec<ResourceType> = Vec::new();
+    // Drop keys by payload: an import that aliases an earlier resource type (`(eq ...)`, e.g. a
+    // world's `use store.{blob}`) must be linked as the same host type, with the same drop key.
+    let mut drop_keys: Vec<String> = Vec::new();
     let comp_ty = component.component_type();
     let engine = component.engine();
 
     // Auto-discover all imported functions and interfaces from the component type
     for (import_name, import_item) in comp_ty.imports(engine) {
-        match import_item {
+        match import_item.ty {
             wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) => {
                 let name_owned = import_name.to_string();
                 let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                 let result_types: Vec<Type> = func_ty.results().collect();
                 linker
                     .root()
-                    .func_new(import_name, move |mut ctx, params, results| {
+                    .func_new(import_name, move |mut ctx, _ty, params, results| {
                         invoke_host_callback(
                             &mut ctx,
                             &name_owned,
@@ -499,17 +515,21 @@ fn register_host_imports(
                     .map(|s| s.split('@').next().unwrap_or(s))
                     .unwrap_or(import_name);
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
-                    if let wasmtime::component::types::ComponentItem::Resource(rt) = export_item {
-                        imported_resource_types.push(rt);
-                        let drop_key = format!("{}#[resource-drop]{}", short_iface, export_fn_name);
-                        inst.resource(export_fn_name, host_resource_type(), host_resource_dtor(drop_key))?;
+                    if let wasmtime::component::types::ComponentItem::Resource(rt) = export_item.ty {
+                        let (payload, drop_key) = resource_payload(
+                            &mut imported_resource_types,
+                            &mut drop_keys,
+                            rt,
+                            format!("{}#[resource-drop]{}", short_iface, export_fn_name),
+                        );
+                        inst.resource(export_fn_name, host_resource_type(payload), host_resource_dtor(drop_key))?;
                         continue;
                     }
-                    if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item {
+                    if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item.ty {
                         let callback_key = format!("{}#{}", short_iface, export_fn_name);
                         let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                         let result_types: Vec<Type> = func_ty.results().collect();
-                        inst.func_new(export_fn_name, move |mut ctx, params, results| {
+                        inst.func_new(export_fn_name, move |mut ctx, _ty, params, results| {
                             invoke_host_callback(
                                 &mut ctx,
                                 &callback_key,
@@ -523,9 +543,13 @@ fn register_host_imports(
                 }
             }
             wasmtime::component::types::ComponentItem::Resource(rt) => {
-                imported_resource_types.push(rt);
-                let drop_key = format!("[resource-drop]{}", import_name);
-                linker.root().resource(import_name, host_resource_type(), host_resource_dtor(drop_key))?;
+                let (payload, drop_key) = resource_payload(
+                    &mut imported_resource_types,
+                    &mut drop_keys,
+                    rt,
+                    format!("[resource-drop]{}", import_name),
+                );
+                linker.root().resource(import_name, host_resource_type(payload), host_resource_dtor(drop_key))?;
             }
             _ => {}
         }
@@ -537,6 +561,22 @@ fn register_host_imports(
 
 /// Called when the guest drops its last owning handle to a host resource: forwards
 /// `[resource-drop]<name>` with the rep to the JVM host, which closes the object.
+/// The host type payload and drop key for an imported resource type: a new one, or the earlier
+/// one if `rt` aliases a resource type imported before (aliases always refer backwards).
+fn resource_payload(
+    types: &mut Vec<ResourceType>,
+    drop_keys: &mut Vec<String>,
+    rt: ResourceType,
+    drop_key: String,
+) -> (u32, String) {
+    if let Some(i) = types.iter().position(|t| *t == rt) {
+        return (i as u32, drop_keys[i].clone());
+    }
+    types.push(rt);
+    drop_keys.push(drop_key.clone());
+    ((types.len() - 1) as u32, drop_key)
+}
+
 fn host_resource_dtor(
     key: String,
 ) -> impl Fn(StoreContextMut<'_, StoreData>, u32) -> Result<()> + Send + Sync + 'static {
@@ -833,6 +873,8 @@ fn create_session_from_component(
             next_handle: 1,
             imported_resource_types,
             lent_host_resources: Vec::new(),
+            moved_handles: Vec::new(),
+            borrowed_handles: Vec::new(),
         },
     );
 
@@ -854,12 +896,12 @@ fn create_session_from_component(
 const PRECOMPILED_REFUSED: &str = "input is a precompiled Wasmtime artifact (.cwasm), which contains native code \
      that Wasmtime does not validate; open it with openPrecompiledSession, and only if it comes from a trusted source";
 
-fn not_precompiled_component(what: &str) -> anyhow::Error {
+fn not_precompiled_component(what: &str) -> wasmtime::Error {
     anyhow!("{what} is not a precompiled Wasmtime component (.cwasm) for this engine; open .wasm components with openSession")
 }
 
 fn load_component_from_path(engine: &Engine, wasm_path: &str, precompiled: bool) -> Result<Component> {
-    let detected = engine.detect_precompiled_file(wasm_path).ok().flatten();
+    let detected = Engine::detect_precompiled_file(wasm_path).ok().flatten();
     if precompiled {
         match detected {
             Some(Precompiled::Component) => unsafe { Component::deserialize_file(engine, wasm_path) }
@@ -875,7 +917,7 @@ fn load_component_from_path(engine: &Engine, wasm_path: &str, precompiled: bool)
 }
 
 fn load_component_from_bytes(engine: &Engine, wasm_bytes: &[u8], precompiled: bool) -> Result<Component> {
-    let detected = engine.detect_precompiled(wasm_bytes);
+    let detected = Engine::detect_precompiled(wasm_bytes);
     if precompiled {
         match detected {
             Some(Precompiled::Component) => unsafe { Component::deserialize(engine, wasm_bytes) }
@@ -890,7 +932,7 @@ fn load_component_from_bytes(engine: &Engine, wasm_bytes: &[u8], precompiled: bo
     }
 }
 
-fn write_err_buf(err: &anyhow::Error, err_buf: *mut c_char, err_buf_cap: usize) {
+fn write_err_buf(err: &wasmtime::Error, err_buf: *mut c_char, err_buf_cap: usize) {
     if !err_buf.is_null() && err_buf_cap > 0 {
         let msg = format!("{:#}", err);
         let bytes = msg.as_bytes();
@@ -1041,8 +1083,9 @@ fn session_invoke_internal(
         &mut session.store,
         func_spec,
     )?;
-    let param_types = func.params(&session.store);
-    let result_types = func.results(&session.store);
+    let func_ty = func.ty(&session.store);
+    let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
+    let result_types: Vec<Type> = func_ty.results().collect();
 
     if args_json.len() != param_types.len() {
         bail!(
@@ -1053,23 +1096,27 @@ fn session_invoke_internal(
         );
     }
 
-    let mut wasm_params = Vec::with_capacity(param_types.len());
-    for (arg_j, (_, p_ty)) in args_json.iter().zip(param_types.iter()) {
-        let val = json_to_val(arg_j, p_ty, &mut session.store.as_context_mut())?;
-        wasm_params.push(val);
-    }
-
     let mut wasm_results = vec![Val::Bool(false); result_types.len()];
-    let called = func
-        .call(&mut session.store, &wasm_params, &mut wasm_results)
-        .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))
-        .and_then(|_| {
-            func.post_return(&mut session.store)
-                .with_context(|| format!("Wasmtime post_return for '{}' failed", func_spec))
-        });
+    // Lowering the arguments and the call itself: whatever happens, the cleanup below runs.
+    let called = (|| -> Result<()> {
+        let mut wasm_params = Vec::with_capacity(param_types.len());
+        for (arg_j, p_ty) in args_json.iter().zip(param_types.iter()) {
+            wasm_params.push(json_to_val(arg_j, p_ty, &mut session.store.as_context_mut())?);
+        }
+        func.call(&mut session.store, &wasm_params, &mut wasm_results)
+            // Wasmtime 48's `call` runs post-return itself (`Func::post_return` is a no-op).
+            .with_context(|| format!("Wasmtime call to '{}' failed", func_spec))
+    })();
     // End the host borrows of this call (these handles carry no destructor).
     for lent in std::mem::take(&mut session.store.data_mut().lent_host_resources) {
         let _ = lent.resource_drop(&mut session.store);
+    }
+    // A failed call gives the moved handles back (e.g. a later argument was invalid, or Wasmtime
+    // refused to move a handle that the same call borrows), matching the Chicory backend.
+    session.store.data_mut().borrowed_handles.clear();
+    let moved = std::mem::take(&mut session.store.data_mut().moved_handles);
+    if called.is_err() {
+        session.store.data_mut().resources.extend(moved);
     }
     called?;
 
@@ -1346,8 +1393,8 @@ fn resolve_exported_func(
     func_spec: &str,
 ) -> Result<wasmtime::component::Func> {
     if let Some((iface_name, fn_name)) = func_spec.split_once('#') {
-        if let Some(iface_export_idx) = instance.get_export(&mut *store, None, iface_name) {
-            if let Some(func_export_idx) = instance.get_export(&mut *store, Some(&iface_export_idx), fn_name) {
+        if let Some(iface_export_idx) = instance.get_export_index(&mut *store, None, iface_name) {
+            if let Some(func_export_idx) = instance.get_export_index(&mut *store, Some(&iface_export_idx), fn_name) {
                 if let Some(f) = instance.get_func(&mut *store, func_export_idx) {
                     return Ok(f);
                 }
@@ -1357,7 +1404,7 @@ fn resolve_exported_func(
         let comp_ty = component.component_type();
         let engine = component.engine();
         for (export_name, export_item) in comp_ty.exports(engine) {
-            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item {
+            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item.ty {
                 let matches_suffix = export_name == iface_name
                     || export_name
                         .split('/')
@@ -1365,8 +1412,8 @@ fn resolve_exported_func(
                         .map(|s| s.split('@').next().unwrap_or(s) == iface_name)
                         .unwrap_or(false);
                 if matches_suffix {
-                    if let Some(iface_idx) = instance.get_export(&mut *store, None, export_name) {
-                        if let Some(fn_idx) = instance.get_export(&mut *store, Some(&iface_idx), fn_name) {
+                    if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
+                        if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), fn_name) {
                             if let Some(f) = instance.get_func(&mut *store, fn_idx) {
                                 return Ok(f);
                             }
@@ -1388,9 +1435,9 @@ fn resolve_exported_func(
         let comp_ty = component.component_type();
         let engine = component.engine();
         for (export_name, export_item) in comp_ty.exports(engine) {
-            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item {
-                if let Some(iface_idx) = instance.get_export(&mut *store, None, export_name) {
-                    if let Some(fn_idx) = instance.get_export(&mut *store, Some(&iface_idx), func_spec) {
+            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item.ty {
+                if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
+                    if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), func_spec) {
                         if let Some(f) = instance.get_func(&mut *store, fn_idx) {
                             return Ok(f);
                         }
@@ -1400,8 +1447,8 @@ fn resolve_exported_func(
                     let short_iface_no_ver = short_iface.split('@').next().unwrap_or(short_iface);
                     if func_spec.starts_with(&format!("{}#", short_iface_no_ver)) {
                         let actual_fn = &func_spec[short_iface_no_ver.len() + 1..];
-                        if let Some(iface_idx) = instance.get_export(&mut *store, None, export_name) {
-                            if let Some(fn_idx) = instance.get_export(&mut *store, Some(&iface_idx), actual_fn) {
+                        if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
+                            if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), actual_fn) {
                                 if let Some(f) = instance.get_func(&mut *store, fn_idx) {
                                     return Ok(f);
                                 }

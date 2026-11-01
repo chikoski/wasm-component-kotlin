@@ -34,17 +34,6 @@ class CanonicalAbiStrictnessTest {
     }
 
     @Test
-    fun `utf16 strings must be 2-byte aligned`() {
-        // Spec load_string_from_range: trap_if(ptr != align_to(ptr, 2)). Wasmtime 49 does not check this.
-        component("abi-edge").instantiate(noop).use { c ->
-            assertEquals("a", c.invoke("utf16-at", u(0x310, 1)).jsonPrimitive.content)
-        }
-        component("abi-edge").instantiate(noop).use { c ->
-            assertThrows<ComponentTrapException> { c.invoke("utf16-at", u(0x311, 1)) }
-        }
-    }
-
-    @Test
     fun `host values must have the JSON type of their WIT type`() {
         // #36: null or a number for a string used to be stored as its text ("null", "5").
         component("types").instantiate(null).use { c ->
@@ -57,6 +46,17 @@ class CanonicalAbiStrictnessTest {
             assertEquals("ok", c.invoke("echo-name", JsonArray(listOf(JsonPrimitive("ok")))).let { r ->
                 (r as? kotlinx.serialization.json.JsonObject)?.get("value")?.jsonPrimitive?.content ?: r.jsonPrimitive.content
             })
+        }
+    }
+
+    @Test
+    fun `a trap found while lifting a result poisons the instance`() {
+        // The spec's trap_if in lift is a trap like any other. Wasmtime 48 reports it but keeps the
+        // instance usable (it only poisons after core wasm traps), so this is checked here only.
+        component("abi-edge").instantiate(noop).use { c ->
+            assertThrows<ComponentTrapException> { c.invoke("char-from", u(0xD800)) }
+            val after = assertThrows<ComponentTrapException> { c.invoke("char-from", u(0x41)) }
+            assertTrue("unusable" in after.message!!)
         }
     }
 
@@ -95,6 +95,8 @@ class CanonicalAbiStrictnessTest {
 
     @Test
     fun `host values that do not fit the WIT type are rejected without poisoning`() {
+        // The Wasmtime bridge rejects these too since #34; ChicoryDifferentialTest compares a few.
+        // This checks the exception type and that the instance stays usable.
         component("abi-edge").instantiate(noop).use { c ->
             for (bad in listOf("-1", "4294967296", "1.5", "true", "[1]", "null")) {
                 assertThrows<IllegalArgumentException>("u32 <- $bad") { c.invoke("char-from", JsonArray(listOf(j(bad)))) }

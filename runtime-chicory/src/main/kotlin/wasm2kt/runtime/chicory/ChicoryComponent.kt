@@ -487,8 +487,10 @@ internal class ChicoryComponentInstance(
             requireDefinedResource(table)
             val id = handleOf(value)
             val h = hostHandle(id, table)
-            // The spec's lift_own: trap_if(h.num_lends != 0). Wasmtime traps here too.
-            if (h.lends != 0) poison("Cannot move resource handle $id while it is borrowed by the same call")
+            // The spec's lift_own: trap_if(h.num_lends != 0). The handle and the lend are the host's,
+            // so this is a host error (ADR-0007): the call does not start and the instance stays
+            // usable, as on Wasmtime 48.
+            check(h.lends == 0) { "Cannot move resource handle $id while it is borrowed by the same call" }
             check(moves.add(id)) { "Resource handle $id is moved twice in one call" }
             // The spec's lower_own: the component gets a new owning handle for the rep.
             return insert(table, h.rep, own = true)
