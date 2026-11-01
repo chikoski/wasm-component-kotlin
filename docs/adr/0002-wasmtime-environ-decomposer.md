@@ -3,6 +3,8 @@
 * ステータス: 承認
 * 日付: 2026-10-30
 
+> 補足（2026-11-01）: `wasmtime-environ` の版は [ADR-0010](0010-wasmtime-lts.md) で Wasmtime 48 LTS（`=48.0.8`、wit-component / wit-parser `=0.254.2`）に変わった。
+
 ## 背景
 
 コンポーネントを core モジュールとインスタンス化手順に分解するには、ネストしたインスタンス化、アダプタ（shim / fixup）、

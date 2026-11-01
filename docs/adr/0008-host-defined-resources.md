@@ -3,6 +3,8 @@
 * ステータス: 承認
 * 日付: 2026-10-31
 
+> 補足（2026-11-01）: [ADR-0010](0010-wasmtime-lts.md) で Wasmtime 48 に上げ、import した resource 型はそれぞれ別の動的なホスト型で登録するようになった（下の `HostRes` 1 型の回避策は不要）。ホストの borrow を所有ハンドルで代用する回避策は、48 でも必要なので残っている。plan は v3。
+
 ## 背景
 
 WIT では、world 直下の `resource` と、world が import する interface の `resource` は、**ホストが定義する**

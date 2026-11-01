@@ -102,6 +102,9 @@ internal class ChicoryComponentInstance(
     private val instanceFlags = HashMap<Int, GlobalInstance>()
     private val resourceDtors = HashMap<Int, ExportFunction>()
 
+    /** The task's "may block" flag. Every call here is synchronous, so it stays false (0). */
+    private val taskMayBlock = GlobalInstance(Value.i32(0), MutabilityType.Var)
+
     /** Per resource table: guest handle -> representation. Handle 0 is reserved as invalid. */
     private val guestTables = HashMap<Int, ResourceTable>()
 
@@ -287,6 +290,7 @@ internal class ChicoryComponentInstance(
                 is CoreDef.Trampoline -> builder.addFunction(
                     HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), trampoline(def.index)),
                 )
+                is CoreDef.TaskMayBlock -> builder.addGlobal(ImportGlobal(arg.module, arg.name, taskMayBlock))
                 is CoreDef.InstanceFlags -> builder.addGlobal(
                     ImportGlobal(arg.module, arg.name, instanceFlags.getOrPut(def.index) {
                         // may_leave | may_enter, as Wasmtime initializes them.
@@ -323,6 +327,7 @@ internal class ChicoryComponentInstance(
             ExportFunction { args -> handle.apply(null, *args) }
         }
         is CoreDef.InstanceFlags -> error("Instance flags are not callable")
+        is CoreDef.TaskMayBlock -> error("The task-may-block flag is not callable")
     }
 
     // ---------------------------------------------------------------- trampolines
@@ -482,8 +487,10 @@ internal class ChicoryComponentInstance(
             requireDefinedResource(table)
             val id = handleOf(value)
             val h = hostHandle(id, table)
-            // The spec's lift_own: trap_if(h.num_lends != 0). Wasmtime traps here too.
-            if (h.lends != 0) poison("Cannot move resource handle $id while it is borrowed by the same call")
+            // The spec's lift_own: trap_if(h.num_lends != 0). The handle and the lend are the host's,
+            // so this is a host error (ADR-0007): the call does not start and the instance stays
+            // usable, as on Wasmtime 48.
+            check(h.lends == 0) { "Cannot move resource handle $id while it is borrowed by the same call" }
             check(moves.add(id)) { "Resource handle $id is moved twice in one call" }
             // The spec's lower_own: the component gets a new owning handle for the rep.
             return insert(table, h.rep, own = true)

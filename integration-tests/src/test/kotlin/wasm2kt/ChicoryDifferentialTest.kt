@@ -140,12 +140,27 @@ class ChicoryDifferentialTest {
     fun `borrowing and moving the same handle in one call matches Wasmtime`() {
         val calls = listOf(
             Call("[constructor]counter", JsonPrimitive(10)), // handle 1
-            Call("[static]counter.merge", JsonPrimitive(1), JsonPrimitive(1)), // borrow + own of one handle
+            // borrow + own of one handle: refused before the call starts; handle 1 stays usable
+            Call("[static]counter.merge", JsonPrimitive(1), JsonPrimitive(1)),
             Call("[method]counter.get-value", JsonPrimitive(1)),
             Call("[constructor]counter", JsonPrimitive(5)),
             Call("[method]counter.get-value", JsonPrimitive(1)),
         )
         runBoth("counter", { null }, calls)
+        // Matching is not enough (both could fail): the refused call must leave handle 1 usable.
+        val backends = listOf(
+            WasmtimeBackend(fixture("counter"), null),
+            ChicoryComponent.fromDirectory(chicoryPlanDir("counter")).instantiate(null),
+        )
+        for (b in backends) b.use {
+            val one = JsonArray(listOf(JsonPrimitive(1)))
+            assertEquals(1, it.invoke("[constructor]counter", JsonArray(listOf(JsonPrimitive(10)))).jsonPrimitive.int)
+            kotlin.test.assertFailsWith<IllegalStateException> {
+                it.invoke("[static]counter.merge", JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(1))))
+            }
+            assertEquals(10, it.invoke("[method]counter.get-value", one).jsonPrimitive.int, "${it.javaClass.simpleName} lost the handle")
+            it.dropResource(1)
+        }
     }
 
     private val ping = {
@@ -159,7 +174,8 @@ class ChicoryDifferentialTest {
     /**
      * Canonical ABI validation (#18): the abi-edge fixture returns raw core values chosen by the
      * test, so each scenario makes the guest hand back something the ABI must reject. Each
-     * scenario runs on a fresh instance because a trap poisons the instance.
+     * scenario runs on a fresh instance because a trap poisons the instance (on Wasmtime 48 only
+     * a core wasm trap does; see the scenario comments).
      */
     @Test
     fun `canonical ABI traps match Wasmtime`() {
@@ -186,6 +202,7 @@ class ChicoryDifferentialTest {
             listOf(Call("string-at", *u(0xFFFF_FFFF, 2))),
             listOf(Call("utf16-at", *u(0x310, 1)), Call("utf16-at", *u(0x300, 2))),
             listOf(Call("utf16-at", *u(0x310, 2))),
+            listOf(Call("utf16-at", *u(0x311, 1))), // misaligned (Wasmtime checks this since 48)
             listOf(Call("utf16-at", *u(mem - 2, 2))),
             // lists: alignment, bounds, and length * size overflow
             listOf(Call("list-at", *u(0x300, 3)), Call("list-at", *u(0x300, 0)), Call("list-at", *u(mem, 0))),
@@ -202,10 +219,15 @@ class ChicoryDifferentialTest {
             listOf(Call("set-mode", *u(2)), Call("list-len", j("[1,2,3]"))),
             listOf(Call("set-mode", *u(3)), Call("list-len", j("[1,2,3]"))),
             listOf(Call("call-ping")),
-            // a trap poisons the instance: later calls fail too
-            listOf(Call("char-from", *u(0xD800)), Call("char-from", *u(0x41)), Call("call-ping")),
+            // Whether a trap found while lifting poisons the instance differs: Wasmtime 48 only poisons
+            // after a core wasm trap, Chicory after any spec trap (ADR-0007). See
+            // CanonicalAbiStrictnessTest for the Chicory side; a core trap is compared here.
+            listOf(Call("set-mode", *u(3)), Call("list-len", j("[1,2,3]")), Call("char-from", *u(0x41))),
             // host-side argument errors are not traps and leave the instance usable
             listOf(Call("char-from", JsonPrimitive("x")), Call("char-from", *u(0x41))),
+            // integers out of range for the WIT type are rejected, not wrapped (the bridge since #34)
+            listOf(Call("char-from", *u(0x1_0000_0041)), Call("char-from", JsonPrimitive(-1)), Call("char-from", *u(0x41))),
+            listOf(Call("list-len", j("[4294967296]")), Call("list-len", j("[0, 4294967295]"))),
             listOf(Call("list-len", j("[1,\"x\"]")), Call("list-len", j("[1]"))),
         )
         for (calls in scenarios) runBoth("abi-edge", ping, calls)

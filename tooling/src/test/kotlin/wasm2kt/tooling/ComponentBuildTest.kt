@@ -40,6 +40,17 @@ class ComponentBuildTest {
     }
 
     @Test
+    fun `a component with unsupported intrinsics still instantiates and fails only when they are used`(@TempDir dir: Path) {
+        // Wasmtime 48's fused adapters import the task-may-block global (plan v3) next to the
+        // unsupported intrinsics; instantiation must not fail on it, so the build-time warning holds.
+        Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir)
+        wasm2kt.runtime.chicory.ChicoryComponent.fromDirectory(dir).instantiate(null).use { c ->
+            val e = runCatching { c.invoke("g", kotlinx.serialization.json.JsonArray(emptyList())) }.exceptionOrNull()
+            assertTrue(e is UnsupportedOperationException && "not supported by the Chicory backend" in e.message!!, "got $e")
+        }
+    }
+
+    @Test
     fun `unsupported types and async options are reported with the function that uses them`(@TempDir dir: Path) {
         Files.writeString(
             dir.resolve("plan.json"),
