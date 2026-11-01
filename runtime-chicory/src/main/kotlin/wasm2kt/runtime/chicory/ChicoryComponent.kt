@@ -102,6 +102,9 @@ internal class ChicoryComponentInstance(
     private val instanceFlags = HashMap<Int, GlobalInstance>()
     private val resourceDtors = HashMap<Int, ExportFunction>()
 
+    /** The task's "may block" flag. Every call here is synchronous, so it stays false (0). */
+    private val taskMayBlock = GlobalInstance(Value.i32(0), MutabilityType.Var)
+
     /** Per resource table: guest handle -> representation. Handle 0 is reserved as invalid. */
     private val guestTables = HashMap<Int, ResourceTable>()
 
@@ -287,6 +290,7 @@ internal class ChicoryComponentInstance(
                 is CoreDef.Trampoline -> builder.addFunction(
                     HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), trampoline(def.index)),
                 )
+                is CoreDef.TaskMayBlock -> builder.addGlobal(ImportGlobal(arg.module, arg.name, taskMayBlock))
                 is CoreDef.InstanceFlags -> builder.addGlobal(
                     ImportGlobal(arg.module, arg.name, instanceFlags.getOrPut(def.index) {
                         // may_leave | may_enter, as Wasmtime initializes them.
@@ -323,6 +327,7 @@ internal class ChicoryComponentInstance(
             ExportFunction { args -> handle.apply(null, *args) }
         }
         is CoreDef.InstanceFlags -> error("Instance flags are not callable")
+        is CoreDef.TaskMayBlock -> error("The task-may-block flag is not callable")
     }
 
     // ---------------------------------------------------------------- trampolines

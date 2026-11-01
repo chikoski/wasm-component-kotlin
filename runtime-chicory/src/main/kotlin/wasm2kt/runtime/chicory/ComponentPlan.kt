@@ -24,7 +24,7 @@ class ComponentPlan(
     val exports: List<PlanExport>,
 ) {
     companion object {
-        const val SUPPORTED_VERSION = 2
+        const val SUPPORTED_VERSION = 3
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
@@ -125,6 +125,7 @@ class ComponentPlan(
             "export" -> CoreDef.Export(parseExport(o))
             "trampoline" -> CoreDef.Trampoline(o.int("index"))
             "instance-flags" -> CoreDef.InstanceFlags(o.int("index"))
+            "task-may-block" -> CoreDef.TaskMayBlock
             else -> error("Unknown core definition kind '$kind'")
         }
     }
@@ -173,6 +174,9 @@ sealed interface CoreDef {
     data class Export(val ref: CoreExportRef) : CoreDef
     data class Trampoline(val index: Int) : CoreDef
     data class InstanceFlags(val index: Int) : CoreDef
+
+    /** The current task's "may block" flag, an i32 global (plan v3; imported by fused adapters). */
+    data object TaskMayBlock : CoreDef
 }
 
 class InstantiateArg(val module: String, val name: String, val def: CoreDef)

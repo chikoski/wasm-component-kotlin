@@ -24,7 +24,7 @@ use wasmtime_environ::wasmparser::{Validator, WasmFeatures};
 use wasmtime_environ::{EntityIndex, EntityType, ModuleTranslation, PrimaryMap, ScopeVec, Tunables};
 
 /// Bump whenever the plan.json schema changes incompatibly.
-const PLAN_VERSION: u32 = 2;
+const PLAN_VERSION: u32 = 3;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -275,6 +275,10 @@ impl Ctx<'_, '_> {
             CoreDef::Trampoline(t) => json!({ "kind": "trampoline", "index": t.as_u32() }),
             CoreDef::InstanceFlags(i) => json!({ "kind": "instance-flags", "index": i.as_u32() }),
             CoreDef::UnsafeIntrinsic(u) => bail!("unsafe intrinsic {u:?} is not supported"),
+            // The task-may-block global only exists for async lifts/lowers (#16).
+            // The per-task "may block" flag (an i32 global). Wasmtime 48's fused adapters import
+            // it even for synchronous component-to-component calls.
+            CoreDef::TaskMayBlock => json!({ "kind": "task-may-block" }),
         })
     }
 
