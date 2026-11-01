@@ -16,3 +16,4 @@
 | [0006](0006-type-mapping.md) | WIT → Kotlin の型マッピングを見直す | 承認 |
 | [0007](0007-canonical-abi-validation.md) | Canonical ABI の検証は仕様に従い、トラップとホストのエラーを分ける | 承認 |
 | [0008](0008-host-defined-resources.md) | ホスト定義 resource を interface + Imports で表し、rep の表で受け渡す | 承認 |
+| [0009](0009-json-boundary-option-tag-and-scalar-types.md) | JSON 境界で option のタグを型に基づいて判定し、スカラーの JSON 型を検査する | 承認 |

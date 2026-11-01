@@ -14,6 +14,7 @@ impl Guest for Fixture {
     fn compact(v: Vec<Option<i32>>) -> Vec<i32> { v.into_iter().flatten().collect() }
     fn echo_optional_list(v: Vec<Option<i32>>) -> Vec<Option<i32>> { v }
     fn nested(v: Option<Option<String>>) -> Option<Option<String>> { v }
+    fn echo_flagged(v: Option<Flagged>) -> Option<Flagged> { v }
 }
 
 export!(Fixture);

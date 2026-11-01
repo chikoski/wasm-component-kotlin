@@ -70,6 +70,13 @@ class TypeMappingE2ETest {
             check("nested(none)", TypesWorld.nested(WitOption.None) == WitOption.None)
             check("nested(some(none))", TypesWorld.nested(WitOption.Some(null)) == WitOption.Some(null))
             check("nested(some(some))", TypesWorld.nested(WitOption.Some("x")) == WitOption.Some("x"))
+
+            // option<record> whose fields look like the tagged option form (#36)
+            val looksNone = TypesWorld.Flagged(option = "none", value = 1u, note = "n")
+            val looksSome = TypesWorld.Flagged(option = "some", value = 2u, note = "s")
+            check("flagged(none-like)", TypesWorld.echoFlagged(looksNone) == looksNone)
+            check("flagged(some-like)", TypesWorld.echoFlagged(looksSome) == looksSome)
+            check("flagged(null)", TypesWorld.echoFlagged(null) == null)
             return out.joinToString(",")
         }
 
@@ -103,6 +110,7 @@ class TypeMappingE2ETest {
         "echoBlob", "echoBlob(noTag)", "blobHash", "packetBytes", "packetEmpty", "packetText",
         "compact", "echoOptionalList",
         "nested(none)", "nested(some(none))", "nested(some(some))",
+        "flagged(none-like)", "flagged(some-like)", "flagged(null)",
     ).joinToString(",")
 
     @Test

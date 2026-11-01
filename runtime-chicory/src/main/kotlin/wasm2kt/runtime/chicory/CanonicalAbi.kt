@@ -146,7 +146,7 @@ internal class Lowerer(private val cx: AbiContext) {
             WitType.F64 -> out += f64Bits(v)
             WitType.Char -> out += char(v).toLong()
             WitType.Str -> {
-                val (ptr, len) = storeString(v.jsonPrimitive.content)
+                val (ptr, len) = storeString(string(v))
                 out += ptr.toLong(); out += len.toLong()
             }
             is WitType.ListOf -> {
@@ -158,7 +158,7 @@ internal class Lowerer(private val cx: AbiContext) {
                 for ((name, ft) in t.fields) lowerFlat(o[name] ?: missingField(name), ft, out)
             }
             is WitType.Tuple -> {
-                val a = v.jsonArray
+                val a = tupleArray(v, t)
                 t.types.forEachIndexed { i, et -> lowerFlat(a[i], et, out) }
             }
             is WitType.Flags -> flagWords(v, t).forEach { out += it.toLong() }
@@ -193,7 +193,7 @@ internal class Lowerer(private val cx: AbiContext) {
             WitType.F64 -> m.writeLong(ptr, f64Bits(v))
             WitType.Char -> m.writeI32(ptr, char(v))
             WitType.Str -> {
-                val (p, len) = storeString(v.jsonPrimitive.content)
+                val (p, len) = storeString(string(v))
                 m.writeI32(ptr, p); m.writeI32(ptr + 4, len)
             }
             is WitType.ListOf -> {
@@ -210,7 +210,7 @@ internal class Lowerer(private val cx: AbiContext) {
                 }
             }
             is WitType.Tuple -> {
-                val a = v.jsonArray
+                val a = tupleArray(v, t)
                 var off = 0
                 t.types.forEachIndexed { i, et ->
                     off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(et))
@@ -297,7 +297,7 @@ internal class Lowerer(private val cx: AbiContext) {
         val words = IntArray((t.names.size + 31) / 32)
         if (v is JsonArray) {
             for (name in v) {
-                val i = t.names.indexOf(name.jsonPrimitive.content)
+                val i = t.names.indexOf(string(name))
                 require(i >= 0) { "Unknown flag '${name.jsonPrimitive.content}'" }
                 words[i / 32] = words[i / 32] or (1 shl (i % 32))
             }
@@ -311,14 +311,14 @@ internal class Lowerer(private val cx: AbiContext) {
 
     /** Resolves the case index and payload, accepting every shape the Wasmtime bridge accepts. */
     private fun variantCase(v: JsonElement, t: WitType.Variant): Pair<Int, JsonElement?> = when (t.kind) {
-        WitType.VariantKind.ENUM -> caseIndex(t, v.jsonPrimitive.content) to null
+        WitType.VariantKind.ENUM -> caseIndex(t, string(v)) to null
         WitType.VariantKind.VARIANT -> {
-            val o = v.jsonObject
-            caseIndex(t, o.getValue("case").jsonPrimitive.content) to o["value"]
+            val o = v as? JsonObject ?: throw IllegalArgumentException("Expected a variant object, got $v")
+            caseIndex(t, string(o["case"] ?: throw IllegalArgumentException("Missing 'case' in variant $v"))) to o["value"]
         }
         WitType.VariantKind.OPTION -> when {
             v is JsonNull -> 0 to null
-            v is JsonObject && "option" in v -> when (val tag = v.getValue("option").jsonPrimitive.content) {
+            isTaggedOption(v, t.cases[1].second) -> when (val tag = (v as JsonObject).getValue("option").jsonPrimitive.content) {
                 "none" -> 0 to null
                 "some" -> 1 to (v["value"] ?: JsonNull)
                 else -> throw IllegalArgumentException("Invalid option tag '$tag'")
@@ -335,6 +335,22 @@ internal class Lowerer(private val cx: AbiContext) {
         }
     }
 
+    /**
+     * Whether [v] is the tagged form of an option (`{"option": "none"}` / `{"option": "some", "value": ...}`)
+     * rather than a bare `some` payload. Generated code sends `some` bare (ADR-0006), so a payload that
+     * is itself a record with an `option` field must not be mistaken for a tag (#36): an object is a
+     * tag only if its keys are exactly those of the tagged form, and never when every field of the
+     * payload record would fit in it. Must match the Wasmtime bridge (`is_tagged_option`).
+     */
+    private fun isTaggedOption(v: JsonElement, payload: WitType?): Boolean {
+        if (v !is JsonObject) return false
+        val tag = v["option"] as? JsonPrimitive ?: return false
+        if (!tag.isString || (tag.content != "some" && tag.content != "none")) return false
+        if (!TAGGED_OPTION_KEYS.containsAll(v.keys)) return false
+        val fields = (payload as? WitType.Record)?.fields?.map { it.first } ?: return true
+        return !TAGGED_OPTION_KEYS.containsAll(fields)
+    }
+
     private fun caseIndex(t: WitType.Variant, name: String): Int =
         t.cases.indexOfFirst { it.first == name }.also { require(it >= 0) { "Unknown case '$name'" } }
 
@@ -348,7 +364,16 @@ internal class Lowerer(private val cx: AbiContext) {
     }
 
     private fun missingField(name: String): Nothing = throw IllegalArgumentException("Missing record field '$name'")
+
+    private fun tupleArray(v: JsonElement, t: WitType.Tuple): JsonArray {
+        val a = v as? JsonArray ?: throw IllegalArgumentException("Expected a tuple of ${t.types.size}, got $v")
+        require(a.size == t.types.size) { "Expected a tuple of ${t.types.size}, got ${a.size} elements" }
+        return a
+    }
 }
+
+/** Keys of the tagged option form. */
+private val TAGGED_OPTION_KEYS = setOf("option", "value")
 
 /** Converts core wasm values / linear memory into JSON values. */
 internal class Lifter(private val cx: AbiContext) {
@@ -573,8 +598,18 @@ private fun encodeStrict(s: String, charset: Charset): ByteArray {
     return ByteArray(buf.remaining()).also { buf.get(it) }
 }
 
-private fun primitive(v: JsonElement, type: String): JsonPrimitive =
-    v as? JsonPrimitive ?: throw IllegalArgumentException("Expected $type, got $v")
+/**
+ * The JSON primitive of a host value for a WIT scalar. Like the Wasmtime bridge, JSON types must
+ * match: `null` is not a value of any scalar, numbers and booleans are not strings and vice versa
+ * (#36). Only u64 also accepts a decimal string, for values beyond what JSON numbers carry exactly.
+ */
+private fun primitive(v: JsonElement, type: String, string: Boolean = false): JsonPrimitive {
+    val p = v as? JsonPrimitive
+    if (p == null || p is JsonNull || p.isString != string) throw IllegalArgumentException("Expected $type, got $v")
+    return p
+}
+
+private fun string(v: JsonElement): String = primitive(v, "string", string = true).content
 
 private fun bool(v: JsonElement): Boolean =
     primitive(v, "bool").content.toBooleanStrictOrNull() ?: throw IllegalArgumentException("Expected bool, got $v")
@@ -598,11 +633,14 @@ private fun integer(v: JsonElement, t: WitType): Long {
 private fun long(v: JsonElement): Long =
     primitive(v, "s64").content.toLongOrNull() ?: throw IllegalArgumentException("Expected s64, got $v")
 
-private fun ulong(v: JsonElement): Long =
-    (primitive(v, "u64").content.toULongOrNull() ?: throw IllegalArgumentException("Expected u64, got $v")).toLong()
+private fun ulong(v: JsonElement): Long {
+    val p = v as? JsonPrimitive
+    if (p == null || p is JsonNull) throw IllegalArgumentException("Expected u64, got $v")
+    return (p.content.toULongOrNull() ?: throw IllegalArgumentException("Expected u64, got $v")).toLong()
+}
 
 private fun char(v: JsonElement): Int {
-    val s = primitive(v, "char").content
+    val s = primitive(v, "char", string = true).content
     require(s.isNotEmpty() && s.codePointCount(0, s.length) == 1) { "Expected a single char, got \"$s\"" }
     val cp = s.codePointAt(0)
     require(cp !in 0xD800..0xDFFF) { "char cannot be a surrogate code point" }
