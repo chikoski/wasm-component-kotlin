@@ -90,7 +90,7 @@ QC レビュー（2026-10-31）で見つかった残りの 1 件を、async よ�
 
 | Issue | 内容 |
 | :--- | :--- |
-| [#32](https://github.com/chikoski/wasm-component-kotlin/issues/32) | interface を完全修飾名で識別する（方針案を Issue で検討中） |
+| [#32](https://github.com/chikoski/wasm-component-kotlin/issues/32) | interface を完全修飾名で識別する（方針は [ADR-0011](adr/0011-qualified-interface-keys.md) で決定。実装待ち） |
 
 async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。
 
