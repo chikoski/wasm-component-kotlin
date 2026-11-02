@@ -509,24 +509,22 @@ fn register_host_imports(
                 let mut inst = linker
                     .instance(import_name)
                     .with_context(|| format!("Failed to define linker instance '{}'", import_name))?;
-                let short_iface = import_name
-                    .split('/')
-                    .nth(1)
-                    .map(|s| s.split('@').next().unwrap_or(s))
-                    .unwrap_or(import_name);
+                // Host import keys use the import name as written in the component: fully qualified
+                // (`pkg:ns/iface@1.0`) for package interfaces, the bare name for inline ones (ADR-0011).
+                let iface_key = import_name;
                 for (export_fn_name, export_item) in inst_ty.exports(engine) {
                     if let wasmtime::component::types::ComponentItem::Resource(rt) = export_item.ty {
                         let (payload, drop_key) = resource_payload(
                             &mut imported_resource_types,
                             &mut drop_keys,
                             rt,
-                            format!("{}#[resource-drop]{}", short_iface, export_fn_name),
+                            format!("{}#[resource-drop]{}", iface_key, export_fn_name),
                         );
                         inst.resource(export_fn_name, host_resource_type(payload), host_resource_dtor(drop_key))?;
                         continue;
                     }
                     if let wasmtime::component::types::ComponentItem::ComponentFunc(func_ty) = export_item.ty {
-                        let callback_key = format!("{}#{}", short_iface, export_fn_name);
+                        let callback_key = format!("{}#{}", iface_key, export_fn_name);
                         let param_types: Vec<Type> = func_ty.params().map(|(_, ty)| ty).collect();
                         let result_types: Vec<Type> = func_ty.results().collect();
                         inst.func_new(export_fn_name, move |mut ctx, _ty, params, results| {
@@ -1392,72 +1390,66 @@ fn resolve_exported_func(
     store: &mut Store<StoreData>,
     func_spec: &str,
 ) -> Result<wasmtime::component::Func> {
-    if let Some((iface_name, fn_name)) = func_spec.split_once('#') {
-        if let Some(iface_export_idx) = instance.get_export_index(&mut *store, None, iface_name) {
-            if let Some(func_export_idx) = instance.get_export_index(&mut *store, Some(&iface_export_idx), fn_name) {
-                if let Some(f) = instance.get_func(&mut *store, func_export_idx) {
-                    return Ok(f);
+    // The fully qualified form (`pkg:ns/iface@1.0#fn`) is canonical. An interface written without
+    // its version or as its short name (`iface#fn`), and a bare function name searched across
+    // exported interfaces, are accepted only when they match exactly one export (ADR-0011).
+    let comp_ty = component.component_type();
+    let engine = component.engine();
+    let interface_exports: Vec<String> = comp_ty
+        .exports(engine)
+        .filter(|(_, item)| matches!(item.ty, wasmtime::component::types::ComponentItem::ComponentInstance(_)))
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+    let lookup = |store: &mut Store<StoreData>, iface: &str, fn_name: &str| {
+        let iface_idx = instance.get_export_index(&mut *store, None, iface)?;
+        let fn_idx = instance.get_export_index(&mut *store, Some(&iface_idx), fn_name)?;
+        instance.get_func(&mut *store, fn_idx)
+    };
+
+    let (candidates, not_found) = if let Some((iface_name, fn_name)) = func_spec.split_once('#') {
+        if let Some(f) = lookup(store, iface_name, fn_name) {
+            return Ok(f);
+        }
+        let mut found = Vec::new();
+        for export_name in &interface_exports {
+            if interface_name_matches(export_name, iface_name) {
+                if let Some(f) = lookup(store, export_name, fn_name) {
+                    found.push((format!("{}#{}", export_name, fn_name), f));
                 }
             }
         }
-        // Also try matching fully-qualified interface export names like `pkg:name/iface@ver`
-        let comp_ty = component.component_type();
-        let engine = component.engine();
-        for (export_name, export_item) in comp_ty.exports(engine) {
-            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item.ty {
-                let matches_suffix = export_name == iface_name
-                    || export_name
-                        .split('/')
-                        .nth(1)
-                        .map(|s| s.split('@').next().unwrap_or(s) == iface_name)
-                        .unwrap_or(false);
-                if matches_suffix {
-                    if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
-                        if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), fn_name) {
-                            if let Some(f) = instance.get_func(&mut *store, fn_idx) {
-                                return Ok(f);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        bail!(
-            "Exported function '{}' not found in interface '{}'",
-            fn_name,
-            iface_name
+        (
+            found,
+            format!("Exported function '{}' not found in interface '{}'", fn_name, iface_name),
         )
     } else {
         if let Some(f) = instance.get_func(&mut *store, func_spec) {
             return Ok(f);
         }
-        // Search inside exported interfaces if a bare function or resource method name was given
-        let comp_ty = component.component_type();
-        let engine = component.engine();
-        for (export_name, export_item) in comp_ty.exports(engine) {
-            if let wasmtime::component::types::ComponentItem::ComponentInstance(_) = export_item.ty {
-                if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
-                    if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), func_spec) {
-                        if let Some(f) = instance.get_func(&mut *store, fn_idx) {
-                            return Ok(f);
-                        }
-                    }
-                }
-                if let Some((_, short_iface)) = export_name.split_once('/') {
-                    let short_iface_no_ver = short_iface.split('@').next().unwrap_or(short_iface);
-                    if func_spec.starts_with(&format!("{}#", short_iface_no_ver)) {
-                        let actual_fn = &func_spec[short_iface_no_ver.len() + 1..];
-                        if let Some(iface_idx) = instance.get_export_index(&mut *store, None, export_name) {
-                            if let Some(fn_idx) = instance.get_export_index(&mut *store, Some(&iface_idx), actual_fn) {
-                                if let Some(f) = instance.get_func(&mut *store, fn_idx) {
-                                    return Ok(f);
-                                }
-                            }
-                        }
-                    }
-                }
+        let mut found = Vec::new();
+        for export_name in &interface_exports {
+            if let Some(f) = lookup(store, export_name, func_spec) {
+                found.push((format!("{}#{}", export_name, func_spec), f));
             }
         }
-        bail!("Exported function '{}' not found in component", func_spec)
+        (found, format!("Exported function '{}' not found in component", func_spec))
+    };
+    match candidates.len() {
+        0 => bail!(not_found),
+        1 => Ok(candidates.into_iter().next().unwrap().1),
+        _ => bail!(
+            "Function name '{}' is ambiguous; use one of: {}",
+            func_spec,
+            candidates.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join(", ")
+        ),
     }
+}
+
+/// Whether `iface` names the exported interface `export_name` (`pkg:ns/iface@1.0`) without its
+/// version (`pkg:ns/iface`) or by its short name (`iface`).
+fn interface_name_matches(export_name: &str, iface: &str) -> bool {
+    let unversioned = export_name.split('@').next().unwrap_or(export_name);
+    let short = unversioned.split_once('/').map(|(_, s)| s).unwrap_or(unversioned);
+    unversioned == iface || short == iface
 }

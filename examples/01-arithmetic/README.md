@@ -52,12 +52,11 @@ fun ArithmeticWorld.div(a: Int, b: Int): Int =
     session.runtimeSession.invoke("div", typeOf<Int>(), a, b)
 
 object ArithmeticWorld {
-    fun openSession(wasmPath: Path, imports: Imports = Imports.EMPTY): Session =
-        Session(WasmtimeSession.open(wasmPath, imports))
+    fun openSession(wasmPath: Path, imports: ImportsFactory = ImportsFactory.EMPTY): Session { /* ... */ }
 
     inline fun <R> withSession(
         wasmPath: Path,
-        imports: Imports = Imports.EMPTY,
+        imports: ImportsFactory = ImportsFactory.EMPTY,
         block: context(Session) () -> R,
     ): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
     // ...

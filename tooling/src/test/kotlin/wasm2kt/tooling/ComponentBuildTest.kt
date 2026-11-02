@@ -103,23 +103,29 @@ class ComponentBuildTest {
             package harness
 
             import com.example.rt.*
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.MathApi
+            import com.example.rt.exports.example.roundtrip.math_api.scale
             import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
 
             fun run(): String {
-                val imports = object : RootWorld.Imports {
-                    override val envProvider = object : RootWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 6
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
-                    }
-                }
+                val imports = RootWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
                 val rt = RootWorld.withSession(RoundtripComponent, imports) {
-                    val scaled = with(RootWorld.MathApi) { scale(7) }
+                    val scaled = MathApi.scale(7)
                     val tag = RootWorld.describeCode("ERR", 404u)
                     val u64 = RootWorld.echoU64(ULong.MAX_VALUE) == ULong.MAX_VALUE
                     "scaled=${'$'}scaled,tag=${'$'}tag,u64Max=${'$'}u64"
                 }
                 val ct = com.example.ct.RootWorld.withSession(CounterComponent) {
-                    com.example.ct.RootWorld.Counter(10).use { c ->
+                    Counter(10).use { c ->
                         c.increment()
                         c.add(5)
                         "counter=${'$'}{c.getValue()}"

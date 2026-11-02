@@ -47,16 +47,22 @@ class WitToKotlinPoetConverterTest {
             targetPackage = "com.example.wasm",
         )
         val files = converter.generate()
-        assertEquals(2, files.size)
+        // WitSupport, the world, the imported `types` interface and the exported `counters` interface (ADR-0011).
+        assertEquals(
+            listOf("com.example.wasm.WitSupport", "com.example.wasm.CalculatorWorld", "com.example.wasm.example.calc.types.Types", "com.example.wasm.exports.example.calc.counters.Counters"),
+            files.map { "${it.packageName}.${it.name}" },
+        )
 
         val supportFile = files.first { it.name == "WitSupport" }.toString()
         val worldFile = files.first { it.name == "CalculatorWorld" }.toString()
+        val typesFile = files.first { it.name == "Types" }.toString()
+        val countersFile = files.first { it.name == "Counters" }.toString()
 
         // Verify idiomatic Kotlin: no redundant `public` visibility modifiers and zero kotlin-reflect usage
-        assertTrue(!supportFile.contains("public "), "Support file must omit redundant public modifiers")
-        assertTrue(!worldFile.contains("public "), "World file must omit redundant public modifiers")
-        assertTrue(!supportFile.contains("kotlin.reflect"), "Support file must not depend on kotlin.reflect")
-        assertTrue(!worldFile.contains("kotlin.reflect"), "World file must not depend on kotlin.reflect")
+        for (file in files) {
+            assertTrue(!file.toString().contains("public "), "${file.name} must omit redundant public modifiers")
+            assertTrue(!file.toString().contains("kotlin.reflect"), "${file.name} must not depend on kotlin.reflect")
+        }
 
         // Verify WitSupport contains sealed interfaces WitOption, WitResult, Tuple2, and WasmtimeSession
         assertTrue(supportFile.contains("sealed interface WitOption<out T>"))
@@ -64,29 +70,34 @@ class WitToKotlinPoetConverterTest {
         assertTrue(supportFile.contains("data class Tuple2<out T0, out T1>"))
         assertTrue(supportFile.contains("interface WasmtimeSession : AutoCloseable"))
         assertTrue(supportFile.contains("class JniWasmtimeSession"))
+        assertTrue(supportFile.contains("abstract class WitSession internal constructor("))
 
-        // Verify World singleton object and nested types
+        // The world object; the types of the `types` interface live in its own package
         assertTrue(worldFile.contains("object CalculatorWorld"))
-        assertTrue(worldFile.contains("data class Point("))
-        assertTrue(worldFile.contains("enum class Color"))
-        assertTrue(worldFile.contains("value class Permissions("))
-        assertTrue(worldFile.contains("sealed interface Status"))
-        assertTrue(worldFile.contains("typealias UserId = ULong"))
+        assertTrue(typesFile.startsWith("package com.example.wasm.example.calc.types\n"))
+        assertTrue(typesFile.contains("data class Point("))
+        assertTrue(typesFile.contains("enum class Color"))
+        assertTrue(typesFile.contains("value class Permissions("))
+        assertTrue(typesFile.contains("sealed interface Status"))
+        assertTrue(typesFile.contains("typealias UserId = ULong"))
 
-        // Verify Resource class & AutoCloseable
-        assertTrue(worldFile.contains("class Counter internal constructor("))
-        assertTrue(worldFile.contains("override fun close()"))
-        assertTrue(worldFile.contains("operator fun invoke(`init`: UInt): Counter"))
-        assertTrue(worldFile.contains("fun increment()"))
-        assertTrue(worldFile.contains("fun getValue(): UInt"))
-        assertTrue(worldFile.contains("fun merge(a: Counter, b: Counter): Counter"))
+        // Verify Resource class & AutoCloseable in the exported interface's package
+        assertTrue(countersFile.startsWith("package com.example.wasm.exports.example.calc.counters\n"))
+        assertTrue(countersFile.contains("class Counter internal constructor("))
+        assertTrue(countersFile.contains("override fun close()"))
+        assertTrue(countersFile.contains("operator fun invoke(`init`: UInt): Counter"))
+        assertTrue(countersFile.contains("fun increment()"))
+        assertTrue(countersFile.contains("fun getValue(): UInt"))
+        assertTrue(countersFile.contains("fun merge(a: Counter, b: Counter): Counter"))
+        assertTrue(countersFile.contains("\"example:calc/counters@0.1.0#[method]counter.increment\""))
 
         // Verify Context Parameter extension functions on CalculatorWorld
         assertTrue(worldFile.contains("context(session: CalculatorWorld.Session)"))
         assertTrue(worldFile.contains("fun CalculatorWorld.add(a: Int, b: Int): Int"))
         assertTrue(worldFile.contains("fun CalculatorWorld.compute("))
         assertTrue(worldFile.contains("opt: String?"))
-        assertTrue(worldFile.contains("WitResult<CalculatorWorld.Status, String>"))
+        assertTrue(worldFile.contains("WitResult<Status, String>"))
+        assertTrue(worldFile.contains("fun imports(world: () -> Imports): ImportsFactory"))
     }
 
     @Test
@@ -126,8 +137,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            supportPath.toString(),
-            worldPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated Kotlin files must compile cleanly")
     }
@@ -157,23 +167,30 @@ class WitToKotlinPoetConverterTest {
             package com.example.wasm
 
             import java.nio.file.Paths
+            import com.example.wasm.example.calc.types.Permissions
+            import com.example.wasm.example.calc.types.Point
+            import com.example.wasm.example.calc.types.Status
+            import com.example.wasm.exports.example.calc.counters.Counter
+            import kotlinx.serialization.json.JsonArray
+            import kotlinx.serialization.json.JsonPrimitive
+            import wasm2kt.runtime.Linker
 
             fun runEndToEndScenario(): String {
                 val logs = mutableListOf<String>()
                 var activeSession: InMemoryWasmtimeSession? = null
 
                 WasmtimeSession.factory = { _, imports ->
-                    val hostImports = imports as CalculatorWorld.Imports
+                    val hostImports = imports as Linker
                     InMemoryWasmtimeSession(imports).apply {
                         activeSession = this
                         registerFunction("add") { args ->
                             val a = args[0] as Int
                             val b = args[1] as Int
-                            hostImports.log("add(${'$'}a, ${'$'}b)")
+                            hostImports.dispatchHostImport("log", JsonArray(listOf(JsonPrimitive("add(${'$'}a, ${'$'}b)"))))
                             a + b
                         }
                         registerFunction("compute") { args ->
-                            val p = args[0] as CalculatorWorld.Point
+                            val p = args[0] as Point
                             val opt = args[1] as String?
                             val bytes = args[2] as ByteArray
                             val tup = args[3] as Tuple2<UInt, String>
@@ -181,20 +198,20 @@ class WitToKotlinPoetConverterTest {
                             if (p.x < 0f) {
                                 WitResult.Err("negative x")
                             } else {
-                                WitResult.Ok(CalculatorWorld.Status.Code(tup.f0 + bytes.size.toUInt()))
+                                WitResult.Ok(Status.Code(tup.f0 + bytes.size.toUInt()))
                             }
                         }
-                        registerResourceConstructor("counter") { args ->
+                        registerResourceConstructor("example:calc/counters@0.1.0#[constructor]counter") { args ->
                             (args[0] as UInt).toInt()
                         }
-                        registerMethod("[method]counter.increment") { handle, _ ->
+                        registerMethod("example:calc/counters@0.1.0#[method]counter.increment") { handle, _ ->
                             val current = getResourceState(handle) as Int
                             setResourceState(handle, current + 1)
                         }
-                        registerMethod("[method]counter.get-value") { handle, _ ->
+                        registerMethod("example:calc/counters@0.1.0#[method]counter.get-value") { handle, _ ->
                             (getResourceState(handle) as Int).toUInt()
                         }
-                        registerFunction("[static]counter.merge") { args ->
+                        registerFunction("example:calc/counters@0.1.0#[static]counter.merge") { args ->
                             // args[0] is borrow<counter> handle, args[1] is own<counter> handle
                             val handleA = args[0] as Int
                             val handleB = args[1] as Int
@@ -202,43 +219,47 @@ class WitToKotlinPoetConverterTest {
                             val valB = getResourceState(handleB) as Int
                             // own<counter> transfers ownership to guest, which drops handleB after merging
                             dropResource(handleB)
-                            newResource("counter", (valA + valB).toUInt())
+                            newResource("example:calc/counters@0.1.0#[constructor]counter", (valA + valB).toUInt())
                         }
                     }
                 }
 
-                val imports = object : CalculatorWorld.Imports {
-                    override fun log(msg: String) {
-                        logs.add(msg)
-                    }
-                }
+                val imports = CalculatorWorld.imports(
+                    world = {
+                        object : CalculatorWorld.Imports {
+                            override fun log(msg: String) {
+                                logs.add(msg)
+                            }
+                        }
+                    },
+                )
 
                 val resultSummary = CalculatorWorld.withSession(Paths.get("dummy.wasm"), imports) {
                     val sum = CalculatorWorld.add(10, 32)
-                    val perms = CalculatorWorld.Permissions.READ or CalculatorWorld.Permissions.EXECUTE
+                    val perms = Permissions.READ or Permissions.EXECUTE
                     check(perms.read && !perms.write && perms.execute)
 
                     val computeRes = CalculatorWorld.compute(
-                        p = CalculatorWorld.Point(1.5f, 2.5f),
+                        p = Point(1.5f, 2.5f),
                         opt = "hello",
                         listData = byteArrayOf(1, 2, 3),
                         tup = Tuple2(100u, "tag"),
                     )
                     val codeVal = when (computeRes) {
                         is WitResult.Ok -> when (val s = computeRes.value) {
-                            is CalculatorWorld.Status.Code -> s.value
+                            is Status.Code -> s.value
                             else -> 0u
                         }
                         is WitResult.Err -> 0u
                     }
 
                     // Test Resource creation, method calls, borrow vs own, and AutoCloseable (.use)
-                    val mergedValue = CalculatorWorld.Counter(10u).use { c1 ->
+                    val mergedValue = Counter(10u).use { c1 ->
                         c1.increment()
                         c1.increment()
-                        val c2 = CalculatorWorld.Counter(5u)
+                        val c2 = Counter(5u)
                         // merge borrows c1 and takes ownership of c2
-                        CalculatorWorld.Counter.merge(c1, c2).use { merged ->
+                        Counter.merge(c1, c2).use { merged ->
                             // c2 is now consumed (isClosed == true), so closing c2 again is a no-op
                             c2.close()
                             merged.getValue()
@@ -270,9 +291,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("CalculatorWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated files + Harness must compile cleanly")
 
@@ -326,11 +345,15 @@ class WitToKotlinPoetConverterTest {
 
             fun runNativeWasmComponent(wasmPath: Path): String {
                 val recordedCalls = mutableListOf<String>()
-                val imports = object : LiveCalcWorld.Imports {
-                    override fun recordCalc(a: Int, b: Int) {
-                        recordedCalls.add("${'$'}a,${'$'}b")
-                    }
-                }
+                val imports = LiveCalcWorld.imports(
+                    world = {
+                        object : LiveCalcWorld.Imports {
+                            override fun recordCalc(a: Int, b: Int) {
+                                recordedCalls.add("${'$'}a,${'$'}b")
+                            }
+                        }
+                    },
+                )
 
                 // Uses default WasmtimeSession.factory -> FfmWasmtimeSession.open(wasmPath, imports)
                 return LiveCalcWorld.withSession(wasmPath, imports) {
@@ -357,9 +380,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("LiveCalcWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated LiveCalc bindings must compile cleanly")
 
@@ -445,10 +466,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("ArithmeticWorld.kt").toString(),
-            pkgDir.resolve("RootWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated ArithmeticWorld & RootWorld bindings must compile cleanly")
 
@@ -505,22 +523,23 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.counter
 
+            import com.example.counter.exports.example.counter.counter_api.Counter
             import java.nio.file.Path
 
             fun runCounterComponent(wasmPath: Path): String {
                 return CounterWorld.withSession(wasmPath) {
-                    CounterWorld.Counter(10).use { c1 ->
+                    Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
                         c1.add(5)
                         val v1 = c1.getValue() // 10 + 1 + 1 + 5 = 17
 
-                        val c2 = CounterWorld.Counter(25)
+                        val c2 = Counter(25)
                         c2.increment() // 26
 
                         // merge(a: borrow<counter>, b: own<counter>) -> own<counter>
                         // c1 is borrowed (remains usable), c2's ownership is consumed
-                        CounterWorld.Counter.merge(c1, c2).use { merged ->
+                        Counter.merge(c1, c2).use { merged ->
                             val v1After = c1.getValue() // still 17
                             val vMerged = merged.getValue() // 17 + 26 = 43
                             "v1=${'$'}v1,v1After=${'$'}v1After,c2Closed=${'$'}{c2.isClosed},merged=${'$'}vMerged"
@@ -546,10 +565,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("CounterWorld.kt").toString(),
-            pkgDir.resolve("RootWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "Generated CounterWorld & RootWorld bindings must compile cleanly")
 
@@ -616,8 +632,7 @@ class WitToKotlinPoetConverterTest {
                 System.getProperty("java.class.path"),
                 "-d",
                 classesDir.toString(),
-                pkgDir.resolve("WitSupport.kt").toString(),
-                pkgDir.resolve(ex.generatedWorldFile).toString(),
+                *generatedSources(exOutDir).toTypedArray(),
                 exampleMainPath.toString(),
             )
             assertEquals(
@@ -663,19 +678,24 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.roundtrip
 
+            import com.example.roundtrip.example.roundtrip.env_provider.EnvProvider
+            import com.example.roundtrip.exports.example.roundtrip.math_api.MathApi
+            import com.example.roundtrip.exports.example.roundtrip.math_api.scale
             import java.nio.file.Path
 
             fun runRoundtripComponent(wasmPath: Path): String {
-                val imports = object : RoundtripWorld.Imports {
-                    override val envProvider = object : RoundtripWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 6
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
-                    }
-                }
+                val imports = RoundtripWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
 
                 return RoundtripWorld.withSession(wasmPath, imports) {
                     // 1. Exported named interface calling imported named interface returning s32
-                    val scaled = with(RoundtripWorld.MathApi) { scale(7) } // 7 * 6 = 42
+                    val scaled = with(MathApi) { scale(7) } // 7 * 6 = 42
 
                     // 2. Exported function calling imported named interface with u32 and returning String
                     val tag = RoundtripWorld.describeCode("ERR", 404u)
@@ -747,9 +767,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("RoundtripWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "RoundtripWorld bindings must compile cleanly")
 
@@ -793,11 +811,12 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.counter.err
 
+            import com.example.counter.err.exports.example.counter.counter_api.Counter
             import java.nio.file.Path
 
             fun verifyResourceSafety(wasmPath: Path): String {
                 return CounterWorld.withSession(wasmPath) {
-                    val c1 = CounterWorld.Counter(10)
+                    val c1 = Counter(10)
                     c1.close()
                     val afterCloseError = try {
                         c1.increment()
@@ -806,9 +825,9 @@ class WitToKotlinPoetConverterTest {
                         "closed-error"
                     }
 
-                    val a = CounterWorld.Counter(5)
-                    val b = CounterWorld.Counter(7)
-                    val merged = CounterWorld.Counter.merge(a, b)
+                    val a = Counter(5)
+                    val b = Counter(7)
+                    val merged = Counter.merge(a, b)
                     val afterMoveError = try {
                         b.getValue()
                         "no-error"
@@ -838,9 +857,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("CounterWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
 
@@ -930,9 +947,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            worldFile.toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
 
@@ -990,8 +1005,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            worldFile.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(
             org.jetbrains.kotlin.cli.common.ExitCode.OK,
@@ -1099,33 +1113,38 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.cwasm
 
+            import com.example.cwasm.example.roundtrip.env_provider.EnvProvider
+            import com.example.cwasm.exports.example.roundtrip.math_api.MathApi
+            import com.example.cwasm.exports.example.roundtrip.math_api.scale
             import java.nio.file.Path
 
             fun runAllLoadingModes(rawWasmBytes: ByteArray, cwasmBytes: ByteArray, cwasmPath: Path): String {
-                val imports = object : RoundtripWorld.Imports {
-                    override val envProvider = object : RoundtripWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 6
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
-                    }
-                }
+                val imports = RoundtripWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
 
                 // Mode A: Raw .wasm ByteArray
                 val resRawBytes = RoundtripWorld.withSession(rawWasmBytes, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(7) }
+                    val scaled = with(MathApi) { scale(7) }
                     val tag = RoundtripWorld.describeCode("RAW", 200u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
                 // Mode B: Precompiled AOT .cwasm ByteArray
                 val resCwasmBytes = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(8) }
+                    val scaled = with(MathApi) { scale(8) }
                     val tag = RoundtripWorld.describeCode("AOT_BYTES", 201u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
                 // Mode C: Precompiled AOT .cwasm Path
                 val resCwasmPath = RoundtripWorld.withPrecompiledSession(cwasmPath, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(9) }
+                    val scaled = with(MathApi) { scale(9) }
                     val tag = RoundtripWorld.describeCode("AOT_PATH", 202u)
                     "${'$'}scaled:${'$'}tag"
                 }
@@ -1162,9 +1181,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("RoundtripWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "CwasmHarness must compile cleanly")
 
@@ -1229,22 +1246,28 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.jni
 
+            import com.example.jni.example.roundtrip.env_provider.EnvProvider
+            import com.example.jni.exports.example.roundtrip.math_api.MathApi
+            import com.example.jni.exports.example.roundtrip.math_api.scale
+            import com.example.jni.exports.example.counter.counter_api.Counter
             import java.nio.file.Path
 
             fun runJniScenario(roundtripWasmPath: Path, cwasmBytes: ByteArray, counterWasmPath: Path): String {
                 // Switch WasmtimeSession to JNI backend (Android ART compatible, zero java.lang.foreign usage)
                 WasmtimeSession.useJniBackend()
 
-                val imports = object : RoundtripWorld.Imports {
-                    override val envProvider = object : RoundtripWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 7
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix@${'$'}code"
-                    }
-                }
+                val imports = RoundtripWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 7
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix@${'$'}code"
+                        }
+                    },
+                )
 
                 // 1. Roundtrip over JNI from Path + Host Callbacks
                 val pathSummary = RoundtripWorld.withSession(roundtripWasmPath, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(6) } // 6 * 7 = 42
+                    val scaled = with(MathApi) { scale(6) } // 6 * 7 = 42
                     val tag = RoundtripWorld.describeCode("JNI", 777u)
                     val initial = RoundtripWorld.ItemSummary(
                         count = 20u,
@@ -1257,7 +1280,7 @@ class WitToKotlinPoetConverterTest {
 
                 // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
                 val aotBytesSummary = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(5) } // 5 * 7 = 35
+                    val scaled = with(MathApi) { scale(5) } // 5 * 7 = 35
                     val optVal = RoundtripWorld.nestedOption(WitOption.Some(10))
                     val unwrapped = (optVal as WitOption.Some).value
                     "${'$'}scaled:${'$'}unwrapped"
@@ -1265,10 +1288,10 @@ class WitToKotlinPoetConverterTest {
 
                 // 3. Counter resource lifecycle over JNI
                 val counterSummary = CounterWorld.withSession(counterWasmPath) {
-                    CounterWorld.Counter(10).use { c1 ->
+                    Counter(10).use { c1 ->
                         c1.add(5)
-                        val c2 = CounterWorld.Counter(27)
-                        CounterWorld.Counter.merge(c1, c2).use { merged ->
+                        val c2 = Counter(27)
+                        Counter.merge(c1, c2).use { merged ->
                             "${'$'}{c1.getValue()}:${'$'}{c2.isClosed}:${'$'}{merged.getValue()}"
                         }
                     }
@@ -1293,10 +1316,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve("RoundtripWorld.kt").toString(),
-            pkgDir.resolve("CounterWorld.kt").toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode, "JniHarness must compile cleanly")
 
@@ -1379,8 +1399,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            worldFile.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(
             org.jetbrains.kotlin.cli.common.ExitCode.OK,
@@ -1390,7 +1409,7 @@ class WitToKotlinPoetConverterTest {
     }
 
     @Test
-    fun `colliding type names across multiple interfaces in the same world are disambiguated and compile cleanly`(@TempDir tempDir: Path) {
+    fun `same type names in different interfaces live in their own packages and compile cleanly`(@TempDir tempDir: Path) {
         val witText = """
             package example:collision@0.1.0;
 
@@ -1429,12 +1448,10 @@ class WitToKotlinPoetConverterTest {
             ),
         )
 
-        val pkgDir = tempDir.resolve("com/example/collision")
-        val worldFile = pkgDir.resolve("CollisionWorld.kt")
-        val generatedCode = Files.readString(worldFile)
-
-        assertTrue(generatedCode.contains("data class AlphaConfig("), "Alpha's config record should be disambiguated as AlphaConfig")
-        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config record should be disambiguated as BetaConfig")
+        // Each interface has its own package, so both records keep the name Config (ADR-0011).
+        val exportsDir = tempDir.resolve("com/example/collision/exports/example/collision")
+        assertTrue(Files.readString(exportsDir.resolve("alpha/Alpha.kt")).contains("data class Config("), "alpha's config keeps its name")
+        assertTrue(Files.readString(exportsDir.resolve("beta/Beta.kt")).contains("data class Config("), "beta's config keeps its name")
 
         val classesOutDir = tempDir.resolve("classes")
         Files.createDirectories(classesOutDir)
@@ -1449,13 +1466,12 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            worldFile.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
         assertEquals(
             org.jetbrains.kotlin.cli.common.ExitCode.OK,
             compilerExitCode,
-            "Disambiguated interface types must compile cleanly without Redeclaration errors",
+            "Same-named interface types must compile cleanly without Redeclaration errors",
         )
     }
 
@@ -1480,7 +1496,7 @@ class WitToKotlinPoetConverterTest {
                 """["WARN", 500]""",
             )
             assertTrue(
-                respJson.contains("custom-host-failure-for-env-provider#format-tag"),
+                respJson.contains("custom-host-failure-for-example:roundtrip/env-provider@0.1.0#format-tag"),
                 "JNI host callback failure must preserve Kotlin exception details, got: $respJson",
             )
         } finally {
@@ -1499,7 +1515,7 @@ class WitToKotlinPoetConverterTest {
     }
 
 
-    private fun compileGenerated(classesOutDir: Path, vararg sources: Path): org.jetbrains.kotlin.cli.common.ExitCode {
+    private fun compileGenerated(classesOutDir: Path, outputDir: Path): org.jetbrains.kotlin.cli.common.ExitCode {
         Files.createDirectories(classesOutDir)
         return org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
             System.err,
@@ -1511,7 +1527,7 @@ class WitToKotlinPoetConverterTest {
             System.getProperty("java.class.path"),
             "-d",
             classesOutDir.toString(),
-            *sources.map { it.toString() }.toTypedArray(),
+            *generatedSources(outputDir).toTypedArray(),
         )
     }
 
@@ -1522,12 +1538,12 @@ class WitToKotlinPoetConverterTest {
                 args: kotlinx.serialization.json.JsonArray,
             ): kotlinx.serialization.json.JsonElement {
                 return when (importSpec) {
-                    "env-provider#format-tag" -> {
+                    "example:roundtrip/env-provider@0.1.0#format-tag" -> {
                         val prefix = wasm2kt.runtime.FfmJsonCodec.decodeString(args[0])
                         val code = wasm2kt.runtime.FfmJsonCodec.decodeLong(args[1])
                         kotlinx.serialization.json.JsonPrimitive(onFormatTag(prefix, code))
                     }
-                    "env-provider#get-multiplier" -> kotlinx.serialization.json.JsonPrimitive(1)
+                    "example:roundtrip/env-provider@0.1.0#get-multiplier" -> kotlinx.serialization.json.JsonPrimitive(1)
                     else -> error("Unexpected import: $importSpec")
                 }
             }
@@ -1613,36 +1629,41 @@ class WitToKotlinPoetConverterTest {
             fun runHostResScenario(): String {
                 // A world-level resource is imported: the host implements it (ADR-0008).
                 val made = mutableListOf<HostCounter>()
-                val imports = object : HostResWorld.Imports {
-                    override fun newCounter(init: Int): HostResWorld.Counter = HostCounter(init).also { made += it }
-                    override fun inspectPair(p: HostResWorld.CounterPair): String = "${'$'}{p.label}:${'$'}{p.primary.getValue()}"
-                    override fun inspectOutcome(o: HostResWorld.CounterOutcome): Int = when (o) {
-                        is HostResWorld.CounterOutcome.Created -> o.value.getValue()
-                        HostResWorld.CounterOutcome.Empty -> -1
-                    }
-                    override fun inspectCounter(c: HostResWorld.Counter): Int = c.getValue()
-                }
+                val imports = HostResWorld.imports(
+                    world = {
+                        object : HostResWorld.Imports {
+                            override fun newCounter(init: Int): HostResWorld.Counter = HostCounter(init).also { made += it }
+                            override fun inspectPair(p: HostResWorld.CounterPair): String = "${'$'}{p.label}:${'$'}{p.primary.getValue()}"
+                            override fun inspectOutcome(o: HostResWorld.CounterOutcome): Int = when (o) {
+                                is HostResWorld.CounterOutcome.Created -> o.value.getValue()
+                                HostResWorld.CounterOutcome.Empty -> -1
+                            }
+                            override fun inspectCounter(c: HostResWorld.Counter): Int = c.getValue()
+                        }
+                    },
+                )
+                val linker = imports.newLinker()
                 val table = wasm2kt.runtime.HostResourceTable()
                 return table.bind {
-                    fun new(v: Int) = imports.dispatchHostImport("[constructor]counter", JsonArray(listOf(JsonPrimitive(v)))).jsonPrimitive.content.toInt()
+                    fun new(v: Int) = linker.dispatchHostImport("[constructor]counter", JsonArray(listOf(JsonPrimitive(v)))).jsonPrimitive.content.toInt()
                     val seven = new(7)
                     val nine = new(9)
                     val three = new(3)
-                    val pair = imports.dispatchHostImport(
+                    val pair = linker.dispatchHostImport(
                         "inspect-pair",
                         JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(seven), "label" to JsonPrimitive("lbl"))))),
                     ).jsonPrimitive.content
-                    val created = imports.dispatchHostImport(
+                    val created = linker.dispatchHostImport(
                         "inspect-outcome",
                         JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(nine))))),
                     ).jsonPrimitive.content
-                    val empty = imports.dispatchHostImport(
+                    val empty = linker.dispatchHostImport(
                         "inspect-outcome",
                         JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
                     ).jsonPrimitive.content
-                    val borrowed = imports.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(three)))).jsonPrimitive.content
+                    val borrowed = linker.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(three)))).jsonPrimitive.content
                     val left = table.size
-                    imports.dispatchHostImport("[resource-drop]counter", JsonArray(listOf(JsonPrimitive(three))))
+                    linker.dispatchHostImport("[resource-drop]counter", JsonArray(listOf(JsonPrimitive(three))))
                     "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed|${'$'}left|${'$'}{table.size}|${'$'}{made.map { it.closed }}"
                 }
             }
@@ -1652,7 +1673,7 @@ class WitToKotlinPoetConverterTest {
         val classesOutDir = tempDir.resolve("classes")
         assertEquals(
             org.jetbrains.kotlin.cli.common.ExitCode.OK,
-            compileGenerated(classesOutDir, pkgDir.resolve("WitSupport.kt"), worldFile, harnessPath),
+            compileGenerated(classesOutDir, tempDir),
             "Host imports taking resource-containing records/variants/handles must compile cleanly",
         )
         val classLoader = java.net.URLClassLoader(arrayOf(classesOutDir.toUri().toURL()), javaClass.classLoader)
@@ -1667,7 +1688,7 @@ class WitToKotlinPoetConverterTest {
     }
 
     @Test
-    fun `secondary type name collisions after interface prefixing are resolved and compile cleanly`(@TempDir tempDir: Path) {
+    fun `type names that would collide after interface prefixing keep their own names`(@TempDir tempDir: Path) {
         val witText = """
             package example:collision2@0.1.0;
 
@@ -1703,18 +1724,16 @@ class WitToKotlinPoetConverterTest {
         Wasm2KtCommand().parse(
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.collision2", witFile.toString()),
         )
-        val pkgDir = tempDir.resolve("com/example/collision2")
-        val worldFile = pkgDir.resolve("Collision2World.kt")
-        val generatedCode = Files.readString(worldFile)
-
-        assertEquals(1, Regex("""data class AlphaConfig\(""").findAll(generatedCode).count(), "Only gamma's alpha-config may claim AlphaConfig")
-        assertTrue(generatedCode.contains("data class BetaConfig("), "Beta's config should be BetaConfig")
-        assertTrue(Regex("""data class AlphaConfig_\d+\(""").containsMatchIn(generatedCode), "Alpha's config must fall back to an index-suffixed name")
+        // Names no longer depend on other interfaces: alpha's config stays Config, gamma's alpha-config is AlphaConfig.
+        val exportsDir = tempDir.resolve("com/example/collision2/exports/example/collision2")
+        assertTrue(Files.readString(exportsDir.resolve("alpha/Alpha.kt")).contains("data class Config("))
+        assertTrue(Files.readString(exportsDir.resolve("beta/Beta.kt")).contains("data class Config("))
+        assertTrue(Files.readString(exportsDir.resolve("gamma/Gamma.kt")).contains("data class AlphaConfig("))
 
         assertEquals(
             org.jetbrains.kotlin.cli.common.ExitCode.OK,
-            compileGenerated(tempDir.resolve("classes"), pkgDir.resolve("WitSupport.kt"), worldFile),
-            "Secondary collisions must not cause Redeclaration errors",
+            compileGenerated(tempDir.resolve("classes"), tempDir),
+            "Same-named types must not cause Redeclaration errors",
         )
     }
 

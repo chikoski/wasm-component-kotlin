@@ -19,10 +19,14 @@ class GeneratorUnitTest {
         return WitResolve.parse(Files.readString(dir.resolve("$name.json")))
     }
 
+    /** Generated files keyed by their path relative to `com.example.gen` (`TypesWorld`, `example/host_res/store/Store`). */
     private fun generate(name: String, emitWasmtimeSessions: Boolean = true): Map<String, String> =
         WitToKotlinPoetConverter(resolve(name), "com.example.gen", emitWasmtimeSessions = emitWasmtimeSessions)
             .generate()
-            .associate { it.name to it.content }
+            .associate { file ->
+                val relativePackage = file.packageName.removePrefix("com.example.gen").removePrefix(".").replace('.', '/')
+                (if (relativePackage.isEmpty()) "" else "$relativePackage/") + file.name to file.content
+            }
 
     @Test
     fun `world names follow ADR-0006`() {
@@ -40,15 +44,34 @@ class GeneratorUnitTest {
     }
 
     @Test
-    fun `host import dispatch keys match the backends`() {
-        val roundtrip = generate("roundtrip").getValue("RoundtripWorld")
-        assertTrue("\"env-provider#format-tag\" ->" in roundtrip)
-        assertTrue("\"env-provider#get-multiplier\" ->" in roundtrip)
+    fun `host import keys are fully qualified and match the backends`() {
+        val envProvider = generate("roundtrip").getValue("example/roundtrip/env_provider/EnvProvider")
+        assertTrue("define(\"example:roundtrip/env-provider@0.1.0#format-tag\")" in envProvider, envProvider)
+        assertTrue("define(\"example:roundtrip/env-provider@0.1.0#get-multiplier\")" in envProvider, envProvider)
 
-        val hostRes = generate("host-res").getValue("HostResWorld")
-        for (key in listOf("store#[constructor]blob", "store#[method]blob.read", "store#[static]blob.merge", "store#[resource-drop]blob", "[resource-drop]ticket")) {
-            assertTrue("\"$key\" ->" in hostRes, "missing dispatch branch for $key")
+        val files = generate("host-res")
+        val store = files.getValue("example/host_res/store/Store")
+        for (fn in listOf("[constructor]blob", "[method]blob.read", "[static]blob.merge", "[resource-drop]blob")) {
+            assertTrue("define(\"example:host-res/store@0.1.0#$fn\")" in store, "missing host import $fn")
         }
+        assertTrue("define(\"[resource-drop]ticket\")" in files.getValue("HostResWorld"), "world-level keys stay bare")
+    }
+
+    @Test
+    fun `exported interface calls use fully qualified keys`() {
+        val mathApi = generate("roundtrip").getValue("exports/example/roundtrip/math_api/MathApi")
+        assertTrue("\"example:roundtrip/math-api@0.1.0#scale\"" in mathApi, mathApi)
+        val guestApi = generate("host-res").getValue("exports/example/host_res/guest_api/GuestApi")
+        assertTrue("\"example:host-res/guest-api@0.1.0#[method]counter.poke\"" in guestApi, guestApi)
+        assertTrue("\"example:host-res/guest-api@0.1.0#[constructor]counter\"" in guestApi, guestApi)
+    }
+
+    @Test
+    fun `interfaces map to packages and worlds take typed imports`() {
+        val files = generate("host-res")
+        assertTrue(files.getValue("example/host_res/store/Store").startsWith("package com.example.gen.example.host_res.store\n"))
+        val world = files.getValue("HostResWorld")
+        assertTrue(Regex("""fun imports\(exampleHostResStore: \(\) -> Store, world: \(\) -> Imports\): ImportsFactory""").containsMatchIn(world), world)
     }
 
     @Test

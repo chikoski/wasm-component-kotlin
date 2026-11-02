@@ -557,19 +557,35 @@ internal class ChicoryComponentInstance(
 
     // ---------------------------------------------------------------- export lookup
 
+    /**
+     * Resolves a function name like the Wasmtime bridge (ADR-0011). The fully qualified form
+     * (`pkg:ns/iface@1.0#fn`) is canonical; an interface written without its version or as its short
+     * name (`iface#fn`), and a bare function name searched across exported interfaces, are accepted
+     * only when they match exactly one export.
+     */
     private fun resolveExport(spec: String): PlanExport {
         val hash = spec.indexOf('#')
         if (hash >= 0) {
             val iface = spec.substring(0, hash)
             val fn = spec.substring(hash + 1)
-            plan.exports.firstOrNull { e ->
-                e.name == fn && e.instance != null && (e.instance == iface || shortInterfaceName(e.instance) == iface)
-            }?.let { return it }
-            throw IllegalArgumentException("Exported function '$fn' not found in interface '$iface'")
+            val members = plan.exports.filter { it.name == fn && it.instance != null }
+            members.firstOrNull { it.instance == iface }?.let { return it }
+            val candidates = members.filter {
+                unversionedInterfaceName(it.instance!!) == iface || shortInterfaceName(it.instance) == iface
+            }
+            return unique(spec, candidates) { "Exported function '$fn' not found in interface '$iface'" }
         }
-        return plan.exports.firstOrNull { it.instance == null && it.name == spec }
-            ?: plan.exports.firstOrNull { it.name == spec }
-            ?: throw IllegalArgumentException("Exported function '$spec' not found")
+        plan.exports.firstOrNull { it.instance == null && it.name == spec }?.let { return it }
+        return unique(spec, plan.exports.filter { it.name == spec }) { "Exported function '$spec' not found" }
+    }
+
+    private fun unique(spec: String, candidates: List<PlanExport>, notFound: () -> String): PlanExport = when (candidates.size) {
+        0 -> throw IllegalArgumentException(notFound())
+        1 -> candidates.single()
+        else -> throw IllegalArgumentException(
+            "Function name '$spec' is ambiguous; use one of: " +
+                candidates.joinToString { "${it.instance}#${it.name}" },
+        )
     }
 }
 

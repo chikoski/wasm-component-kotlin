@@ -138,15 +138,16 @@ class PlanModuleImport(val module: String, val name: String, val kind: String)
 class PlanImport(val name: String, val path: List<String>) {
     /**
      * Key passed to [wasm2kt.runtime.WitHostImportDispatcher.dispatchHostImport], matching the
-     * Wasmtime bridge: `name` for root functions, `<interface>#<function>` for interface members
-     * where `<interface>` drops the package and version (`pkg:ns/iface@1.0` -> `iface`).
+     * Wasmtime bridge (ADR-0011): `name` for root functions, `<interface>#<function>` for interface
+     * members, where `<interface>` is the import name as written in the component: fully qualified
+     * (`pkg:ns/iface@1.0`) for package interfaces, the bare name for inline interfaces.
      */
     val dispatchKey: String
-        get() = if (path.isEmpty()) name else "${shortInterfaceName(name)}#${path.joinToString("#")}"
+        get() = if (path.isEmpty()) name else "$name#${path.joinToString("#")}"
 
     /** Key for dropping a host resource this import names, matching the Wasmtime bridge. */
     val resourceDropKey: String
-        get() = if (path.isEmpty()) "[resource-drop]$name" else "${shortInterfaceName(name)}#[resource-drop]${path.last()}"
+        get() = if (path.isEmpty()) "[resource-drop]$name" else "$name#[resource-drop]${path.last()}"
 }
 
 class PlanExport(
@@ -211,8 +212,12 @@ enum class StringEncoding {
     }
 }
 
+/** `pkg:ns/iface@1.0` -> `iface`; a bare name is returned as is. */
 internal fun shortInterfaceName(qualified: String): String =
     qualified.substringAfter('/', qualified).substringBefore('@')
+
+/** `pkg:ns/iface@1.0` -> `pkg:ns/iface`. */
+internal fun unversionedInterfaceName(qualified: String): String = qualified.substringBefore('@')
 
 private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 private fun JsonObject.int(key: String): Int = getValue(key).jsonPrimitive.int
