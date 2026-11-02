@@ -9,10 +9,10 @@ Android（ART）でもデスクトップ JVM と同じコードが動きます�
 
 ```kotlin
 // Wasmtime（ネイティブ）
-CalculatorWorld.withSession(Paths.get("calculator.wasm")) { CalculatorWorld.add(1, 2) }
+withSession(Paths.get("calculator.wasm")) { add(1, 2) }
 
 // Chicory（ビルド時コンパイル済み、Android 可）
-CalculatorWorld.withSession(CalculatorComponent) { CalculatorWorld.add(1, 2) }
+withSession(CalculatorComponent) { add(1, 2) }
 ```
 
 ---

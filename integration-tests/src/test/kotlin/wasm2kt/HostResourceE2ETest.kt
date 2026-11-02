@@ -40,7 +40,7 @@ class HostResourceE2ETest {
             override fun close() { log += "close:${'$'}name" }
         }
 
-        class HostTicket(private val value: UInt, private val log: MutableList<String>) : HostResWorld.Ticket {
+        class HostTicket(private val value: UInt, private val log: MutableList<String>) : Ticket {
             override fun id(): UInt = value
             override fun close() { log += "close-ticket:${'$'}value" }
         }
@@ -63,43 +63,43 @@ class HostResourceE2ETest {
                     override fun find(name: String): Blob? =
                         if (name == "none") null else HostBlob("found-${'$'}name", byteArrayOf(1, 2), log)
                 }
-            private val worldImports = object : HostResWorld.Imports {
-                override fun newTicket(id: UInt): HostResWorld.Ticket = HostTicket(id, log).also { log += "new-ticket:${'$'}id" }
+            private val worldImports = object : Imports {
+                override fun newTicket(id: UInt): Ticket = HostTicket(id, log).also { log += "new-ticket:${'$'}id" }
             }
-            val imports = HostResWorld.imports(exampleHostResStore = { store }, world = { worldImports })
+            val imports = imports(exampleHostResStore = { store }, world = { worldImports })
 
-            context(session: HostResWorld.Session)
+            context(session: Session)
             fun exercise() {
                 fun check(label: String, ok: Boolean) { log += if (ok) "ok:${'$'}label" else "FAILED:${'$'}label" }
 
                 // The guest creates a host blob, uses it and drops it.
-                check("makeAndMeasure", HostResWorld.makeAndMeasure(byteArrayOf(1, 2), byteArrayOf(3)) == 3u)
+                check("makeAndMeasure", makeAndMeasure(byteArrayOf(1, 2), byteArrayOf(3)) == 3u)
 
                 // own<blob> returned to the host, then borrowed and moved back.
-                val kept = HostResWorld.keep(byteArrayOf(9, 9, 9)) as HostBlob
+                val kept = keep(byteArrayOf(9, 9, 9)) as HostBlob
                 check("keep", kept.name == "g1" && kept.size() == 3u)
-                check("measure(kept)", HostResWorld.measure(kept) == 3u)
-                check("consume(kept)", HostResWorld.consume(kept) == 3u)
+                check("measure(kept)", measure(kept) == 3u)
+                check("consume(kept)", consume(kept) == 3u)
 
                 // Objects made by the host itself.
                 val local = HostBlob("local", byteArrayOf(1), log)
-                check("measure(local)", HostResWorld.measure(local) == 1u)
-                check("measure(local) again", HostResWorld.measure(local) == 1u)
-                check("consume(local)", HostResWorld.consume(local) == 1u)
+                check("measure(local)", measure(local) == 1u)
+                check("measure(local) again", measure(local) == 1u)
+                check("consume(local)", consume(local) == 1u)
 
                 // Static functions with borrow + own parameters.
-                check("mergeNew", HostResWorld.mergeNew(byteArrayOf(1), byteArrayOf(2, 3)).contentEquals(byteArrayOf(1, 2, 3)))
+                check("mergeNew", mergeNew(byteArrayOf(1), byteArrayOf(2, 3)).contentEquals(byteArrayOf(1, 2, 3)))
 
                 // Host resources nested in option / result.
-                val found = HostResWorld.lookup("x") as HostBlob?
+                val found = lookup("x") as HostBlob?
                 check("lookup", found?.name == "found-x")
-                check("lookup(none)", HostResWorld.lookup("none") == null)
+                check("lookup(none)", lookup("none") == null)
                 val e = HostBlob("e", byteArrayOf(5), log)
-                check("echoBlob(ok)", HostResWorld.echoBlob(e).getOrNull() === e)
-                check("echoBlob(err)", HostResWorld.echoBlob(HostBlob("z", ByteArray(0), log)).errorOrNull() == "empty")
+                check("echoBlob(ok)", echoBlob(e).getOrNull() === e)
+                check("echoBlob(err)", echoBlob(HostBlob("z", ByteArray(0), log)).errorOrNull() == "empty")
 
                 // A world-level host resource.
-                check("ticketId", HostResWorld.ticketId(7u) == 7u)
+                check("ticketId", ticketId(7u) == 7u)
 
                 // A component-defined resource that calls the host while borrowed: the host cannot
                 // drop it from inside that call.
@@ -112,7 +112,7 @@ class HostResourceE2ETest {
 
         fun runWasmtime(wasm: Path): String {
             val h = Harness()
-            HostResWorld.withSession(wasm, h.imports) { h.exercise() }
+            withSession(wasm, h.imports) { h.exercise() }
             return h.log.joinToString(",")
         }
 
@@ -127,7 +127,7 @@ class HostResourceE2ETest {
 
         fun runChicory(component: ComponentBackendFactory): String {
             val h = Harness()
-            HostResWorld.withSession(component, h.imports) { h.exercise() }
+            withSession(component, h.imports) { h.exercise() }
             return h.log.joinToString(",")
         }
     """.trimIndent()

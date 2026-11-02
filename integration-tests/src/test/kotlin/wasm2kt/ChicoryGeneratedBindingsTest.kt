@@ -55,8 +55,8 @@ class ChicoryGeneratedBindingsTest {
             tempDir, "arithmetic", "com.example.chicory.arithmetic", "ArithmeticWorld.kt",
             """
             fun run(component: ComponentBackendFactory): String =
-                ArithmeticWorld.withSession(component) {
-                    "add=${'$'}{ArithmeticWorld.add(20, 7)},sub=${'$'}{ArithmeticWorld.sub(50, 8)},mul=${'$'}{ArithmeticWorld.mul(-6, -7)},div=${'$'}{ArithmeticWorld.div(84, 2)}"
+                withSession(component) {
+                    "add=${'$'}{add(20, 7)},sub=${'$'}{sub(50, 8)},mul=${'$'}{mul(-6, -7)},div=${'$'}{div(84, 2)}"
                 }
             """,
             component("arithmetic"),
@@ -72,7 +72,7 @@ class ChicoryGeneratedBindingsTest {
             import com.example.chicory.counter.exports.example.counter.counter_api.Counter
 
             fun run(component: ComponentBackendFactory): String =
-                CounterWorld.withSession(component) {
+                withSession(component) {
                     Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
@@ -97,11 +97,10 @@ class ChicoryGeneratedBindingsTest {
             tempDir, "roundtrip", "com.example.chicory.roundtrip", "RoundtripWorld.kt",
             """
             import com.example.chicory.roundtrip.example.roundtrip.env_provider.EnvProvider
-            import com.example.chicory.roundtrip.exports.example.roundtrip.math_api.MathApi
             import com.example.chicory.roundtrip.exports.example.roundtrip.math_api.scale
 
             fun run(component: ComponentBackendFactory): String {
-                val imports = RoundtripWorld.imports(
+                val imports = imports(
                     exampleRoundtripEnvProvider = {
                         object : EnvProvider {
                             override fun getMultiplier(): Int = 6
@@ -109,38 +108,38 @@ class ChicoryGeneratedBindingsTest {
                         }
                     },
                 )
-                return RoundtripWorld.withSession(component, imports) {
-                    val scaled = MathApi.scale(7)
-                    val tag = RoundtripWorld.describeCode("ERR", 404u)
-                    val initial = RoundtripWorld.ItemSummary(
+                return withSession(component, imports) {
+                    val scaled = scale(7)
+                    val tag = describeCode("ERR", 404u)
+                    val initial = ItemSummary(
                         count = 10u,
-                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.EXECUTE,
-                        prio = RoundtripWorld.Priority.LOW,
+                        perms = Permissions.READ or Permissions.EXECUTE,
+                        prio = Priority.LOW,
                     )
-                    val afterAdd = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(5u))
-                    val afterPrio = RoundtripWorld.transformSummary(afterAdd, RoundtripWorld.Action.SetPriority(RoundtripWorld.Priority.HIGH))
-                    val afterReset = RoundtripWorld.transformSummary(afterPrio, RoundtripWorld.Action.Reset)
+                    val afterAdd = transformSummary(initial, Action.AddCount(5u))
+                    val afterPrio = transformSummary(afterAdd, Action.SetPriority(Priority.HIGH))
+                    val afterReset = transformSummary(afterPrio, Action.Reset)
                     check(afterPrio.perms.read && !afterPrio.perms.write && afterPrio.perms.execute)
-                    check(afterReset.count == 0u && afterReset.perms == RoundtripWorld.Permissions.NONE && afterReset.prio == RoundtripWorld.Priority.LOW)
-                    val even = (RoundtripWorld.checkEven(84) as WitResult.Ok).value.toString() + ":" + (RoundtripWorld.checkEven(-7) as WitResult.Err).error
-                    val ping = "${'$'}{RoundtripWorld.pingResult(true) is WitResult.Ok}:${'$'}{RoundtripWorld.pingResult(false) is WitResult.Err}"
-                    val optNone = RoundtripWorld.nestedOption(WitOption.None)
-                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(null))
-                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(23))
+                    check(afterReset.count == 0u && afterReset.perms == Permissions.NONE && afterReset.prio == Priority.LOW)
+                    val even = (checkEven(84) as WitResult.Ok).value.toString() + ":" + (checkEven(-7) as WitResult.Err).error
+                    val ping = "${'$'}{pingResult(true) is WitResult.Ok}:${'$'}{pingResult(false) is WitResult.Err}"
+                    val optNone = nestedOption(WitOption.None)
+                    val optSomeNone = nestedOption(WitOption.Some(null))
+                    val optSomeVal = nestedOption(WitOption.Some(23))
                     val opt = listOf(
                         optNone is WitOption.None,
                         optSomeNone is WitOption.Some && optSomeNone.value == null,
                         (optSomeVal as WitOption.Some).value == 123,
                     ).joinToString(",")
                     // WitResult helpers (ADR-0006)
-                    check(RoundtripWorld.checkEven(84).getOrThrow() == 42u)
-                    check(RoundtripWorld.checkEven(-7).getOrNull() == null && RoundtripWorld.checkEven(-7).errorOrNull() == -7)
-                    check(RoundtripWorld.checkEven(-7).isErr && RoundtripWorld.checkEven(84).isOk)
-                    check(RoundtripWorld.checkEven(84).map { it * 2u }.getOrElse { 0u } == 84u)
-                    check(RoundtripWorld.checkEven(-7).fold({ "ok" }, { "err:${'$'}it" }) == "err:-7")
-                    val thrown = runCatching { RoundtripWorld.checkEven(-7).getOrThrow() }.exceptionOrNull()
+                    check(checkEven(84).getOrThrow() == 42u)
+                    check(checkEven(-7).getOrNull() == null && checkEven(-7).errorOrNull() == -7)
+                    check(checkEven(-7).isErr && checkEven(84).isOk)
+                    check(checkEven(84).map { it * 2u }.getOrElse { 0u } == 84u)
+                    check(checkEven(-7).fold({ "ok" }, { "err:${'$'}it" }) == "err:-7")
+                    val thrown = runCatching { checkEven(-7).getOrThrow() }.exceptionOrNull()
                     check(thrown is wasm2kt.runtime.WitResultException && thrown.error == -7)
-                    val u64 = RoundtripWorld.echoU64(ULong.MAX_VALUE) == ULong.MAX_VALUE
+                    val u64 = echoU64(ULong.MAX_VALUE) == ULong.MAX_VALUE
                     "scaled=${'$'}scaled,tag=${'$'}tag,count=${'$'}{afterPrio.count},prio=${'$'}{afterPrio.prio},even=${'$'}even,ping=${'$'}ping,opt=${'$'}opt,u64Max=${'$'}u64"
                 }
             }

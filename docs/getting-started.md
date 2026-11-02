@@ -123,11 +123,11 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("fixtures/arithmetic.wasm")
 
-    ArithmeticWorld.withSession(wasmPath) {
-        println("20 + 7 = ${ArithmeticWorld.add(20, 7)}")
-        println("50 - 8 = ${ArithmeticWorld.sub(50, 8)}")
-        println("-6 * -7 = ${ArithmeticWorld.mul(-6, -7)}")
-        println("84 / 2 = ${ArithmeticWorld.div(84, 2)}")
+    withSession(wasmPath) {
+        println("20 + 7 = ${add(20, 7)}")
+        println("50 - 8 = ${sub(50, 8)}")
+        println("-6 * -7 = ${mul(-6, -7)}")
+        println("84 / 2 = ${div(84, 2)}")
     }
 }
 ```
@@ -137,8 +137,8 @@ fun main() {
 起動時のコンパイルを省くには、`FfmWasmtimeBridge.getDefault().precompileComponent(wasmPath)` で `.cwasm` を作ります。読み込むときは `withPrecompiledSession` / `openPrecompiledSession` を使います。
 
 ```kotlin
-ArithmeticWorld.withPrecompiledSession(Paths.get("build/arithmetic.cwasm")) {
-    println(ArithmeticWorld.add(1, 2))
+withPrecompiledSession(Paths.get("build/arithmetic.cwasm")) {
+    println(add(1, 2))
 }
 ```
 

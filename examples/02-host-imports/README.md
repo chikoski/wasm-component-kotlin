@@ -40,9 +40,9 @@ fun main() {
 
     // 1. ホストが提供する Imports インターフェースを実装し、imports(...) に渡す
     //    （import した interface は、それぞれの package の Kotlin interface を実装して引数に渡す。ADR-0011）
-    val hostImports = LiveCalcWorld.imports(
+    val hostImports = imports(
         world = {
-            object : LiveCalcWorld.Imports {
+            object : Imports {
                 override fun recordCalc(a: Int, b: Int) {
                     auditLog += "Guest requested calculation with ($a, $b)"
                 }
@@ -51,9 +51,9 @@ fun main() {
     )
 
     // 2. withSession に wasmPath と hostImports を渡して実行
-    LiveCalcWorld.withSession(wasmPath, hostImports) {
-        val sum = LiveCalcWorld.add(15, 27)
-        val product = LiveCalcWorld.multiply(6, 7)
+    withSession(wasmPath, hostImports) {
+        val sum = add(15, 27)
+        val product = multiply(6, 7)
 
         println("sum = $sum, product = $product")
     }

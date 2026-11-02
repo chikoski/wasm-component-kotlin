@@ -13,9 +13,10 @@
 | [0003](0003-json-value-boundary.md) | バックエンド間の値の受け渡しに JSON 境界を共有する（フェーズ A） | 承認 |
 | [0004](0004-isolated-tooling-classloader.md) | ビルド時ツールを Gradle ワーカーの独立クラスローダーで実行する | 承認 |
 | [0005](0005-async-and-wasi03-chicory-only.md) | async と WASI 0.3 は Chicory バックエンドだけで進める | 承認 |
-| [0006](0006-type-mapping.md) | WIT → Kotlin の型マッピングを見直す | 承認 |
+| [0006](0006-type-mapping.md) | WIT → Kotlin の型マッピングを見直す | 承認（world の形は → ADR-0012） |
 | [0007](0007-canonical-abi-validation.md) | Canonical ABI の検証は仕様に従い、トラップとホストのエラーを分ける | 承認 |
 | [0008](0008-host-defined-resources.md) | ホスト定義 resource を interface + Imports で表し、rep の表で受け渡す | 承認 |
 | [0009](0009-json-boundary-option-tag-and-scalar-types.md) | JSON 境界で option のタグを型に基づいて判定し、スカラーの JSON 型を検査する | 承認 |
 | [0010](0010-wasmtime-lts.md) | decomposer と rust-bridge を同じ Wasmtime の LTS に揃える | 承認 |
 | [0011](0011-qualified-interface-keys.md) | interface を完全修飾名で識別し、Kotlin では WIT の構造を package に写す | 承認 |
+| [0012](0012-world-at-package-top-level.md) | world を package のトップレベルに生成し、export した interface はマーカーを context に取る | 承認 |

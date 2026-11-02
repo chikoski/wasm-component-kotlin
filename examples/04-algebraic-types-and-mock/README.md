@@ -94,19 +94,19 @@ fun main() {
         }
     }
 
-    val imports = CalculatorWorld.imports(
+    val imports = imports(
         world = {
-            object : CalculatorWorld.Imports {
+            object : Imports {
                 override fun log(msg: String) = println("[HOST LOG] $msg")
             }
         },
     )
 
-    CalculatorWorld.withSession(Paths.get("mock.wasm"), imports) {
+    withSession(Paths.get("mock.wasm"), imports) {
         val perms = Permissions.READ or Permissions.EXECUTE
         println("Permissions: read=${perms.read}, write=${perms.write}, execute=${perms.execute}")
 
-        val res = CalculatorWorld.compute(
+        val res = compute(
             p = Point(1.5f, 2.5f),
             opt = "sample",
             listData = byteArrayOf(1, 2, 3),

@@ -8,9 +8,9 @@
 
 | WIT | Kotlin |
 | :--- | :--- |
-| `world foo` / `world foo-world` | `object FooWorld`（名前が `World` で終わる場合は付け足さない） |
+| `world foo` / `world foo-world` | 指定した package のトップレベルの `Session`、`withSession`、`imports(...)`、world の関数と型。ファイル名は `FooWorld.kt`（名前が `World` で終わる場合は付け足さない）。1 回の生成で 1 つの world（[ADR-0012](adr/0012-world-at-package-top-level.md)） |
 | import した `interface ns:pkg/iface` | package `<base>.<ns>.<pkg>.<iface>` の型と、ホストが実装する `interface Iface`、`fun Linker.add(impl: Iface)`（[ADR-0011](adr/0011-qualified-interface-keys.md)） |
-| export した `interface ns:pkg/iface` | package `<base>.exports.<ns>.<pkg>.<iface>` の型と、呼び出し用の `object Iface` |
+| export した `interface ns:pkg/iface` | package `<base>.exports.<ns>.<pkg>.<iface>` の型と、マーカー `IfaceExports` を context に取るトップレベルの関数 |
 | package の名前のセグメント | 小文字で `-` を `_` に（`outgoing-handler` → `outgoing_handler`）。Kotlin のキーワードは末尾に `_`（`object` → `object_`） |
 | `bool` / `s8`〜`s64` / `u8`〜`u64` / `f32` / `f64` | `Boolean` / `Byte`〜`Long` / `UByte`〜`ULong` / `Float` / `Double` |
 | `char` | `CodePoint`（`value: Int`。`CodePoint.of('a')`、`CodePoint.of("🎌")`） |
@@ -32,36 +32,45 @@
 
 ## 1. World と実行セッション (`Session` & Context Parameters)
 
-WIT の `world` は、Kotlin の **シングルトンオブジェクト (`object <WorldName>World`)** にマッピングされます。名前がすでに `World` で終わる場合（`counter-world`）は付け足さず、`CounterWorld` になります。
+WIT の `world` は、生成時に指定した package（`-p`）の **トップレベル** に生成されます（[ADR-0012](adr/0012-world-at-package-top-level.md)）。
+ファイル名は `<WorldName>World.kt` です（名前がすでに `World` で終わる場合は付け足さない）。
+トップレベルに置くので、1 回の生成で扱う world は 1 つです。WIT に複数の world があるときは `--world` で選び、world ごとに別の package に生成します。
 
 ```kotlin
-object CalculatorWorld {
-    /** world 直下の import（ホストが実装する） */
-    interface Imports {
-        fun log(msg: String)
-    }
+package com.example.calc
 
-    /** world が import するものを、すべて必須の引数として受け取る */
-    fun imports(world: () -> Imports): ImportsFactory = ...
-
-    class Session internal constructor(runtimeSession: WasmtimeSession) : WitSession(runtimeSession)
-
-    fun openSession(wasmPath: Path, imports: ImportsFactory): Session = ...
-
-    inline fun <R> withSession(
-        wasmPath: Path,
-        imports: ImportsFactory,
-        block: context(Session) () -> R,
-    ): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
+/** world 直下の import（ホストが実装する） */
+interface Imports {
+    fun log(msg: String)
 }
+
+/** world が import するものを、すべて必須の引数として受け取る */
+fun imports(world: () -> Imports): ImportsFactory = ...
+
+/** export した interface のマーカー（CountersExports など）も実装する */
+class Session internal constructor(runtimeSession: WasmtimeSession) : WitSession(runtimeSession), CountersExports
+
+fun openSession(wasmPath: Path, imports: ImportsFactory): Session = ...
+
+inline fun <R> withSession(
+    wasmPath: Path,
+    imports: ImportsFactory,
+    block: context(Session) () -> R,
+): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
+
+context(session: Session)
+fun add(a: Int, b: Int): Int = ...
 ```
+
+利用側は `import com.example.calc.*` のあと、`withSession(path, imports(...)) { add(1, 2) }` と書けます。
+2 つのコンポーネントを同じファイルで使うときは、`withSession` などが重なるので、`import ... as` で別名を付けるか、package 名で修飾します（`com.example.ct.withSession(...)`）。
 
 ### 1.1 スコープ自動管理 (`withSession`) vs 手動管理 (`openSession`)
 * **`withSession`（推奨）**: ブロック内で自動的に `context(session: Session)` が提供され、ブロックを抜けると Wasmtime の `Store` とメモリが確実に解放（`close()`）されます。
-* **`openSession`**: GUI アプリやサーバーなどで長期間セッションを保持したい場合は、`val session = MyWorld.openSession(...)` で取得し、呼び出し時に `context(session) { MyWorld.func() }` を使います。使い終わったら `session.close()` を呼びます。
+* **`openSession`**: GUI アプリやサーバーなどで長期間セッションを保持したい場合は、`val session = openSession(...)` で取得し、呼び出し時に `context(session) { func() }` を使います。使い終わったら `session.close()` を呼びます。
 
 ### 1.2 インポートがない World の省略呼び出し
-WIT の `world` にホスト関数インポートが存在しない場合（例: `arithmetic.wit`）、`imports` には `ImportsFactory.EMPTY` がデフォルト引数として設定されるため、第2引数を省略して `ArithmeticWorld.withSession(wasmPath) { ... }` と簡潔に書けます。
+WIT の `world` にホスト関数インポートが存在しない場合（例: `arithmetic.wit`）、`imports` には `ImportsFactory.EMPTY` がデフォルト引数として設定されるため、第2引数を省略して `withSession(wasmPath) { ... }` と簡潔に書けます。
 
 ### 1.3 interface と package、ホスト import の渡し方（ADR-0011）
 
@@ -70,7 +79,7 @@ interface は、WIT の `namespace:package/interface` をそのまま Kotlin の
 
 ```text
 <base>/
-  CalculatorWorld.kt                       world（object CalculatorWorld）
+  CalculatorWorld.kt                       world（Session、withSession、imports(...)、world の関数と型）
   WitSupport.kt                            共通の型（WitOption、WitResult、WitSession など）
   example/calc/types/Types.kt              import した example:calc/types の型と、ホストが実装する interface
   exports/example/calc/counters/Counters.kt  export した example:calc/counters の型と、呼び出し用の object
@@ -89,11 +98,11 @@ interface は、WIT の `namespace:package/interface` をそのまま Kotlin の
 import com.example.app.wasi.filesystem.types.Types as FilesystemTypes
 import com.example.app.wasi.http.types.Types as HttpTypes
 
-val imports = MyWorld.imports(
+val imports = imports(
     wasiHttpTypes = { object : HttpTypes { /* ... */ } },
     wasiFilesystemTypes = { object : FilesystemTypes { /* ... */ } },
 )
-MyWorld.withSession(component, imports) { /* ... */ }
+withSession(component, imports) { /* ... */ }
 ```
 
 下の層では、interface ごとの `fun Linker.add(impl)` が、実装を完全修飾名のキー（`wasi:http/types@0.2.0#handle`）で
@@ -104,17 +113,18 @@ MyWorld.withSession(component, imports) { /* ... */ }
 import com.example.app.wasi.http.types.add
 
 val linker = Linker().apply { add(MyHttpTypes()) /* ... */ }
-MyWorld.withSession(component, linker) { /* ... */ }
+withSession(component, linker) { /* ... */ }
 ```
 
-export した interface の関数は、その package の `object` の拡張関数として呼びます。
+export した interface の関数は、その package のトップレベルの関数で、interface ごとのマーカー（`MathApiExports`）を
+context に取ります。マーカーは、その interface を export する world の `Session` だけが実装するので、export していない world の
+セッションからは呼べません（コンパイルエラー。[ADR-0012](adr/0012-world-at-package-top-level.md)）。
 
 ```kotlin
-import com.example.app.exports.example.roundtrip.math_api.MathApi
 import com.example.app.exports.example.roundtrip.math_api.scale
 
-RoundtripWorld.withSession(component, imports) {
-    MathApi.scale(7)
+withSession(component, imports) {
+    scale(7)    // context(exports: MathApiExports)
 }
 ```
 
@@ -202,7 +212,7 @@ value class Permissions(val raw: UInt = 0u) {
 ```
 **使用例:**
 ```kotlin
-val perms = MyWorld.Permissions.READ or MyWorld.Permissions.EXECUTE
+val perms = Permissions.READ or Permissions.EXECUTE
 if (perms.read && !perms.write) { ... }
 ```
 
@@ -230,9 +240,9 @@ sealed interface Status {
 `option<T>` は Kotlin の null 許容型 `T?` になります。`?.`、`?:`、スマートキャストなどがそのまま使えます。
 
 ```kotlin
-val name: String? = MyWorld.findUser(id)    // option<string>
+val name: String? = findUser(id)    // option<string>
 val len = name?.length ?: 0
-val values: List<Int?> = MyWorld.samples()   // list<option<s32>>
+val values: List<Int?> = samples()   // list<option<s32>>
 ```
 
 `option<option<U>>` のように中身自体が null を取りうる場合は、`T??` にすると外側と内側の `none` を区別できないため、
@@ -248,7 +258,7 @@ sealed interface WitOption<out T> {
     data object None : WitOption<Nothing>
 }
 
-val r: WitOption<Int?> = MyWorld.lookup(k)   // option<option<s32>>
+val r: WitOption<Int?> = lookup(k)   // option<option<s32>>
 when (r) {
     WitOption.None -> println("外側が none")
     is WitOption.Some -> println(r.value ?: "内側が none")
@@ -362,7 +372,7 @@ class MyBlob(var bytes: ByteArray) : Blob {
     override fun size() = bytes.size.toUInt()
     override fun close() { /* コンポーネントが最後の own ハンドルを drop したとき */ }
 }
-val imports = HostResWorld.imports(
+val imports = imports(
     exampleHostResStore = {
         object : Store {
             override fun newBlob(init: ByteArray) = MyBlob(init)
@@ -371,8 +381,8 @@ val imports = HostResWorld.imports(
     },
     world = { /* world 直下の resource ticket の constructor など */ },
 )
-HostResWorld.withSession(component, imports) {
-    HostResWorld.measure(MyBlob(byteArrayOf(1, 2)))   // borrow: その呼び出しの間だけ貸す
+withSession(component, imports) {
+    measure(MyBlob(byteArrayOf(1, 2)))   // borrow: その呼び出しの間だけ貸す
 }
 ```
 
@@ -384,7 +394,7 @@ HostResWorld.withSession(component, imports) {
   そのセッションの呼び出し中（同じスレッド）に限られます
 
 ### 所有権のポイント
-1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`Counter(10)` と通常のコンストラクタ呼び出しのように書けます（`Counter` は export した interface の package にあり、`context` には任意の world の `Session` の基底 `WitSession` を受け取ります）。
+1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`Counter(10)` と通常のコンストラクタ呼び出しのように書けます（`Counter` は export した interface の package にあり、その interface のマーカー `CounterApiExports` を context に取ります）。
 2. **`.use { ... }` とのシームレスな統合**: 生成時に `Session` を内部フィールド `private val session` にキャプチャするため、`override fun close()` には追加のコンテキストパラメータが不要で、Kotlin 標準の `.use { ... }` がそのまま使えます。
 3. **`borrow<T>` vs `own<T>`**:
    * `borrow<T>` 引数には `a.handle` が渡され、呼び出し後も `a` は引き続き使用可能です。

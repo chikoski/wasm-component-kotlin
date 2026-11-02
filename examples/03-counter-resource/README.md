@@ -46,7 +46,7 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("fixtures/counter.wasm")
 
-    CounterWorld.withSession(wasmPath) {
+    withSession(wasmPath) {
         // 1. リソースの生成: companion object の invoke が Context Parameter から Session を受け取る
         Counter(10).use { c1 ->
             c1.increment()

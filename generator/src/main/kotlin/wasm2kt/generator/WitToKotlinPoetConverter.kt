@@ -119,6 +119,7 @@ class WitToKotlinPoetConverter(
     private val exportedInterfaceObjects = mutableSetOf<Int>()
 
     private val witSessionClass = ClassName(targetPackage, "WitSession")
+    private val witExportsClass = ClassName(targetPackage, "WitExports")
     private val linkerClass = ClassName("wasm2kt.runtime", "Linker")
     private val importsFactoryClass = ClassName("wasm2kt.runtime", "ImportsFactory")
     private val hostResourceTableClass = ClassName("wasm2kt.runtime", "HostResourceTable")
@@ -148,10 +149,17 @@ class WitToKotlinPoetConverter(
             checkPackageVersions(listOf(syntheticWorld))
             fileSpecs += generateWorldFile(syntheticWorld)
         } else {
-            checkPackageVersions(worldsToGenerate)
-            for (world in worldsToGenerate) {
-                fileSpecs += generateWorldFile(world)
+            // The world's API is generated at the top level of the target package (ADR-0012), so one
+            // generation holds exactly one world.
+            require(targetWorldName == null || worldsToGenerate.isNotEmpty()) {
+                "World '$targetWorldName' not found; available worlds: ${resolve.worlds.joinToString { it.name }}"
             }
+            require(worldsToGenerate.size == 1) {
+                "The WIT defines several worlds (${worldsToGenerate.joinToString { it.name }}); choose one with --world " +
+                    "(each world is generated into its own package, ADR-0012)"
+            }
+            checkPackageVersions(worldsToGenerate)
+            fileSpecs += generateWorldFile(worldsToGenerate.single())
         }
         fileSpecs += interfaceFiles.values.map { it.builder.build() }
 
@@ -287,15 +295,16 @@ class WitToKotlinPoetConverter(
     // ------------------------------------------------------------------ world file
 
     private fun generateWorldFile(world: WitWorld): FileSpec {
+        // The world's API lives at the top level of the target package (ADR-0012); the file keeps the
+        // `<Name>World` name.
         val worldObjectName = worldObjectName(world.name)
         val worldClassName = ClassName(targetPackage, worldObjectName)
-        val sessionClassName = worldClassName.nestedClass("Session")
-        val worldImportsClassName = worldClassName.nestedClass("Imports")
+        val sessionClassName = ClassName(targetPackage, "Session")
+        val worldImportsClassName = ClassName(targetPackage, "Imports")
         currentWorldClassName = worldClassName
 
         val fileBuilder = FileSpec.builder(targetPackage, worldObjectName)
-        val worldObjBuilder = TypeSpec.objectBuilder(worldClassName)
-        world.docs?.contents?.let { worldObjBuilder.addKdoc("%L\n", it.trim()) }
+        val worldObjBuilder = fileBuilder
 
         val worldId = resolve.worlds.indexOf(world)
         currentWorldId = worldId
@@ -324,7 +333,7 @@ class WitToKotlinPoetConverter(
         for (ifaceId in importedIds) emitInterfaceTypes(ifaceId, Direction.IMPORT, resourceFunctions)
         for (ifaceId in exportedIds) emitInterfaceTypes(ifaceId, Direction.EXPORT, resourceFunctions)
         val worldSink = TypeSink(
-            id = "world:${worldClassName.canonicalName}",
+            id = "world:$targetPackage",
             addType = { worldObjBuilder.addType(it) },
             addAlias = { fileBuilder.addTypeAlias(it) },
         )
@@ -344,7 +353,7 @@ class WitToKotlinPoetConverter(
             importParams += ImportParam(importParameterName(item.id), contract.className, contract.addFunction)
             requiredKeys += contract.keys
         }
-        val worldContract = worldHostContract(world, worldImportsClassName, worldObjBuilder, fileBuilder)
+        val worldContract = worldHostContract(world, worldImportsClassName, fileBuilder)
         if (worldContract != null) {
             importParams += ImportParam("world", worldContract.className, worldContract.addFunction)
             requiredKeys += worldContract.keys
@@ -377,10 +386,14 @@ class WitToKotlinPoetConverter(
 
         // 3. Session
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
+        val exportMarkers = world.exports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { exportMarkerClassName(it.id) }
         worldObjBuilder.addType(
             TypeSpec.classBuilder("Session")
+                .addKdoc("A session of the `%L` world. Close it to release the component instance.\n", world.name)
+                .apply { world.docs?.contents?.let { addKdoc("\n%L\n", it.trim()) } }
                 .superclass(witSessionClass)
                 .addSuperclassConstructorParameter("runtimeSession")
+                .addSuperinterfaces(exportMarkers)
                 .primaryConstructor(
                     FunSpec.constructorBuilder()
                         .addModifiers(KModifier.INTERNAL)
@@ -492,7 +505,7 @@ class WitToKotlinPoetConverter(
                         fileBuilder.addFunction(
                             buildExportedExtensionFunctionSpec(
                                 fn = item.function,
-                                receiverClassName = worldClassName,
+                                receiverClassName = null,
                                 worldClassName = worldClassName,
                                 sessionClassName = sessionClassName,
                                 invokeTargetPrefix = "",
@@ -505,7 +518,7 @@ class WitToKotlinPoetConverter(
             }
         }
 
-        fileBuilder.addType(worldObjBuilder.build())
+        checkReservedWorldNames(world)
         return fileBuilder.build()
     }
 
@@ -589,7 +602,6 @@ class WitToKotlinPoetConverter(
     private fun worldHostContract(
         world: WitWorld,
         className: ClassName,
-        worldObjBuilder: TypeSpec.Builder,
         fileBuilder: FileSpec.Builder,
     ): HostContract? {
         val functions = world.imports.values.filterIsInstance<WitWorldItem.FunctionItem>().map { it.function }
@@ -611,7 +623,7 @@ class WitToKotlinPoetConverter(
             keys += key
             body.add(buildHostResourceDropDefinition(key))
         }
-        worldObjBuilder.addType(contractBuilder.build())
+        fileBuilder.addType(contractBuilder.build())
         fileBuilder.addFunction(buildLinkerAddFunction(className, body.build()))
         return HostContract(className, MemberName(fileBuilder.packageName, "add"), keys)
     }
@@ -705,31 +717,67 @@ class WitToKotlinPoetConverter(
 
     // ------------------------------------------------------------------ exports
 
+    /** `<Iface>Exports`: implemented by the `Session` of every world that exports the interface (ADR-0012). */
+    private fun exportMarkerClassName(ifaceId: Int): ClassName =
+        ClassName(interfacePackage(ifaceId, Direction.EXPORT), interfaceTypeName(ifaceId) + "Exports")
+
     /**
-     * An exported interface: `object <Iface>` in `<base>.exports.<ns>.<pkg>.<iface>` with one extension
-     * function per exported function, called under the fully qualified key. Generated once per interface.
+     * An exported interface: in `<base>.exports.<ns>.<pkg>.<iface>`, the marker `<Iface>Exports` and one
+     * top-level function per exported function taking it as context, so only a session of a world
+     * that exports the interface can call it. Generated once per interface.
      */
     private fun emitExportedInterface(ifaceId: Int) {
         if (!exportedInterfaceObjects.add(ifaceId)) return
         val iface = resolve.interfaces.getOrNull(ifaceId) ?: return
         val file = interfaceFile(ifaceId, Direction.EXPORT)
-        val objectClass = ClassName(file.builder.packageName, interfaceTypeName(ifaceId))
-        val objectBuilder = TypeSpec.objectBuilder(objectClass)
-        iface.docs?.contents?.let { objectBuilder.addKdoc("%L\n", it.trim()) }
-        file.builder.addType(objectBuilder.build())
+        val marker = exportMarkerClassName(ifaceId)
+        val markerBuilder = TypeSpec.interfaceBuilder(marker).addSuperinterface(witExportsClass)
+        iface.docs?.contents?.let { markerBuilder.addKdoc("%L\n\n", it.trim()) }
+        markerBuilder.addKdoc(
+            "Implemented by the `Session` of every world that exports `%L`; its functions take it as a context parameter.\n",
+            interfaceKey(ifaceId),
+        )
+        file.builder.addType(markerBuilder.build())
         withExportContext(true) {
             for (fn in iface.functions.values) {
                 if (fn.kind !is WitFunctionKind.Freestanding) continue
                 file.builder.addFunction(
                     buildExportedExtensionFunctionSpec(
                         fn = fn,
-                        receiverClassName = objectClass,
+                        receiverClassName = null,
                         worldClassName = currentWorldClassName,
-                        sessionClassName = witSessionClass,
+                        sessionClassName = marker,
                         invokeTargetPrefix = "${interfaceKey(ifaceId)}#",
                     ),
                 )
             }
+        }
+    }
+
+    /**
+     * Names generated at the top level of the target package (ADR-0012). A world-level type or export
+     * with one of these names would collide, so it is reported instead of generating broken code.
+     */
+    private fun checkReservedWorldNames(world: WitWorld) {
+        val reservedTypes = setOf(
+            "Session", "Imports", "WitSession", "WitExports", "WitOption", "WitResult", "CodePoint", "WasmtimeSession",
+            "FfmWasmtimeSession", "JniWasmtimeSession", "InMemoryWasmtimeSession", "BackendWasmtimeSession", "HostResourceBoundSession",
+        )
+        val reservedFunctions = setOf("imports", "openSession", "withSession", "openPrecompiledSession", "withPrecompiledSession")
+        val clashes = mutableListOf<String>()
+        resolve.types.forEachIndexed { idx, def ->
+            val name = def.name ?: return@forEachIndexed
+            if (currentWorldId >= 0 && def.owner?.world == currentWorldId && resolveRootTypeIndex(idx) == idx) {
+                val pascal = NamingConventions.toPascalCase(name)
+                if (pascal in reservedTypes || Regex("Tuple\\d+").matches(pascal)) clashes += "type '$name'"
+            }
+        }
+        for (item in world.exports.values) {
+            val fn = (item as? WitWorldItem.FunctionItem)?.function ?: continue
+            if (NamingConventions.toCamelCase(fn.name) in reservedFunctions) clashes += "function '${fn.name}'"
+        }
+        require(clashes.isEmpty()) {
+            "World '${world.name}' declares ${clashes.joinToString()}, which collides with the generated API (ADR-0012)"
         }
     }
 
@@ -864,7 +912,7 @@ class WitToKotlinPoetConverter(
         val ifaceId = owner?.`interface`
         return when {
             ifaceId != null -> ClassName(interfacePackage(ifaceId, directionOf(ifaceId)), pascal)
-            else -> currentWorldClassName.nestedClass(pascal)
+            else -> ClassName(targetPackage, pascal)
         }
     }
 
@@ -941,6 +989,7 @@ class WitToKotlinPoetConverter(
                         worldClassName = worldClassName,
                         sessionClassName = witSessionClass,
                         functions = resourceFunctions[typeIdx].orEmpty(),
+                        contextClassName = exportMarkerClassName(ownerIface),
                     ),
                 )
             }
@@ -1297,6 +1346,7 @@ class WitToKotlinPoetConverter(
         worldClassName: ClassName,
         sessionClassName: ClassName,
         functions: List<WitFunction>,
+        contextClassName: ClassName,
     ): TypeSpec {
         val resourcePascalName = resourceClassName.simpleName
         val autoCloseableClass = ClassName("java.lang", "AutoCloseable")
@@ -1366,7 +1416,7 @@ class WitToKotlinPoetConverter(
                 is WitFunctionKind.Constructor -> {
                     val invokeBuilder = FunSpec.builder("invoke")
                         .addModifiers(KModifier.OPERATOR)
-                        .contextParameter("session", sessionClassName)
+                        .apply { addSessionContext(this, contextClassName, viaMarker = true) }
                         .returns(resourceClassName)
                     addFunctionKdoc(invokeBuilder, fn)
                     val argFormatPlaceholders = mutableListOf<String>()
@@ -1428,7 +1478,7 @@ class WitToKotlinPoetConverter(
                 is WitFunctionKind.Static -> {
                     val staticName = NamingConventions.extractResourceMemberName(fn.name)
                     val staticBuilder = FunSpec.builder(staticName)
-                        .contextParameter("session", sessionClassName)
+                        .apply { addSessionContext(this, contextClassName, viaMarker = true) }
                     addFunctionKdoc(staticBuilder, fn)
                     val argFormatPlaceholders = mutableListOf<String>()
                     val extraFormatArgs = mutableListOf<Any>()
@@ -1499,15 +1549,16 @@ class WitToKotlinPoetConverter(
 
     private fun buildExportedExtensionFunctionSpec(
         fn: WitFunction,
-        receiverClassName: ClassName,
+        receiverClassName: ClassName?,
         worldClassName: ClassName,
         sessionClassName: ClassName,
         invokeTargetPrefix: String,
     ): FunSpec {
         val fnName = NamingConventions.toCamelCase(fn.name)
+        val viaMarker = sessionClassName != ClassName(targetPackage, "Session")
         val builder = FunSpec.builder(fnName)
-            .receiver(receiverClassName)
-            .contextParameter("session", sessionClassName)
+            .apply { if (receiverClassName != null) receiver(receiverClassName) }
+            .apply { addSessionContext(this, sessionClassName, viaMarker) }
 
         addFunctionKdoc(builder, fn)
 
@@ -1545,6 +1596,19 @@ class WitToKotlinPoetConverter(
             )
         }
         return builder.build()
+    }
+
+    /**
+     * World functions take the world's `Session`; interface-level functions take the interface's
+     * `<Iface>Exports` marker and reach the session through it (ADR-0012).
+     */
+    private fun addSessionContext(builder: FunSpec.Builder, contextClass: ClassName, viaMarker: Boolean) {
+        if (viaMarker) {
+            builder.contextParameter("exports", contextClass)
+            builder.addStatement("val session = exports.%M", MemberName(targetPackage, "witSession"))
+        } else {
+            builder.contextParameter("session", contextClass)
+        }
     }
 
     private fun buildFunctionReturnDecoderLambda(
@@ -1986,6 +2050,17 @@ class WitToKotlinPoetConverter(
         fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
         fileBuilder.addType(buildHostResourceBoundSessionTypeSpec())
         fileBuilder.addType(buildWitSessionTypeSpec())
+        fileBuilder.addType(
+            TypeSpec.interfaceBuilder(witExportsClass)
+                .addKdoc("Base of the `<Iface>Exports` markers, implemented by a world's `Session` for each interface it exports (ADR-0012).\n")
+                .build(),
+        )
+        fileBuilder.addProperty(
+            PropertySpec.builder("witSession", witSessionClass, KModifier.INTERNAL)
+                .receiver(witExportsClass)
+                .getter(FunSpec.getterBuilder().addStatement("return this as %T", witSessionClass).build())
+                .build(),
+        )
 
         return fileBuilder.build()
     }

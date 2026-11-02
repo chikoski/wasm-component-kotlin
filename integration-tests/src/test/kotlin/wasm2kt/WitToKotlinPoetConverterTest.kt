@@ -73,7 +73,7 @@ class WitToKotlinPoetConverterTest {
         assertTrue(supportFile.contains("abstract class WitSession internal constructor("))
 
         // The world object; the types of the `types` interface live in its own package
-        assertTrue(worldFile.contains("object CalculatorWorld"))
+        assertTrue(worldFile.contains("class Session internal constructor("))
         assertTrue(typesFile.startsWith("package com.example.wasm.example.calc.types\n"))
         assertTrue(typesFile.contains("data class Point("))
         assertTrue(typesFile.contains("enum class Color"))
@@ -92,9 +92,9 @@ class WitToKotlinPoetConverterTest {
         assertTrue(countersFile.contains("\"example:calc/counters@0.1.0#[method]counter.increment\""))
 
         // Verify Context Parameter extension functions on CalculatorWorld
-        assertTrue(worldFile.contains("context(session: CalculatorWorld.Session)"))
-        assertTrue(worldFile.contains("fun CalculatorWorld.add(a: Int, b: Int): Int"))
-        assertTrue(worldFile.contains("fun CalculatorWorld.compute("))
+        assertTrue(worldFile.contains("context(session: Session)"))
+        assertTrue(worldFile.contains("fun add(a: Int, b: Int): Int"))
+        assertTrue(worldFile.contains("fun compute("))
         assertTrue(worldFile.contains("opt: String?"))
         assertTrue(worldFile.contains("WitResult<Status, String>"))
         assertTrue(worldFile.contains("fun imports(world: () -> Imports): ImportsFactory"))
@@ -224,9 +224,9 @@ class WitToKotlinPoetConverterTest {
                     }
                 }
 
-                val imports = CalculatorWorld.imports(
+                val imports = imports(
                     world = {
-                        object : CalculatorWorld.Imports {
+                        object : Imports {
                             override fun log(msg: String) {
                                 logs.add(msg)
                             }
@@ -234,12 +234,12 @@ class WitToKotlinPoetConverterTest {
                     },
                 )
 
-                val resultSummary = CalculatorWorld.withSession(Paths.get("dummy.wasm"), imports) {
-                    val sum = CalculatorWorld.add(10, 32)
+                val resultSummary = withSession(Paths.get("dummy.wasm"), imports) {
+                    val sum = add(10, 32)
                     val perms = Permissions.READ or Permissions.EXECUTE
                     check(perms.read && !perms.write && perms.execute)
 
-                    val computeRes = CalculatorWorld.compute(
+                    val computeRes = compute(
                         p = Point(1.5f, 2.5f),
                         opt = "hello",
                         listData = byteArrayOf(1, 2, 3),
@@ -345,9 +345,9 @@ class WitToKotlinPoetConverterTest {
 
             fun runNativeWasmComponent(wasmPath: Path): String {
                 val recordedCalls = mutableListOf<String>()
-                val imports = LiveCalcWorld.imports(
+                val imports = imports(
                     world = {
-                        object : LiveCalcWorld.Imports {
+                        object : Imports {
                             override fun recordCalc(a: Int, b: Int) {
                                 recordedCalls.add("${'$'}a,${'$'}b")
                             }
@@ -356,9 +356,9 @@ class WitToKotlinPoetConverterTest {
                 )
 
                 // Uses default WasmtimeSession.factory -> FfmWasmtimeSession.open(wasmPath, imports)
-                return LiveCalcWorld.withSession(wasmPath, imports) {
-                    val sum = LiveCalcWorld.add(15, 27)
-                    val product = LiveCalcWorld.multiply(6, 7)
+                return withSession(wasmPath, imports) {
+                    val sum = add(15, 27)
+                    val product = multiply(6, 7)
                     "sum=${'$'}sum,product=${'$'}product,recorded=${'$'}{recordedCalls.joinToString(";")}"
                 }
             }
@@ -425,7 +425,8 @@ class WitToKotlinPoetConverterTest {
                 "-o",
                 tempDir.toString(),
                 "-p",
-                "com.example.arithmetic",
+                // One world per package (ADR-0012): the root world of the .wasm goes next to the .wit one.
+                "com.example.arithmetic.fromwasm",
                 wasmPath.toString(),
             ),
         )
@@ -440,11 +441,11 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun runArithmeticComponent(wasmPath: Path): String {
-                return ArithmeticWorld.withSession(wasmPath) {
-                    val sum = ArithmeticWorld.add(20, 7)
-                    val diff = ArithmeticWorld.sub(50, 8)
-                    val prod = ArithmeticWorld.mul(-6, -7)
-                    val quot = ArithmeticWorld.div(84, 2)
+                return withSession(wasmPath) {
+                    val sum = add(20, 7)
+                    val diff = sub(50, 8)
+                    val prod = mul(-6, -7)
+                    val quot = div(84, 2)
                     "add=${'$'}sum,sub=${'$'}diff,mul=${'$'}prod,div=${'$'}quot"
                 }
             }
@@ -511,7 +512,8 @@ class WitToKotlinPoetConverterTest {
                 "-o",
                 tempDir.toString(),
                 "-p",
-                "com.example.counter",
+                // One world per package (ADR-0012): the root world of the .wasm goes next to the .wit one.
+                "com.example.counter.fromwasm",
                 wasmPath.toString(),
             ),
         )
@@ -527,7 +529,7 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun runCounterComponent(wasmPath: Path): String {
-                return CounterWorld.withSession(wasmPath) {
+                return withSession(wasmPath) {
                     Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
@@ -679,12 +681,11 @@ class WitToKotlinPoetConverterTest {
             package com.example.roundtrip
 
             import com.example.roundtrip.example.roundtrip.env_provider.EnvProvider
-            import com.example.roundtrip.exports.example.roundtrip.math_api.MathApi
             import com.example.roundtrip.exports.example.roundtrip.math_api.scale
             import java.nio.file.Path
 
             fun runRoundtripComponent(wasmPath: Path): String {
-                val imports = RoundtripWorld.imports(
+                val imports = imports(
                     exampleRoundtripEnvProvider = {
                         object : EnvProvider {
                             override fun getMultiplier(): Int = 6
@@ -693,48 +694,48 @@ class WitToKotlinPoetConverterTest {
                     },
                 )
 
-                return RoundtripWorld.withSession(wasmPath, imports) {
+                return withSession(wasmPath, imports) {
                     // 1. Exported named interface calling imported named interface returning s32
-                    val scaled = with(MathApi) { scale(7) } // 7 * 6 = 42
+                    val scaled = scale(7) // 7 * 6 = 42
 
                     // 2. Exported function calling imported named interface with u32 and returning String
-                    val tag = RoundtripWorld.describeCode("ERR", 404u)
+                    val tag = describeCode("ERR", 404u)
 
                     // 3. Record + Flags + Enum + Variant roundtrip
-                    val initial = RoundtripWorld.ItemSummary(
+                    val initial = ItemSummary(
                         count = 10u,
-                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.EXECUTE,
-                        prio = RoundtripWorld.Priority.LOW,
+                        perms = Permissions.READ or Permissions.EXECUTE,
+                        prio = Priority.LOW,
                     )
-                    val afterAdd = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(5u))
-                    val afterPrio = RoundtripWorld.transformSummary(
+                    val afterAdd = transformSummary(initial, Action.AddCount(5u))
+                    val afterPrio = transformSummary(
                         afterAdd,
-                        RoundtripWorld.Action.SetPriority(RoundtripWorld.Priority.HIGH),
+                        Action.SetPriority(Priority.HIGH),
                     )
-                    val afterReset = RoundtripWorld.transformSummary(afterPrio, RoundtripWorld.Action.Reset)
+                    val afterReset = transformSummary(afterPrio, Action.Reset)
 
                     check(afterPrio.count == 15u) { "afterPrio.count=${'$'}{afterPrio.count}" }
                     check(afterPrio.perms.read && !afterPrio.perms.write && afterPrio.perms.execute) {
                         "afterPrio.perms.raw=${'$'}{afterPrio.perms.raw}, initial.perms.raw=${'$'}{initial.perms.raw}, afterAdd.perms.raw=${'$'}{afterAdd.perms.raw}"
                     }
-                    check(afterPrio.prio == RoundtripWorld.Priority.HIGH) { "afterPrio.prio=${'$'}{afterPrio.prio}" }
-                    check(afterReset.count == 0u && afterReset.perms == RoundtripWorld.Permissions.NONE && afterReset.prio == RoundtripWorld.Priority.LOW) {
+                    check(afterPrio.prio == Priority.HIGH) { "afterPrio.prio=${'$'}{afterPrio.prio}" }
+                    check(afterReset.count == 0u && afterReset.perms == Permissions.NONE && afterReset.prio == Priority.LOW) {
                         "afterReset=${'$'}afterReset"
                     }
 
                     // 4. result<u32, s32> and result (WitResult<Unit, Unit>)
-                    val evenOk = RoundtripWorld.checkEven(84)
-                    val oddErr = RoundtripWorld.checkEven(-7)
-                    val pingOk = RoundtripWorld.pingResult(true)
-                    val pingErr = RoundtripWorld.pingResult(false)
+                    val evenOk = checkEven(84)
+                    val oddErr = checkEven(-7)
+                    val pingOk = pingResult(true)
+                    val pingErr = pingResult(false)
 
                     val evenStr = (evenOk as WitResult.Ok).value.toString() + ":" + (oddErr as WitResult.Err).error.toString()
                     val pingStr = "${'$'}{pingOk is WitResult.Ok}:${'$'}{pingErr is WitResult.Err}"
 
                     // 5. Nested option<option<s32>> distinguishing None, Some(None), and Some(Some(v))
-                    val optNone = RoundtripWorld.nestedOption(WitOption.None)
-                    val optSomeNone = RoundtripWorld.nestedOption(WitOption.Some(null))
-                    val optSomeVal = RoundtripWorld.nestedOption(WitOption.Some(23))
+                    val optNone = nestedOption(WitOption.None)
+                    val optSomeNone = nestedOption(WitOption.Some(null))
+                    val optSomeVal = nestedOption(WitOption.Some(23))
 
                     val optStr = listOf(
                         optNone is WitOption.None,
@@ -743,7 +744,7 @@ class WitToKotlinPoetConverterTest {
                     ).joinToString(",")
 
                     // 6. u64 boundary value (ULong.MAX_VALUE)
-                    val maxU64 = RoundtripWorld.echoU64(ULong.MAX_VALUE)
+                    val maxU64 = echoU64(ULong.MAX_VALUE)
                     check(maxU64 == ULong.MAX_VALUE)
 
                     "scaled=${'$'}scaled,tag=${'$'}tag,count=${'$'}{afterPrio.count},prio=${'$'}{afterPrio.prio},even=${'$'}evenStr,ping=${'$'}pingStr,opt=${'$'}optStr,u64Max=${'$'}{maxU64 == ULong.MAX_VALUE}"
@@ -815,7 +816,7 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun verifyResourceSafety(wasmPath: Path): String {
-                return CounterWorld.withSession(wasmPath) {
+                return withSession(wasmPath) {
                     val c1 = Counter(10)
                     c1.close()
                     val afterCloseError = try {
@@ -929,7 +930,7 @@ class WitToKotlinPoetConverterTest {
             package com.example.flags64
 
             fun testLargeFlags(): Boolean {
-                val combined = LargeFlagsWorld.Permissions64.FLAG_AA or LargeFlagsWorld.Permissions64.FLAG_DF
+                val combined = Permissions64.FLAG_AA or Permissions64.FLAG_DF
                 return combined.flagAa && !combined.flagAb && combined.flagDf
             }
             """.trimIndent(),
@@ -1047,6 +1048,14 @@ class WitToKotlinPoetConverterTest {
         assertTrue(Files.exists(selectedOutDir.resolve("com/example/multi/AlphaWorld.kt")))
         assertTrue(!Files.exists(selectedOutDir.resolve("com/example/multi/BetaWorld.kt")))
 
+        // Without --world, several worlds cannot share the package's top level (ADR-0012).
+        val noWorld = runCatching {
+            Wasm2KtCommand().parse(
+                listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.resolve("all").toString(), "-p", "com.example.multi", multiWitFile.toString()),
+            )
+        }.exceptionOrNull()
+        assertTrue(noWorld?.message.orEmpty().contains("--world"), "several worlds need --world, got: $noWorld")
+
         // Standalone interface file without any world definition
         val ifaceOnlyWit = """
             package example:standalone@0.1.0;
@@ -1114,12 +1123,11 @@ class WitToKotlinPoetConverterTest {
             package com.example.cwasm
 
             import com.example.cwasm.example.roundtrip.env_provider.EnvProvider
-            import com.example.cwasm.exports.example.roundtrip.math_api.MathApi
             import com.example.cwasm.exports.example.roundtrip.math_api.scale
             import java.nio.file.Path
 
             fun runAllLoadingModes(rawWasmBytes: ByteArray, cwasmBytes: ByteArray, cwasmPath: Path): String {
-                val imports = RoundtripWorld.imports(
+                val imports = imports(
                     exampleRoundtripEnvProvider = {
                         object : EnvProvider {
                             override fun getMultiplier(): Int = 6
@@ -1129,23 +1137,23 @@ class WitToKotlinPoetConverterTest {
                 )
 
                 // Mode A: Raw .wasm ByteArray
-                val resRawBytes = RoundtripWorld.withSession(rawWasmBytes, imports) {
-                    val scaled = with(MathApi) { scale(7) }
-                    val tag = RoundtripWorld.describeCode("RAW", 200u)
+                val resRawBytes = withSession(rawWasmBytes, imports) {
+                    val scaled = scale(7)
+                    val tag = describeCode("RAW", 200u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
                 // Mode B: Precompiled AOT .cwasm ByteArray
-                val resCwasmBytes = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
-                    val scaled = with(MathApi) { scale(8) }
-                    val tag = RoundtripWorld.describeCode("AOT_BYTES", 201u)
+                val resCwasmBytes = withPrecompiledSession(cwasmBytes, imports) {
+                    val scaled = scale(8)
+                    val tag = describeCode("AOT_BYTES", 201u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
                 // Mode C: Precompiled AOT .cwasm Path
-                val resCwasmPath = RoundtripWorld.withPrecompiledSession(cwasmPath, imports) {
-                    val scaled = with(MathApi) { scale(9) }
-                    val tag = RoundtripWorld.describeCode("AOT_PATH", 202u)
+                val resCwasmPath = withPrecompiledSession(cwasmPath, imports) {
+                    val scaled = scale(9)
+                    val tag = describeCode("AOT_PATH", 202u)
                     "${'$'}scaled:${'$'}tag"
                 }
 
@@ -1157,9 +1165,9 @@ class WitToKotlinPoetConverterTest {
                     if ("precompiled" in (e.message ?: "")) "refused" else "other: ${'$'}{e.message}"
                 }
                 val refusals = listOf(
-                    refused { RoundtripWorld.openSession(cwasmBytes, imports).close() },
-                    refused { RoundtripWorld.openSession(cwasmPath, imports).close() },
-                    refused { RoundtripWorld.openPrecompiledSession(rawWasmBytes, imports).close() },
+                    refused { openSession(cwasmBytes, imports).close() },
+                    refused { openSession(cwasmPath, imports).close() },
+                    refused { openPrecompiledSession(rawWasmBytes, imports).close() },
                 ).joinToString(",")
 
                 return "rawBytes=${'$'}resRawBytes|cwasmBytes=${'$'}resCwasmBytes|cwasmPath=${'$'}resCwasmPath|${'$'}refusals"
@@ -1216,7 +1224,7 @@ class WitToKotlinPoetConverterTest {
         val cwasmBytes = wasm2kt.runtime.JniWasmtimeBridge.precompileComponent(rawRoundtripBytes)
         assertTrue(cwasmBytes.isNotEmpty(), "JNI precompiled .cwasm bytes must not be empty")
 
-        // Generate bindings for both roundtrip and counter in the same package
+        // Generate bindings for roundtrip and counter, one world per package (ADR-0012)
         Wasm2KtCommand().parse(
             listOf(
                 "--wasm-tools-path",
@@ -1235,7 +1243,7 @@ class WitToKotlinPoetConverterTest {
                 "-o",
                 tempDir.toString(),
                 "-p",
-                "com.example.jni",
+                "com.example.jni.counter",
                 counterWitPath.toString(),
             ),
         )
@@ -1247,16 +1255,15 @@ class WitToKotlinPoetConverterTest {
             package com.example.jni
 
             import com.example.jni.example.roundtrip.env_provider.EnvProvider
-            import com.example.jni.exports.example.roundtrip.math_api.MathApi
             import com.example.jni.exports.example.roundtrip.math_api.scale
-            import com.example.jni.exports.example.counter.counter_api.Counter
+            import com.example.jni.counter.exports.example.counter.counter_api.Counter
             import java.nio.file.Path
 
             fun runJniScenario(roundtripWasmPath: Path, cwasmBytes: ByteArray, counterWasmPath: Path): String {
                 // Switch WasmtimeSession to JNI backend (Android ART compatible, zero java.lang.foreign usage)
                 WasmtimeSession.useJniBackend()
 
-                val imports = RoundtripWorld.imports(
+                val imports = imports(
                     exampleRoundtripEnvProvider = {
                         object : EnvProvider {
                             override fun getMultiplier(): Int = 7
@@ -1266,28 +1273,28 @@ class WitToKotlinPoetConverterTest {
                 )
 
                 // 1. Roundtrip over JNI from Path + Host Callbacks
-                val pathSummary = RoundtripWorld.withSession(roundtripWasmPath, imports) {
-                    val scaled = with(MathApi) { scale(6) } // 6 * 7 = 42
-                    val tag = RoundtripWorld.describeCode("JNI", 777u)
-                    val initial = RoundtripWorld.ItemSummary(
+                val pathSummary = withSession(roundtripWasmPath, imports) {
+                    val scaled = scale(6) // 6 * 7 = 42
+                    val tag = describeCode("JNI", 777u)
+                    val initial = ItemSummary(
                         count = 20u,
-                        perms = RoundtripWorld.Permissions.READ or RoundtripWorld.Permissions.WRITE,
-                        prio = RoundtripWorld.Priority.MEDIUM,
+                        perms = Permissions.READ or Permissions.WRITE,
+                        prio = Priority.MEDIUM,
                     )
-                    val updated = RoundtripWorld.transformSummary(initial, RoundtripWorld.Action.AddCount(22u))
+                    val updated = transformSummary(initial, Action.AddCount(22u))
                     "${'$'}scaled:${'$'}tag:${'$'}{updated.count}:${'$'}{updated.perms.write}"
                 }
 
                 // 2. Roundtrip over JNI from precompiled AOT .cwasm ByteArray
-                val aotBytesSummary = RoundtripWorld.withPrecompiledSession(cwasmBytes, imports) {
-                    val scaled = with(MathApi) { scale(5) } // 5 * 7 = 35
-                    val optVal = RoundtripWorld.nestedOption(WitOption.Some(10))
+                val aotBytesSummary = withPrecompiledSession(cwasmBytes, imports) {
+                    val scaled = scale(5) // 5 * 7 = 35
+                    val optVal = nestedOption(WitOption.Some(10))
                     val unwrapped = (optVal as WitOption.Some).value
                     "${'$'}scaled:${'$'}unwrapped"
                 }
 
                 // 3. Counter resource lifecycle over JNI
-                val counterSummary = CounterWorld.withSession(counterWasmPath) {
+                val counterSummary = com.example.jni.counter.withSession(counterWasmPath) {
                     Counter(10).use { c1 ->
                         c1.add(5)
                         val c2 = Counter(27)
@@ -1620,7 +1627,7 @@ class WitToKotlinPoetConverterTest {
             import kotlinx.serialization.json.JsonPrimitive
             import kotlinx.serialization.json.jsonPrimitive
 
-            class HostCounter(private val v: Int) : HostResWorld.Counter {
+            class HostCounter(private val v: Int) : Counter {
                 var closed = false
                 override fun getValue(): Int = v
                 override fun close() { closed = true }
@@ -1629,16 +1636,16 @@ class WitToKotlinPoetConverterTest {
             fun runHostResScenario(): String {
                 // A world-level resource is imported: the host implements it (ADR-0008).
                 val made = mutableListOf<HostCounter>()
-                val imports = HostResWorld.imports(
+                val imports = imports(
                     world = {
-                        object : HostResWorld.Imports {
-                            override fun newCounter(init: Int): HostResWorld.Counter = HostCounter(init).also { made += it }
-                            override fun inspectPair(p: HostResWorld.CounterPair): String = "${'$'}{p.label}:${'$'}{p.primary.getValue()}"
-                            override fun inspectOutcome(o: HostResWorld.CounterOutcome): Int = when (o) {
-                                is HostResWorld.CounterOutcome.Created -> o.value.getValue()
-                                HostResWorld.CounterOutcome.Empty -> -1
+                        object : Imports {
+                            override fun newCounter(init: Int): Counter = HostCounter(init).also { made += it }
+                            override fun inspectPair(p: CounterPair): String = "${'$'}{p.label}:${'$'}{p.primary.getValue()}"
+                            override fun inspectOutcome(o: CounterOutcome): Int = when (o) {
+                                is CounterOutcome.Created -> o.value.getValue()
+                                CounterOutcome.Empty -> -1
                             }
-                            override fun inspectCounter(c: HostResWorld.Counter): Int = c.getValue()
+                            override fun inspectCounter(c: Counter): Int = c.getValue()
                         }
                     },
                 )
