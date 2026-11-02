@@ -20,3 +20,4 @@
 | [0010](0010-wasmtime-lts.md) | decomposer と rust-bridge を同じ Wasmtime の LTS に揃える | 承認 |
 | [0011](0011-qualified-interface-keys.md) | interface を完全修飾名で識別し、Kotlin では WIT の構造を package に写す | 承認 |
 | [0012](0012-world-at-package-top-level.md) | world を package のトップレベルに生成し、export した interface はマーカーを context に取る | 承認 |
+| [0013](0013-multi-memory-adapters.md) | 合成コンポーネントのアダプターを multi-memory で検証し、async の組み込み関数を使わない形で生成する | 承認 |

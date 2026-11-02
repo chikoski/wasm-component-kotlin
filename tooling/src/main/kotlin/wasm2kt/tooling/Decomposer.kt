@@ -60,6 +60,13 @@ object Decomposer {
                 0
             } catch (e: WasiExitException) {
                 e.exitCode()
+            } catch (e: com.dylibso.chicory.wasm.ChicoryException) {
+                // A Rust panic aborts the wasm build with a trap; its message is on stderr (#47).
+                throw IllegalStateException(
+                    "wasm2kt-decompose crashed for $input; this is a wasm2kt bug, please report it with the component:\n" +
+                        stderr.toString(Charsets.UTF_8).trim(),
+                    e,
+                )
             }
         }
         if (exitCode != 0) {

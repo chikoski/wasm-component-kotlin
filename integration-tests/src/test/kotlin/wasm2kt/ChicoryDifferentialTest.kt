@@ -180,6 +180,30 @@ class ChicoryDifferentialTest {
      * scenario runs on a fresh instance because a trap poisons the instance (on Wasmtime 48 only
      * a core wasm trap does; see the scenario comments).
      */
+    /**
+     * Child components with their own memories passing strings and lists (#47): every pair of
+     * string encodings goes through a fused adapter and a transcoder, including the partial
+     * transcodes (a long mixed string outgrows the first destination buffer) and invalid strings.
+     */
+    @Test
+    fun `composed components with multi-memory adapters match Wasmtime`() {
+        val encodings = listOf("utf8", "utf16", "compact")
+        val samples = listOf("", "hello", "é ü ÿ", "日本語", "a🎌é日", "x".repeat(3000), ("éa" + "日🎌").repeat(500))
+        val strings = buildList {
+            for (caller in encodings) for (callee in encodings) for (s in samples) add(Call("echo-$caller-$callee", JsonPrimitive(s)))
+        }
+        val lists = listOf(
+            Call("sum", JsonArray((0 until 500).map { JsonPrimitive(it) })),
+            Call("echo-list", JsonArray((0 until 500).map { JsonPrimitive(it * 3) })),
+            Call("echo-list", JsonArray(emptyList())),
+        )
+        runBoth("composed-str", { null }, strings + lists)
+        // An invalid string from the callee traps (and poisons, as a core trap does on both).
+        for (bad in listOf("utf8", "utf16")) for (caller in encodings) {
+            runBoth("composed-str", { null }, listOf(Call("bad-$bad-via-$caller"), Call("echo-utf8-utf8", JsonPrimitive("x"))))
+        }
+    }
+
     @Test
     fun `canonical ABI traps match Wasmtime`() {
         val mem = 0x10000L

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -24,7 +25,7 @@ class ComponentPlan(
     val exports: List<PlanExport>,
 ) {
     companion object {
-        const val SUPPORTED_VERSION = 3
+        const val SUPPORTED_VERSION = 4
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
@@ -116,6 +117,12 @@ class ComponentPlan(
             "resource-new" -> Trampoline.ResourceNew(o.int("table"))
             "resource-rep" -> Trampoline.ResourceRep(o.int("table"))
             "resource-drop" -> Trampoline.ResourceDrop(o.int("table"))
+            "trap" -> Trampoline.Trap(o.array("messages").map { (it as? JsonPrimitive)?.takeUnless { m -> m is JsonNull }?.content })
+            "transcode" -> {
+                val op = o.str("op")
+                TranscodeOp.fromPlan(op)?.let { Trampoline.Transcode(it, o.int("from"), o.int("to")) }
+                    ?: Trampoline.Unsupported("transcode $op")
+            }
             else -> Trampoline.Unsupported(o["detail"]?.jsonPrimitive?.content ?: kind)
         }
 
@@ -196,7 +203,34 @@ sealed interface Trampoline {
     class ResourceNew(val table: Int) : Trampoline
     class ResourceRep(val table: Int) : Trampoline
     class ResourceDrop(val table: Int) : Trampoline
+
+    /** Raises the trap whose code the adapter passes; [messages] are indexed by code (plan v4). */
+    class Trap(val messages: List<String?>) : Trampoline
+
+    /** Copies a string between two memories of the component (plan v4; #47). */
+    class Transcode(val op: TranscodeOp, val from: Int, val to: Int) : Trampoline
     class Unsupported(val detail: String) : Trampoline
+}
+
+/** A string transcode a fused adapter performs, named as in wasmtime-environ (`Transcode::desc`). */
+enum class TranscodeOp(val desc: String) {
+    UTF8_TO_UTF8("utf8-to-utf8"),
+    UTF16_TO_UTF16("utf16-to-utf16"),
+    LATIN1_TO_LATIN1("latin1-to-latin1"),
+    LATIN1_TO_UTF16("latin1-to-utf16"),
+    LATIN1_TO_UTF8("latin1-to-utf8"),
+    UTF16_TO_COMPACT_PROBABLY_UTF16("utf16-to-compact-probably-utf16"),
+    UTF16_TO_COMPACT_UTF16("utf16-to-compact-utf16"),
+    UTF16_TO_LATIN1("utf16-to-latin1"),
+    UTF16_TO_UTF8("utf16-to-utf8"),
+    UTF8_TO_COMPACT_UTF16("utf8-to-compact-utf16"),
+    UTF8_TO_LATIN1("utf8-to-latin1"),
+    UTF8_TO_UTF16("utf8-to-utf16"),
+    ;
+
+    companion object {
+        fun fromPlan(desc: String): TranscodeOp? = values().firstOrNull { it.desc == desc }
+    }
 }
 
 enum class StringEncoding {

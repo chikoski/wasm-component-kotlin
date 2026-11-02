@@ -27,6 +27,34 @@ class ComponentBuildTest {
     }
 
     @Test
+    fun `composed components with multi-memory adapters run AOT-compiled`(@TempDir dir: Path) {
+        // #47: the bundled (wasm) decomposer splits it, Chicory's build-time compiler compiles the
+        // fused adapter, which imports both children's memories, and the transcoders run.
+        val decomposed = dir.resolve("decomposed")
+        Decomposer.decompose(fixtures.resolve("composed-str.wasm"), decomposed)
+        assertEquals(emptyList(), PlanCheck.unsupportedFeatures(decomposed))
+        val compiled = CoreModuleCompiler.compile(decomposed, dir.resolve("classes"), dir.resolve("resources"), "aot.composed")
+        assertTrue(compiled.all { it.interpretedFunctions == 0 }, "every function should be compiled")
+
+        val loader = java.net.URLClassLoader(arrayOf(dir.resolve("classes").toUri().toURL()), javaClass.classLoader)
+        val plan = wasm2kt.runtime.chicory.ComponentPlan.parse(Files.readString(decomposed.resolve("plan.json")))
+        val modules = compiled.associate { c ->
+            val meta = Files.readAllBytes(dir.resolve("resources").resolve(c.metaResource.removePrefix("/")))
+            val machine = loader.loadClass(c.machineClassName).getConstructor(com.dylibso.chicory.runtime.Instance::class.java)
+            c.index to wasm2kt.runtime.chicory.CoreModule(com.dylibso.chicory.wasm.Parser.parse(meta)) { instance ->
+                machine.newInstance(instance) as com.dylibso.chicory.runtime.Machine
+            }
+        }
+        wasm2kt.runtime.chicory.ChicoryComponent(plan, modules).instantiate(null).use { c ->
+            for (pair in listOf("utf8-utf16", "utf16-utf8", "compact-utf8", "utf8-compact")) {
+                val s = "aé日🎌".repeat(100)
+                val echoed = c.invoke("echo-$pair", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(s))))
+                assertEquals(s, (echoed as kotlinx.serialization.json.JsonPrimitive).content, "echo-$pair")
+            }
+        }
+    }
+
+    @Test
     fun `unsupported features are found in the plan`(@TempDir dir: Path) {
         Decomposer.decompose(fixtures.resolve("roundtrip.wasm"), dir.resolve("rt"))
         assertEquals(emptyList(), PlanCheck.unsupportedFeatures(dir.resolve("rt")))

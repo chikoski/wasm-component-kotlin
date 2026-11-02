@@ -1,0 +1,21 @@
+package root:component;
+
+world root {
+  export echo-utf8-utf8: func(s: string) -> string;
+  export echo-utf8-utf16: func(s: string) -> string;
+  export echo-utf8-compact: func(s: string) -> string;
+  export echo-utf16-utf8: func(s: string) -> string;
+  export echo-utf16-utf16: func(s: string) -> string;
+  export echo-utf16-compact: func(s: string) -> string;
+  export echo-compact-utf8: func(s: string) -> string;
+  export echo-compact-utf16: func(s: string) -> string;
+  export echo-compact-compact: func(s: string) -> string;
+  export bad-utf8-via-utf8: func() -> string;
+  export bad-utf8-via-utf16: func() -> string;
+  export bad-utf8-via-compact: func() -> string;
+  export bad-utf16-via-utf8: func() -> string;
+  export bad-utf16-via-utf16: func() -> string;
+  export bad-utf16-via-compact: func() -> string;
+  export sum: func(l: list<u32>) -> u32;
+  export echo-list: func(l: list<u32>) -> list<u32>;
+}

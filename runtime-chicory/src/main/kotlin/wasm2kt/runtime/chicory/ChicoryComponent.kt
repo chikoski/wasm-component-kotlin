@@ -350,6 +350,17 @@ internal class ChicoryComponentInstance(
                 dropGuestHandle(t.table, args[0].toInt())
                 null
             }
+            is Trampoline.Trap -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
+                // A fused adapter found a Canonical ABI violation (e.g. leaving the instance or an
+                // invalid string) and reports it by code, as Wasmtime's `trap` libcall does.
+                val code = args[0].toInt()
+                trap(t.messages.getOrNull(code) ?: "wasm trap: adapter trap code $code")
+            }
+            is Trampoline.Transcode -> {
+                // Memories are extracted while instantiating, so look them up on first use.
+                val transcoder by lazy { Transcoder(t.op, memories.getValue(t.from), memories.getValue(t.to)) }
+                com.dylibso.chicory.runtime.WasmFunctionHandle { _, args -> transcoder.apply(args) }
+            }
             is Trampoline.Unsupported -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, _ ->
                 throw UnsupportedOperationException("Component intrinsic not supported by the Chicory backend: ${t.detail}")
             }

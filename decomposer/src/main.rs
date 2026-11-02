@@ -24,7 +24,7 @@ use wasmtime_environ::wasmparser::{Validator, WasmFeatures};
 use wasmtime_environ::{EntityIndex, EntityType, ModuleTranslation, PrimaryMap, ScopeVec, Tunables};
 
 /// Bump whenever the plan.json schema changes incompatibly.
-const PLAN_VERSION: u32 = 3;
+const PLAN_VERSION: u32 = 4;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -58,10 +58,17 @@ type ModuleFiles = Vec<(String, Vec<u8>)>;
 /// Returns the plan and the core module files.
 pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
     let scope = ScopeVec::new();
-    let tunables = Tunables::default_u32();
+    let mut tunables = Tunables::default_u32();
+    // Chicory runs every call synchronously (async is #16). Without this, wasmtime-environ's
+    // fused adapters save and restore the async task's `context.get`/`context.set` slots and its
+    // "may block" flag around even synchronous calls, through intrinsics Chicory does not have.
+    tunables.concurrency_support = false;
     // Chicory executes plain core wasm; keep exceptions off so wasmtime's
     // generated adapters don't emit `try_table` barriers it can't run.
-    let features = (WasmFeatures::WASM2 | WasmFeatures::COMPONENT_MODEL)
+    // Multi-memory is on because wasmtime-environ validates the adapters it fuses
+    // between two child components with this validator, and an adapter that
+    // copies a string or list imports both components' memories (#47).
+    let features = (WasmFeatures::WASM2 | WasmFeatures::COMPONENT_MODEL | WasmFeatures::MULTI_MEMORY)
         .difference(WasmFeatures::EXCEPTIONS);
     let mut validator = Validator::new_with_features(features);
     let mut types = ComponentTypesBuilder::new(&validator);
@@ -160,6 +167,13 @@ impl Ctx<'_, '_> {
                     };
                     json!({ "kind": kind, "table": ty.as_u32() })
                 }
+                // Raised by fused adapters, e.g. when a string copied between two child
+                // components is not valid in its encoding (#47).
+                Trampoline::Trap => json!({ "kind": "trap", "messages": trap_messages() }),
+                // Copies a string between two child components' memories (#47).
+                Trampoline::Transcoder { op, from, from64: false, to, to64: false } => json!({
+                    "kind": "transcode", "op": op.desc(), "from": from.as_u32(), "to": to.as_u32(),
+                }),
                 other => json!({ "kind": "unsupported", "detail": format!("{other:?}") }),
             };
             j.as_object_mut().unwrap().insert("index".into(), json!(idx.as_u32()));
@@ -422,6 +436,16 @@ fn renumber_options(options: &mut [Value], exports: &mut [Value], trampolines: &
     options.sort_by_key(|o| o.get("index").and_then(Value::as_u64));
 }
 
+/// The message of every trap code a fused adapter can raise through the `trap` trampoline, indexed
+/// by code (`null` for unused codes), so the runtime can report it like Wasmtime does.
+fn trap_messages() -> Value {
+    let codes: Vec<Value> = (0..=u8::MAX)
+        .map(|code| wasmtime_environ::Trap::from_u8(code).map_or(Value::Null, |t| json!(t.to_string())))
+        .collect();
+    let used = codes.iter().rposition(|m| !m.is_null()).map_or(0, |i| i + 1);
+    Value::Array(codes[..used].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,13 +458,29 @@ mod tests {
     /// plan.json must not depend on hash iteration order (committed fixtures, Gradle build cache).
     #[test]
     fn plans_are_deterministic() {
-        for name in ["res-edge.wasm", "roundtrip.wasm", "host-res.wasm", "types.wasm"] {
+        for name in ["res-edge.wasm", "roundtrip.wasm", "host-res.wasm", "types.wasm", "composed-str.wasm"] {
             let bytes = fixture(name);
             let first = decompose(&bytes).unwrap().0;
             for _ in 0..5 {
                 assert_eq!(first, decompose(&bytes).unwrap().0, "{name}: plan changed between runs");
             }
         }
+    }
+
+    /// Child components with their own memories passing strings and lists: the fused adapters
+    /// need multi-memory and transcoders, and used to panic the decomposer (#47).
+    #[test]
+    fn composed_components_with_multi_memory_adapters_decompose() {
+        let (plan, modules) = decompose(&fixture("composed-str.wasm")).unwrap();
+        let trampolines = plan["trampolines"].as_array().unwrap();
+        let kinds: BTreeSet<&str> = trampolines.iter().map(|t| t["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, BTreeSet::from(["trap", "transcode"]), "{trampolines:?}");
+        let ops: BTreeSet<&str> = trampolines.iter().filter_map(|t| t["op"].as_str()).collect();
+        assert_eq!(ops.len(), 12, "every transcode op should be exercised: {ops:?}");
+        // The adapter module imports both children's memories.
+        let memories = |m: &Value| m["imports"].as_array().unwrap().iter().filter(|i| i["kind"] == "memory").count();
+        assert!(plan["modules"].as_array().unwrap().iter().any(|m| memories(m) == 2));
+        assert_eq!(modules.len(), plan["modules"].as_array().unwrap().len());
     }
 
     #[test]
@@ -463,3 +503,4 @@ mod tests {
         assert_eq!(sorted.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
     }
 }
+
