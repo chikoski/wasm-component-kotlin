@@ -37,6 +37,7 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 cargo build --release --manifest-path rust-bridge/Cargo.toml  # integration-tests に必要
 decomposer/build-wasm.sh                        # decomposer を変更したら必ず実行（dist を更新。再現可能ビルド）
 decomposer/regenerate-fixtures.sh               # 同上（runtime-chicory のテスト用分解結果を更新）
+./gradlew -Pwasm2kt.bench :benchmarks:bench     # 性能の計測（JVM）。ART は samples/android/benchmark。docs/performance.md
 ```
 
 CI（`.github/workflows/ci.yml`）は jvm / decomposer / native / android / emulator の 5 ジョブです。decomposer ジョブは、同梱 wasm とテスト用分解結果が最新でないと失敗します。ローカルで同じことを確認するには上のコマンドを使います。

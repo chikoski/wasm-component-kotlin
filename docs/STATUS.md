@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-01 / 対象ブランチ: `main`
+> 最終更新: 2026-11-02 / 対象ブランチ: `main`
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -56,6 +56,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * Wasmtime の FFM ブリッジ: ホスト import の戻り値とエラーメッセージに大きさの上限がない（#35）。事前コンパイル済みの `.cwasm` は `openPrecompiledSession` / `withPrecompiledSession` からだけ読み込む（#33）
 * decomposer の出力は決定的（exports と canonical options の順序）。各フィクスチャを繰り返し分解して同じ plan になることを `cargo test` で確認
 * Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
+* 性能とサイズ（[docs/performance.md](performance.md)、#19）: 整数だけの呼び出しは JVM 0.3 µs / ART 3 µs、`list<u8>` は JSON 境界のため 1 バイトあたり JVM 100 ns / ART 800 ns、小さな関数の計算は Wasmtime と同等、大きな wasm 関数を含むコード（regex）は HotSpot の JIT の上限とインタプリタへのフォールバックのため最大 53 倍遅い。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
 * Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
 
 ### 未検証・既知の制約
@@ -101,13 +102,14 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
-| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成（JSON 境界は当面継続。#19 の結果で判断） |
-| [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) | A-16 | 性能・サイズの計測 |
+| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成。#19 の結果から、まず `ByteArray` / `String` の直接コピーの経路を #13 の stream より前に入れることを提案（[performance.md](performance.md) の 6 章） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（#16 の受け入れ基準にも使う） |
 
 ### 完了
+
+* [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) 性能・サイズの計測 — [docs/performance.md](performance.md)（`benchmarks/`、`samples/android/benchmark`、`Bench` ワークフロー、`heavy` フィクスチャ）
 
 QC レビュー（2026-10-31）で見つかったもの:
 
