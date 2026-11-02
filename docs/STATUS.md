@@ -103,6 +103,8 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
 | [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成。#19 の結果から、まず `ByteArray` / `String` の直接コピーの経路を #13 の stream より前に入れることを提案（[performance.md](performance.md) の 6 章） |
+| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
+| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い（文字コードの変換器を毎回作っている。#19 で発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（#16 の受け入れ基準にも使う） |
