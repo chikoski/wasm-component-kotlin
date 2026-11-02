@@ -62,7 +62,6 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
 * Chicory バックエンドの未対応機能: async（WASI P3）、WASI のホスト実装、子コンポーネントの間で resource を受け渡す合成コンポーネント。いずれも使用時に例外になる。plan から分かるものは、Gradle プラグインがビルド時に警告する（`failOnUnsupportedFeatures` でエラーにもできる。#39）
-* メモリを持つ子コンポーネント同士の合成は、decomposer が panic する（[#47](https://github.com/chikoski/wasm-component-kotlin/issues/47)）
 * 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うとエラーになる（Kotlin の package にバージョンを含めないため。[ADR-0011](adr/0011-qualified-interface-keys.md)）
 * 1 回の生成で扱う world は 1 つ（world の API を package のトップレベルに置くため。[ADR-0012](adr/0012-world-at-package-top-level.md)）。複数の world は `--world` で選び、別々の package に生成する
 * ホスト resource の受け渡しは、セッションの呼び出し中（同じスレッド）に限られる。Wasmtime ではホストの borrow を一時的な所有ハンドルで代用している（48 でも必要。[ADR-0008](adr/0008-host-defined-resources.md)、[ADR-0010](adr/0010-wasmtime-lts.md)）
@@ -106,7 +105,6 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（#16 の受け入れ基準にも使う） |
-| [#47](https://github.com/chikoski/wasm-component-kotlin/issues/47) | — | メモリを持つ子コンポーネント同士の合成で decomposer が panic する |
 
 ### 完了
 
@@ -119,13 +117,14 @@ QC レビュー（2026-10-31）で見つかったもの:
 * [#36](https://github.com/chikoski/wasm-component-kotlin/issues/36) JSON 境界のスカラーの型の検査と option のタグの判定 — #44、[ADR-0009](adr/0009-json-boundary-option-tag-and-scalar-types.md)
 * [#38](https://github.com/chikoski/wasm-component-kotlin/issues/38) wasm-tools と Rust の版の固定、Rust の clippy / test、generator のユニットテスト — #45
 * [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) Chicory 未対応の機能をビルド時に報告する — #46
+* [#47](https://github.com/chikoski/wasm-component-kotlin/issues/47) メモリを持つ子コンポーネント同士の合成（decomposer の panic）— [ADR-0013](adr/0013-multi-memory-adapters.md)（multi-memory、plan v4 の `trap` / `transcode` トランポリン、Chicory の transcoder）
 * world を package のトップレベルに生成し、export した interface はマーカーを context に取る — [ADR-0012](adr/0012-world-at-package-top-level.md)（ADR-0011 で残った、export していない interface を呼べる制約を解消）
 * [#32](https://github.com/chikoski/wasm-component-kotlin/issues/32) interface を完全修飾名で識別し、Kotlin では WIT の構造を package に写す — [ADR-0011](adr/0011-qualified-interface-keys.md)（`Linker` と型付きの `imports(...)`、`WitSession`）
 * [#34](https://github.com/chikoski/wasm-component-kotlin/issues/34) decomposer と rust-bridge を Wasmtime 48 LTS に揃える — [ADR-0010](adr/0010-wasmtime-lts.md)（plan v3、import した resource 型ごとの動的なホスト型、ブリッジの整数の範囲検査）
 
 それ以前:
 
-* [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) ホスト定義 resource — [ADR-0008](adr/0008-host-defined-resources.md)（`WitHostResource` の interface と `Imports` の constructor / static、`HostResourceTable`、Chicory と Wasmtime ブリッジの両方、plan v2。現在は v3）
+* [#14](https://github.com/chikoski/wasm-component-kotlin/issues/14) ホスト定義 resource — [ADR-0008](adr/0008-host-defined-resources.md)（`WitHostResource` の interface と `Imports` の constructor / static、`HostResourceTable`、Chicory と Wasmtime ブリッジの両方、plan v2。現在は v4）
 * [#18](https://github.com/chikoski/wasm-component-kotlin/issues/18) Canonical ABI の検証の厳密化 — [ADR-0007](adr/0007-canonical-abi-validation.md)（`ComponentTrapException` と poison、`may_enter` / `may_leave`、ポインタ・長さ・エンコーディング・判別子・`char` の検査、ハンドルの貸し出し数、ホストの値の範囲検査、NaN の正規化）
 * [#17](https://github.com/chikoski/wasm-component-kotlin/issues/17) 型マッピングの見直し — [ADR-0006](adr/0006-type-mapping.md)（option → `T?`、`list<u8>` → `ByteArray`、char → `CodePoint`、world 名、`WitResult` の補助関数、WIT シグネチャの KDoc）。async の型は #16 で実装
 * [#11](https://github.com/chikoski/wasm-component-kotlin/issues/11) ルートのモジュール分割 — ast / generator / cli / runtime-wasmtime / integration-tests、fixtures を共有ディレクトリに

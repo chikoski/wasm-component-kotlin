@@ -1,0 +1,235 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {},
+      "exports": {
+        "echo-utf8-utf8": {
+          "function": {
+            "name": "echo-utf8-utf8",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-utf8-utf16": {
+          "function": {
+            "name": "echo-utf8-utf16",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-utf8-compact": {
+          "function": {
+            "name": "echo-utf8-compact",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-utf16-utf8": {
+          "function": {
+            "name": "echo-utf16-utf8",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-utf16-utf16": {
+          "function": {
+            "name": "echo-utf16-utf16",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-utf16-compact": {
+          "function": {
+            "name": "echo-utf16-compact",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-compact-utf8": {
+          "function": {
+            "name": "echo-compact-utf8",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-compact-utf16": {
+          "function": {
+            "name": "echo-compact-utf16",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "echo-compact-compact": {
+          "function": {
+            "name": "echo-compact-compact",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": "string"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "bad-utf8-via-utf8": {
+          "function": {
+            "name": "bad-utf8-via-utf8",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "bad-utf8-via-utf16": {
+          "function": {
+            "name": "bad-utf8-via-utf16",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "bad-utf8-via-compact": {
+          "function": {
+            "name": "bad-utf8-via-compact",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "bad-utf16-via-utf8": {
+          "function": {
+            "name": "bad-utf16-via-utf8",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "bad-utf16-via-utf16": {
+          "function": {
+            "name": "bad-utf16-via-utf16",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "bad-utf16-via-compact": {
+          "function": {
+            "name": "bad-utf16-via-compact",
+            "kind": "freestanding",
+            "params": [],
+            "result": "string"
+          }
+        },
+        "sum": {
+          "function": {
+            "name": "sum",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "l",
+                "type": 0
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "echo-list": {
+          "function": {
+            "name": "echo-list",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "l",
+                "type": 1
+              }
+            ],
+            "result": 2
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "list": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u32"
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

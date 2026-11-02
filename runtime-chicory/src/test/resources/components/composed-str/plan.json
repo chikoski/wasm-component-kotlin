@@ -1,0 +1,1484 @@
+{
+  "version": 4,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "imp",
+          "name": "echo-utf8-utf8",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf8-utf16",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf8-compact",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-utf8",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-utf16",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-compact",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-utf8",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-utf16",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-compact",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-utf8",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-utf16",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-compact",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-utf8",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-utf16",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-compact",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "sum",
+          "kind": "func"
+        },
+        {
+          "module": "imp",
+          "name": "echo-list",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "file": "core3.wasm",
+      "imports": [
+        {
+          "module": "flags",
+          "name": "instance1",
+          "kind": "global"
+        },
+        {
+          "module": "memory",
+          "name": "m0",
+          "kind": "memory"
+        },
+        {
+          "module": "realloc",
+          "name": "f0",
+          "kind": "func"
+        },
+        {
+          "module": "flags",
+          "name": "instance2",
+          "kind": "global"
+        },
+        {
+          "module": "memory",
+          "name": "m1",
+          "kind": "memory"
+        },
+        {
+          "module": "realloc",
+          "name": "f1",
+          "kind": "func"
+        },
+        {
+          "module": "callee",
+          "name": "adapter0",
+          "kind": "func"
+        },
+        {
+          "module": "runtime",
+          "name": "trap",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf8 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf8 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf8 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-latin1 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-compact-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf8 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf8 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-latin1 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf8 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-latin1 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-compact-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-latin1 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-probably-utf16 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-latin1 (mem1 => mem0)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-probably-utf16 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-latin1 (mem0 => mem1)",
+          "kind": "func"
+        },
+        {
+          "module": "callee",
+          "name": "adapter9",
+          "kind": "func"
+        },
+        {
+          "module": "callee",
+          "name": "adapter12",
+          "kind": "func"
+        },
+        {
+          "module": "callee",
+          "name": "adapter15",
+          "kind": "func"
+        },
+        {
+          "module": "callee",
+          "name": "adapter16",
+          "kind": "func"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 1,
+        "name": "mem"
+      }
+    },
+    {
+      "op": "extract-memory",
+      "index": 1,
+      "export": {
+        "instance": 0,
+        "name": "mem"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 3,
+      "args": [
+        {
+          "module": "flags",
+          "name": "instance1",
+          "def": {
+            "kind": "instance-flags",
+            "index": 1
+          }
+        },
+        {
+          "module": "memory",
+          "name": "m0",
+          "def": {
+            "instance": 0,
+            "name": "mem",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "realloc",
+          "name": "f0",
+          "def": {
+            "instance": 0,
+            "name": "realloc",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "flags",
+          "name": "instance2",
+          "def": {
+            "kind": "instance-flags",
+            "index": 2
+          }
+        },
+        {
+          "module": "memory",
+          "name": "m1",
+          "def": {
+            "instance": 1,
+            "name": "mem",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "realloc",
+          "name": "f1",
+          "def": {
+            "instance": 1,
+            "name": "realloc",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "callee",
+          "name": "adapter0",
+          "def": {
+            "instance": 0,
+            "name": "echo",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "runtime",
+          "name": "trap",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf8 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf8 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf8 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-latin1 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-compact-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf8 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 7
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf8 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 8
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 9
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 10
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 11
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-latin1 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 12
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 13
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 14
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf8 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 15
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-latin1 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 16
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf8-to-compact-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 17
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 18
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-latin1 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 19
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 20
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-probably-utf16 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 21
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-latin1 (mem1 => mem0)",
+          "def": {
+            "kind": "trampoline",
+            "index": 22
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "utf16-to-compact-probably-utf16 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 23
+          }
+        },
+        {
+          "module": "transcode",
+          "name": "latin1-to-latin1 (mem0 => mem1)",
+          "def": {
+            "kind": "trampoline",
+            "index": 24
+          }
+        },
+        {
+          "module": "callee",
+          "name": "adapter9",
+          "def": {
+            "instance": 0,
+            "name": "bad-utf8",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "callee",
+          "name": "adapter12",
+          "def": {
+            "instance": 0,
+            "name": "bad-utf16",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "callee",
+          "name": "adapter15",
+          "def": {
+            "instance": 0,
+            "name": "sum",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "callee",
+          "name": "adapter16",
+          "def": {
+            "instance": 0,
+            "name": "echo-list",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "instantiate",
+      "instance": 3,
+      "module": 2,
+      "args": [
+        {
+          "module": "imp",
+          "name": "echo-utf8-utf8",
+          "def": {
+            "instance": 2,
+            "name": "adapter0",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf8-utf16",
+          "def": {
+            "instance": 2,
+            "name": "adapter1",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf8-compact",
+          "def": {
+            "instance": 2,
+            "name": "adapter2",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-utf8",
+          "def": {
+            "instance": 2,
+            "name": "adapter3",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-utf16",
+          "def": {
+            "instance": 2,
+            "name": "adapter4",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-utf16-compact",
+          "def": {
+            "instance": 2,
+            "name": "adapter5",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-utf8",
+          "def": {
+            "instance": 2,
+            "name": "adapter6",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-utf16",
+          "def": {
+            "instance": 2,
+            "name": "adapter7",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-compact-compact",
+          "def": {
+            "instance": 2,
+            "name": "adapter8",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-utf8",
+          "def": {
+            "instance": 2,
+            "name": "adapter9",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-utf16",
+          "def": {
+            "instance": 2,
+            "name": "adapter10",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf8-compact",
+          "def": {
+            "instance": 2,
+            "name": "adapter11",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-utf8",
+          "def": {
+            "instance": 2,
+            "name": "adapter12",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-utf16",
+          "def": {
+            "instance": 2,
+            "name": "adapter13",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "bad-utf16-compact",
+          "def": {
+            "instance": 2,
+            "name": "adapter14",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "sum",
+          "def": {
+            "instance": 2,
+            "name": "adapter15",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "imp",
+          "name": "echo-list",
+          "def": {
+            "instance": 2,
+            "name": "adapter16",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "realloc",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "trap",
+      "messages": [
+        "wasm trap: call stack exhausted",
+        "wasm trap: out of bounds memory access",
+        "wasm trap: unaligned atomic",
+        "wasm trap: undefined element: out of bounds table access",
+        "wasm trap: uninitialized element",
+        "wasm trap: indirect call type mismatch",
+        "wasm trap: integer overflow",
+        "wasm trap: integer divide by zero",
+        "wasm trap: invalid conversion to integer",
+        "wasm trap: wasm `unreachable` instruction executed",
+        "wasm trap: interrupt",
+        "wasm trap: all fuel consumed by WebAssembly",
+        "wasm trap: atomic wait on non-shared memory",
+        "wasm trap: null reference",
+        "wasm trap: out of bounds array access",
+        "wasm trap: allocation size too large",
+        "wasm trap: cast failure",
+        "wasm trap: cannot enter component instance",
+        "wasm trap: async-lifted export failed to produce a result",
+        "wasm trap: unhandled tag",
+        "wasm trap: continuation already consumed",
+        "wasm trap: pulley opcode disabled at compile time was executed",
+        "wasm trap: deadlock detected: event loop cannot make further progress",
+        "wasm trap: cannot leave component instance",
+        "wasm trap: cannot block a synchronous task before returning",
+        "wasm trap: invalid `char` bit pattern",
+        "wasm trap: should have finished string encoding",
+        "wasm trap: code units should be equal",
+        "wasm trap: pointer should be aligned",
+        "wasm trap: upper bits should be unset",
+        "wasm trap: string content out-of-bounds",
+        "wasm trap: list content out-of-bounds",
+        "wasm trap: invalid variant discriminant",
+        "wasm trap: unaligned pointer",
+        "wasm trap: `task.cancel` called by task which has not been cancelled",
+        "wasm trap: `task.return` or `task.cancel` called more than once for current task",
+        "wasm trap: `subtask.cancel` called after terminal status delivered",
+        "wasm trap: invalid `task.return` signature and/or options for current task",
+        "wasm trap: cannot drop waitable set with waiters",
+        "wasm trap: cannot drop a subtask which has not yet resolved",
+        "wasm trap: start function does not match expected type (currently only `(i32) -> ()` is supported)",
+        "wasm trap: the start function index points to an uninitialized function",
+        "wasm trap: backpressure counter overflow",
+        "wasm trap: unsupported callback code",
+        "wasm trap: cannot resume thread which is not suspended",
+        "wasm trap: cannot have concurrent operations active on a future/stream",
+        "wasm trap: reference count overflow",
+        "wasm trap: stream read/write count too large",
+        "wasm trap: waitable cannot be used synchronously while added to a waitable set",
+        "wasm trap: uncaught exception propagated out of component"
+      ],
+      "index": 0
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-utf8",
+      "from": 0,
+      "to": 1,
+      "index": 1
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-utf8",
+      "from": 1,
+      "to": 0,
+      "index": 2
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 3
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-utf8",
+      "from": 1,
+      "to": 0,
+      "index": 4
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-latin1",
+      "from": 0,
+      "to": 1,
+      "index": 5
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-compact-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 6
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-utf8",
+      "from": 1,
+      "to": 0,
+      "index": 7
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-utf8",
+      "from": 0,
+      "to": 1,
+      "index": 8
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 9
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 10
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 11
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-latin1",
+      "from": 0,
+      "to": 1,
+      "index": 12
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-compact-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 13
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 14
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-utf8",
+      "from": 0,
+      "to": 1,
+      "index": 15
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-latin1",
+      "from": 1,
+      "to": 0,
+      "index": 16
+    },
+    {
+      "kind": "transcode",
+      "op": "utf8-to-compact-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 17
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 18
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-latin1",
+      "from": 1,
+      "to": 0,
+      "index": 19
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-compact-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 20
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-compact-probably-utf16",
+      "from": 0,
+      "to": 1,
+      "index": 21
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-latin1",
+      "from": 0,
+      "to": 1,
+      "index": 22
+    },
+    {
+      "kind": "transcode",
+      "op": "utf16-to-compact-probably-utf16",
+      "from": 1,
+      "to": 0,
+      "index": 23
+    },
+    {
+      "kind": "transcode",
+      "op": "latin1-to-latin1",
+      "from": 1,
+      "to": 0,
+      "index": 24
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "latin1+utf16",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf16",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "latin1+utf16",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 4,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 5,
+      "stringEncoding": "utf16",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "bad-utf16-via-compact",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf16-compact",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "bad-utf16-via-utf16",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf16-utf16",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "bad-utf16-via-utf8",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf16-utf8",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "bad-utf8-via-compact",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf8-compact",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "bad-utf8-via-utf16",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf8-utf16",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "bad-utf8-via-utf8",
+      "func": {
+        "instance": 3,
+        "name": "bad-utf8-utf8",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-compact-compact",
+      "func": {
+        "instance": 3,
+        "name": "echo-compact-compact",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-compact-utf16",
+      "func": {
+        "instance": 3,
+        "name": "echo-compact-utf16",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-compact-utf8",
+      "func": {
+        "instance": 3,
+        "name": "echo-compact-utf8",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-list",
+      "func": {
+        "instance": 3,
+        "name": "echo-list",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "l",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u32"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "u32"
+            }
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf16-compact",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf16-compact",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf16-utf16",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf16-utf16",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf16-utf8",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf16-utf8",
+        "kind": "export"
+      },
+      "options": 5,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf8-compact",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf8-compact",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf8-utf16",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf8-utf16",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "echo-utf8-utf8",
+      "func": {
+        "instance": 3,
+        "name": "echo-utf8-utf8",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "string"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "sum",
+      "func": {
+        "instance": 3,
+        "name": "sum",
+        "kind": "export"
+      },
+      "options": 4,
+      "type": {
+        "params": [
+          {
+            "name": "l",
+            "type": {
+              "k": "list",
+              "element": {
+                "k": "u32"
+              }
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

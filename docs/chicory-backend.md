@@ -99,6 +99,7 @@ KotlinPoet）は Gradle ワーカー内の**独立したクラスローダー**�
 * ホスト import（ディスパッチキーは Wasmtime ブリッジと同じ）、コンポーネントが定義する resource（`resource.new/rep/drop`、
   デストラクタ、ホスト側ハンドル）、ホストが定義する resource（import された resource。own / borrow の受け渡し、
   drop 時の `[resource-drop]<name>` 呼び出し。[ADR-0008](adr/0008-host-defined-resources.md)）に対応
+* 子コンポーネントがそれぞれメモリを持つ合成コンポーネント（文字列と list の受け渡し）。アダプターの文字列変換（12 種類の transcoder。部分的な変換と不正なエンコーディングのトラップを含め Wasmtime 48 と同じ）と `trap` に対応（#47、[ADR-0013](adr/0013-multi-memory-adapters.md)）
 * `ChicoryComponent.fromDirectory(dir)` を使うと、分解結果をインタプリタで直接実行することもできます（テスト・検証用）
 
 ### エラーとトラップ
