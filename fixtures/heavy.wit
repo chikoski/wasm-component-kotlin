@@ -1,0 +1,14 @@
+package example:heavy@0.1.0;
+
+/// A component built from Rust's std with regex and serde_json, to measure how large real-world
+/// core modules compile (AOT, dex) and run.
+world heavy {
+    /// Number of non-overlapping matches of `pattern` in `text`.
+    export regex-count: func(pattern: string, text: string) -> result<u32, string>;
+    /// Parses JSON and prints it back in compact form.
+    export json-roundtrip: func(json: string) -> result<string, string>;
+    /// Sum of a simple LCG sequence: a tight integer loop (pure compute).
+    export lcg-sum: func(seed: u32, n: u32) -> u64;
+    /// Sorts bytes and returns them (allocation and memcpy heavy).
+    export sort-bytes: func(data: list<u8>) -> list<u8>;
+}
