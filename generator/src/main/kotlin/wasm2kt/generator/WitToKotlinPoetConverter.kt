@@ -362,7 +362,7 @@ class WitToKotlinPoetConverter(
             PropertySpec.builder(requiredKeysName, SET.parameterizedBy(STRING), KModifier.PRIVATE)
                 .initializer(
                     if (requiredKeys.isEmpty()) CodeBlock.of("emptySet()")
-                    else CodeBlock.of("setOf(\n%L)", requiredKeys.map { CodeBlock.of("%S", it) }.joinToCode(",\n", suffix = ",\n")),
+                    else CodeBlock.of("setOf(\n⇥%L⇤)", requiredKeys.map { CodeBlock.of("%S", it) }.joinToCode(",\n", suffix = ",\n")),
                 )
                 .build(),
         )

@@ -1,0 +1,200 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        }
+      },
+      "exports": {
+        "run": {
+          "function": {
+            "name": "run",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "code",
+                "type": "u32"
+              }
+            ],
+            "result": "string"
+          }
+        },
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        }
+      },
+      "package": 2
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "types",
+      "types": {
+        "error-code": 0,
+        "tally": 1
+      },
+      "functions": {
+        "[constructor]tally": {
+          "name": "[constructor]tally",
+          "kind": {
+            "constructor": 1
+          },
+          "params": [
+            {
+              "name": "start",
+              "type": "u32"
+            }
+          ],
+          "result": 2
+        },
+        "[method]tally.get": {
+          "name": "[method]tally.get",
+          "kind": {
+            "method": 1
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 3
+            }
+          ],
+          "result": "u32"
+        },
+        "describe": {
+          "name": "describe",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "e",
+              "type": 0
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "error-code": 4
+      },
+      "functions": {
+        "describe": {
+          "name": "describe",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "e",
+              "type": 4
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 1
+    }
+  ],
+  "types": [
+    {
+      "name": "error-code",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "code",
+              "type": "u32"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "tally",
+      "kind": "resource",
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 1
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 1
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "missing",
+              "type": "string"
+            },
+            {
+              "name": "denied",
+              "type": null
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 1
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:http@0.1.0",
+      "interfaces": {
+        "types": 0
+      },
+      "worlds": {}
+    },
+    {
+      "name": "example:fs@0.1.0",
+      "interfaces": {
+        "types": 1
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

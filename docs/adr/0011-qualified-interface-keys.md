@@ -75,7 +75,9 @@ package のセグメントの変換:
 * export した interface は、先頭に `exports` を付けた `<base>.exports.<ns>.<pkg>.<iface>` に置く。同じ interface を import と export の両方で使っても、Component Model では別の実体なので別に生成する
 * インライン interface は `<base>.<name>` に置く
 * interface 内の型（record、variant、resource など）とホストが実装する Kotlin interface は、その package のトップレベルに PascalCase で置き、修飾しない（`<base>.wasi.http.types.ErrorCode`）。型名の衝突は package で解消するので、world 側で別名を付ける必要はない
-* 共通の型（`WitOption`、`WitResult`、`CodePoint` など）は従来どおり `<base>/WitSupport.kt`
+* ホストが実装する Kotlin interface（import）と呼び出し用の `object`（export）の名前は、interface 名の PascalCase。同じ interface に同じ名前の型があるとき（`wasi:io/error` の `resource error`）だけ、`Interface` を付ける（`ErrorInterface`）。判断はその interface の中だけで決まるので、ほかの import を足しても名前は変わらない
+* 共通の型（`WitOption`、`WitResult`、`CodePoint` など）は従来どおり `<base>/WitSupport.kt`。world ごとの `Session` の基底 `WitSession` もここに置き、interface レベルのコード（export した interface の呼び出し、コンポーネント定義の resource）は `WitSession` を受け取る。world をまたいで同じクラスを共有するため
+* 1 回の生成で複数の world を出力するとき、interface は world をまたいで 1 回だけ生成する。別々の interface が同じ Kotlin package に写る場合（world ごとのインライン interface の名前が同じなど）は、生成時にエラーにする
 
 **セグメントの変換**
 
@@ -106,7 +108,7 @@ package のセグメントの変換:
   ```
 
 * 関数名はどの interface でも `add` で、引数の型でオーバーロードとして解決する。1 つのオブジェクトが複数の interface を実装して曖昧になるときは、import の別名で区別する
-* world 直下の import 関数は、world の package に、それだけを持つ interface と `Linker.add` を生成する
+* world 直下の import 関数と、world 直下の resource の constructor / static は、world の package に、それだけを持つ interface と `Linker.add` を生成する（world がオブジェクトの間は `<World>.Imports`。`imports(...)` の引数名は `world`）
 
 上の層（world 単位）:
 
@@ -132,6 +134,7 @@ package のセグメントの変換:
 
 * ファクトリーはセッションを開くたびに呼ぶ。ホストの実装が状態を持っても、セッション間で混ざらない（`HostResourceTable` がセッションごとなのと揃う）。共有したいときは同じオブジェクトを返せばよい
 * 引数名は、完全修飾名から作る: namespace + package + interface のキャメルケース（`wasiHttpTypes`）。インライン interface は素の名前（`foo`）。両者が一致したら（インライン interface の名前が `wasi-http-types` など）生成時にエラーにする
+* `Linker` 自身も `ImportsFactory`（自分を返す）なので、`withSession` / `openSession` の引数は `ImportsFactory` の 1 種類で済む。直接渡した `Linker` は、それで開いたすべてのセッションが共有する
 * 引数の順序は WIT の import の順にする。WIT の変更で順序が変わりうるので、ドキュメントでは名前付き引数を勧める
 * `withSession` / `openSession` は `Linker` を直接受け取る形も持つ。その場合は、セッションを開くときに world が import するキーがすべて登録されているかを確かめ、足りなければ不足している interface の一覧を付けて `IllegalArgumentException` にする（コンポーネントが import を呼んだときに初めて `Unknown host import` で落ちる、ということを避ける）
 
@@ -142,6 +145,7 @@ package のセグメントの変換:
 * ディスパッチキーが変わる。手書きで `WitHostImportDispatcher` を実装しているコードと、`ComponentBackend.invoke` を直接呼ぶコードは、キーの更新が必要
 * 同じ PR でそろえて変えるもの: 生成器のキーと名前の作り方（`WitToKotlinPoetConverter` の import / export の両側、`allocateWorldTypeNames`）、`PlanImport.dispatchKey` と `resolveExport`（Chicory）、`rust-bridge` の関数の解決とホスト import の登録
 * `runtime-api` に `Linker` と `ImportsFactory` が加わる（JVM 11 の範囲で実装する）
+* 生成される `WasmtimeSession.newResource` は、resource 名ではなく constructor の完全な関数名（`<interface>#[constructor]<resource>`）を受け取る。`InMemoryWasmtimeSession` の登録も同じキーにする
 * 生成されるファイルが増える。Gradle プラグインの出力先ディレクトリは変わらない。インクリメンタルコンパイルには有利
 * テスト
   * `wasi:filesystem/types` と `wasi:http/types` を両方 import / export するフィクスチャで、両バックエンドの E2E と差分テスト

@@ -64,7 +64,10 @@ class ChicoryComponentTest {
             c.invoke("[method]counter.add", args(a, 5))
             assertEquals(16, c.invoke("[method]counter.get-value", args(a)).jsonPrimitive.int)
 
-            val b = c.invoke("counter-api#[constructor]counter", args(26)).jsonPrimitive.int
+            val b = c.invoke("example:counter/counter-api@0.1.0#[constructor]counter", args(26)).jsonPrimitive.int
+            // Short and unversioned interface names are accepted while they match one export (ADR-0011).
+            c.invoke("counter-api#[method]counter.increment", args(b))
+            c.invoke("example:counter/counter-api#[method]counter.add", args(b, -1))
             val merged = c.invoke("[static]counter.merge", args(a, b)).jsonPrimitive.int
             assertEquals(42, c.invoke("[method]counter.get-value", args(merged)).jsonPrimitive.int)
 

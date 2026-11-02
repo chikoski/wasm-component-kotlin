@@ -1,0 +1,36 @@
+package example:same-name@0.1.0;
+
+/// Two interfaces with the same short name `types` (#32, ADR-0011), both imported and exported:
+/// the import copies are implemented by the host, the export copies by the guest.
+world same-name {
+    import example:http/types@0.1.0;
+    import example:fs/types@0.1.0;
+    export example:http/types@0.1.0;
+    export example:fs/types@0.1.0;
+
+    /// Calls both imported `describe` functions and the host-defined `tally` of `example:http/types`.
+    export run: func(code: u32) -> string;
+}
+
+package example:http@0.1.0 {
+    interface types {
+        record error-code {
+            code: u32,
+        }
+        resource tally {
+            constructor(start: u32);
+            get: func() -> u32;
+        }
+        describe: func(e: error-code) -> string;
+    }
+}
+
+package example:fs@0.1.0 {
+    interface types {
+        variant error-code {
+            missing(string),
+            denied,
+        }
+        describe: func(e: error-code) -> string;
+    }
+}

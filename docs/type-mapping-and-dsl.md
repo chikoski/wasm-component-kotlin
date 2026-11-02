@@ -9,6 +9,9 @@
 | WIT | Kotlin |
 | :--- | :--- |
 | `world foo` / `world foo-world` | `object FooWorld`（名前が `World` で終わる場合は付け足さない） |
+| import した `interface ns:pkg/iface` | package `<base>.<ns>.<pkg>.<iface>` の型と、ホストが実装する `interface Iface`、`fun Linker.add(impl: Iface)`（[ADR-0011](adr/0011-qualified-interface-keys.md)） |
+| export した `interface ns:pkg/iface` | package `<base>.exports.<ns>.<pkg>.<iface>` の型と、呼び出し用の `object Iface` |
+| package の名前のセグメント | 小文字で `-` を `_` に（`outgoing-handler` → `outgoing_handler`）。Kotlin のキーワードは末尾に `_`（`object` → `object_`） |
 | `bool` / `s8`〜`s64` / `u8`〜`u64` / `f32` / `f64` | `Boolean` / `Byte`〜`Long` / `UByte`〜`ULong` / `Float` / `Double` |
 | `char` | `CodePoint`（`value: Int`。`CodePoint.of('a')`、`CodePoint.of("🎌")`） |
 | `string` | `String` |
@@ -20,7 +23,7 @@
 | `tuple<A, B>` | `Tuple2<A, B>` |
 | `record` / `variant` / `enum` / `flags` | `data class` / `sealed interface` / `enum class` / `value class` |
 | `resource`（コンポーネントが export） | `AutoCloseable` なクラス（ホストはハンドルを持つ） |
-| `resource`（コンポーネントが import。world 直下か import した interface） | ホストが実装する `interface`（`WitHostResource`）。constructor / static は `Imports` のメンバー |
+| `resource`（コンポーネントが import。world 直下か import した interface） | ホストが実装する `interface`（`WitHostResource`）。constructor / static は、その interface（world 直下なら `<World>.Imports`）のメンバー |
 | `async func` / `future<T>` / `stream<T>` | `suspend fun` / `Deferred<T>` / `Flow<T>`（予定。Chicory のみ。#16） |
 
 生成される関数の KDoc には、元の WIT の定義（例: ``WIT: `lookup: func(k: string) -> option<option<s32>>` ``）が書き出されます。
@@ -33,23 +36,21 @@ WIT の `world` は、Kotlin の **シングルトンオブジェクト (`object
 
 ```kotlin
 object CalculatorWorld {
+    /** world 直下の import（ホストが実装する） */
     interface Imports {
         fun log(msg: String)
     }
 
-    class Session internal constructor(
-        internal val runtimeSession: WasmtimeSession,
-    ) : AutoCloseable {
-        override fun close() {
-            runtimeSession.close()
-        }
-    }
+    /** world が import するものを、すべて必須の引数として受け取る */
+    fun imports(world: () -> Imports): ImportsFactory = ...
 
-    fun openSession(wasmPath: Path, imports: Imports): Session = ...
+    class Session internal constructor(runtimeSession: WasmtimeSession) : WitSession(runtimeSession)
+
+    fun openSession(wasmPath: Path, imports: ImportsFactory): Session = ...
 
     inline fun <R> withSession(
         wasmPath: Path,
-        imports: Imports,
+        imports: ImportsFactory,
         block: context(Session) () -> R,
     ): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
 }
@@ -60,7 +61,62 @@ object CalculatorWorld {
 * **`openSession`**: GUI アプリやサーバーなどで長期間セッションを保持したい場合は、`val session = MyWorld.openSession(...)` で取得し、呼び出し時に `context(session) { MyWorld.func() }` を使います。使い終わったら `session.close()` を呼びます。
 
 ### 1.2 インポートがない World の省略呼び出し
-WIT の `world` にホスト関数インポートが存在しない場合（例: `arithmetic.wit`）、`Imports` には `Imports.EMPTY` がデフォルト引数として設定されるため、第2引数を省略して `ArithmeticWorld.withSession(wasmPath) { ... }` と簡潔に書けます。
+WIT の `world` にホスト関数インポートが存在しない場合（例: `arithmetic.wit`）、`imports` には `ImportsFactory.EMPTY` がデフォルト引数として設定されるため、第2引数を省略して `ArithmeticWorld.withSession(wasmPath) { ... }` と簡潔に書けます。
+
+### 1.3 interface と package、ホスト import の渡し方（ADR-0011）
+
+interface は、WIT の `namespace:package/interface` をそのまま Kotlin の package に写した場所に生成されます。
+短い名前が同じ interface（`wasi:http/types` と `wasi:filesystem/types`）も、package で区別されます。
+
+```text
+<base>/
+  CalculatorWorld.kt                       world（object CalculatorWorld）
+  WitSupport.kt                            共通の型（WitOption、WitResult、WitSession など）
+  example/calc/types/Types.kt              import した example:calc/types の型と、ホストが実装する interface
+  exports/example/calc/counters/Counters.kt  export した example:calc/counters の型と、呼び出し用の object
+```
+
+* package のセグメントは小文字で `-` を `_` にします。Kotlin のキーワードは末尾に `_` を付けます（`object` → `object_`）
+* 同じ interface を import と export の両方で使う world では、別々の package に別々に生成されます（import 側はホストが、export 側はコンポーネントが実装する）
+* 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うと、エラーになります
+* interface の名前と同じ名前の型があるとき（`wasi:io/error` の `resource error`）は、interface の側に `Interface` を付けます（`ErrorInterface`）
+
+ホストは、import した interface ごとに生成された Kotlin interface を実装し、world の `imports(...)` に渡します。
+引数名は namespace + package + interface のキャメルケースです（インライン interface は world 内の名前）。
+どれかを渡し忘れるとコンパイルエラーになります。各関数はセッションを開くたびに呼ばれるので、状態を持つ実装もセッション間で混ざりません。
+
+```kotlin
+import com.example.app.wasi.filesystem.types.Types as FilesystemTypes
+import com.example.app.wasi.http.types.Types as HttpTypes
+
+val imports = MyWorld.imports(
+    wasiHttpTypes = { object : HttpTypes { /* ... */ } },
+    wasiFilesystemTypes = { object : FilesystemTypes { /* ... */ } },
+)
+MyWorld.withSession(component, imports) { /* ... */ }
+```
+
+下の層では、interface ごとの `fun Linker.add(impl)` が、実装を完全修飾名のキー（`wasi:http/types@0.2.0#handle`）で
+`Linker` に登録します。`Linker` を自分で組み立てて `withSession` に直接渡すこともできます。その場合は、world が import する
+キーがすべて登録されているかをセッションを開くときに確かめ、足りなければ不足している interface を挙げて `IllegalArgumentException` にします。
+
+```kotlin
+import com.example.app.wasi.http.types.add
+
+val linker = Linker().apply { add(MyHttpTypes()) /* ... */ }
+MyWorld.withSession(component, linker) { /* ... */ }
+```
+
+export した interface の関数は、その package の `object` の拡張関数として呼びます。
+
+```kotlin
+import com.example.app.exports.example.roundtrip.math_api.MathApi
+import com.example.app.exports.example.roundtrip.math_api.scale
+
+RoundtripWorld.withSession(component, imports) {
+    MathApi.scale(7)
+}
+```
 
 ---
 
@@ -278,7 +334,7 @@ class Counter internal constructor(
 
 world 直下の `resource`、または world が import する interface の `resource` は、**ホストが実装します**
 （[ADR-0008](adr/0008-host-defined-resources.md)）。生成されるのは `WitHostResource` を継承した `interface` で、
-メソッドだけを持ちます。constructor と static 関数は `Imports`（interface なら `Imports` の該当プロパティ）のメンバーになります。
+メソッドだけを持ちます。constructor と static 関数は、resource を持つ interface のホスト用 interface（world 直下なら `<World>.Imports`）のメンバーになります。
 
 ```wit
 interface store {
@@ -301,17 +357,20 @@ interface Store {
     fun blobMerge(a: Blob, b: Blob): Blob         // static
 }
 
-// ホスト側の実装
-class MyBlob(var bytes: ByteArray) : HostResWorld.Blob {
+// ホスト側の実装（Blob と Store は package <base>.example.host_res.store にある）
+class MyBlob(var bytes: ByteArray) : Blob {
     override fun size() = bytes.size.toUInt()
     override fun close() { /* コンポーネントが最後の own ハンドルを drop したとき */ }
 }
-val imports = object : HostResWorld.Imports {
-    override val store = object : HostResWorld.Store {
-        override fun newBlob(init: ByteArray) = MyBlob(init)
-        override fun blobMerge(a: HostResWorld.Blob, b: HostResWorld.Blob) = MyBlob(a.read() + b.read())
-    }
-}
+val imports = HostResWorld.imports(
+    exampleHostResStore = {
+        object : Store {
+            override fun newBlob(init: ByteArray) = MyBlob(init)
+            override fun blobMerge(a: Blob, b: Blob) = MyBlob(a.read() + b.read())
+        }
+    },
+    world = { /* world 直下の resource ticket の constructor など */ },
+)
 HostResWorld.withSession(component, imports) {
     HostResWorld.measure(MyBlob(byteArrayOf(1, 2)))   // borrow: その呼び出しの間だけ貸す
 }
@@ -325,7 +384,7 @@ HostResWorld.withSession(component, imports) {
   そのセッションの呼び出し中（同じスレッド）に限られます
 
 ### 所有権のポイント
-1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`CounterWorld.Counter(10)` と通常のコンストラクタ呼び出しのように書けます。
+1. **自然なインスタンス化**: `companion object` の `operator fun invoke` が `context(session: Session)` を受け取るため、`Counter(10)` と通常のコンストラクタ呼び出しのように書けます（`Counter` は export した interface の package にあり、`context` には任意の world の `Session` の基底 `WitSession` を受け取ります）。
 2. **`.use { ... }` とのシームレスな統合**: 生成時に `Session` を内部フィールド `private val session` にキャプチャするため、`override fun close()` には追加のコンテキストパラメータが不要で、Kotlin 標準の `.use { ... }` がそのまま使えます。
 3. **`borrow<T>` vs `own<T>`**:
    * `borrow<T>` 引数には `a.handle` が渡され、呼び出し後も `a` は引き続き使用可能です。

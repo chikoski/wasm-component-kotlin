@@ -75,6 +75,24 @@ class GeneratorUnitTest {
     }
 
     @Test
+    fun `interfaces with the same short name get their own packages, keys and parameters`() {
+        val files = generate("same-name")
+        val http = files.getValue("example/http/types/Types")
+        val fs = files.getValue("example/fs/types/Types")
+        assertTrue("define(\"example:http/types@0.1.0#describe\")" in http, http)
+        assertTrue("define(\"example:fs/types@0.1.0#describe\")" in fs, fs)
+        // The import copy of `tally` is a host resource, the export copy a component-defined one.
+        assertTrue("interface Tally : WitHostResource" in http, http)
+        val guestHttp = files.getValue("exports/example/http/types/Types")
+        assertTrue("class Tally internal constructor(" in guestHttp, guestHttp)
+        assertTrue("\"example:http/types@0.1.0#[constructor]tally\"" in guestHttp, guestHttp)
+        assertTrue("exports/example/fs/types/Types" in files)
+        val world = files.getValue("SameNameWorld")
+        // KotlinPoet aliases the two `Types` imports; the parameter names come from the qualified names.
+        assertTrue(Regex("""fun imports\(exampleHttpTypes: \(\) -> \w+, exampleFsTypes: \(\) -> \w+\): ImportsFactory""").containsMatchIn(world), world)
+    }
+
+    @Test
     fun `bindings without Wasmtime sessions do not reference the bridge`() {
         val files = generate("roundtrip", emitWasmtimeSessions = false)
         for ((name, content) in files) {
@@ -88,7 +106,7 @@ class GeneratorUnitTest {
 
     @Test
     fun `generation is deterministic`() {
-        for (name in listOf("calculator", "types", "host-res", "roundtrip")) {
+        for (name in listOf("calculator", "types", "host-res", "roundtrip", "same-name")) {
             assertEquals(generate(name), generate(name), "$name generated differently on a second run")
         }
     }

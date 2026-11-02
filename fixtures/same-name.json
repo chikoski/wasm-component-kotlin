@@ -1,0 +1,206 @@
+{
+  "worlds": [
+    {
+      "name": "same-name",
+      "imports": {
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        },
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        }
+      },
+      "exports": {
+        "run": {
+          "function": {
+            "name": "run",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "code",
+                "type": "u32"
+              }
+            ],
+            "result": "string",
+            "docs": {
+              "contents": "Calls both imported `describe` functions and the host-defined `tally` of `example:http/types`."
+            }
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        },
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        }
+      },
+      "package": 2,
+      "docs": {
+        "contents": "Two interfaces with the same short name `types` (#32, ADR-0011), both imported and exported:\nthe import copies are implemented by the host, the export copies by the guest."
+      }
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "types",
+      "types": {
+        "error-code": 0
+      },
+      "functions": {
+        "describe": {
+          "name": "describe",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "e",
+              "type": 0
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "error-code": 1,
+        "tally": 2
+      },
+      "functions": {
+        "[constructor]tally": {
+          "name": "[constructor]tally",
+          "kind": {
+            "constructor": 2
+          },
+          "params": [
+            {
+              "name": "start",
+              "type": "u32"
+            }
+          ],
+          "result": 4
+        },
+        "[method]tally.get": {
+          "name": "[method]tally.get",
+          "kind": {
+            "method": 2
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 3
+            }
+          ],
+          "result": "u32"
+        },
+        "describe": {
+          "name": "describe",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "e",
+              "type": 1
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 1
+    }
+  ],
+  "types": [
+    {
+      "name": "error-code",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "missing",
+              "type": "string"
+            },
+            {
+              "name": "denied",
+              "type": null
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 0
+      }
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "code",
+              "type": "u32"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 1
+      }
+    },
+    {
+      "name": "tally",
+      "kind": "resource",
+      "owner": {
+        "interface": 1
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 2
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 2
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:fs@0.1.0",
+      "interfaces": {
+        "types": 0
+      },
+      "worlds": {}
+    },
+    {
+      "name": "example:http@0.1.0",
+      "interfaces": {
+        "types": 1
+      },
+      "worlds": {}
+    },
+    {
+      "name": "example:same-name@0.1.0",
+      "interfaces": {},
+      "worlds": {
+        "same-name": 0
+      }
+    }
+  ]
+}
