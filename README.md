@@ -24,7 +24,7 @@
   * `flags` は `@JvmInline value class` + ビット演算メソッド（`or`, `and`）としてゼロオーバーヘッドに生成します。
 * **Chicory バックエンドと Gradle プラグイン（Android 対応）**
   * Gradle プラグイン `io.github.wasm2kt` で、コンポーネントの core モジュールをビルド時に JVM バイトコードへコンパイルし、純 JVM のランタイム [Chicory](https://github.com/dylibso/chicory) 上で実行します。ネイティブライブラリ・JNI・`wasm-tools` は不要で、Android でもそのまま動きます。
-  * ワールド DSL は共通で、`CalculatorWorld.withSession(CalculatorComponent) { ... }` のように渡すものを変えるだけです。詳しくは [Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md) を参照してください。
+  * ワールド DSL は共通で、`withSession(CalculatorComponent) { ... }` のように渡すものを変えるだけです。詳しくは [Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md) を参照してください。
 * **Wasmtime ネイティブ実行 (JVM FFM API) & インメモリモックの両対応**
   * デフォルトでは Java 21+ の Foreign Function & Memory (FFM) API (`java.lang.foreign`) 経由で Rust 製の `wasmtime` ブリッジ (`cdylib`) を呼び出し、実際の `.wasm` コンポーネントをネイティブ実行します。
   * 単体テスト向けに、`.wasm` バイナリやネイティブライブラリなしで動作を検証できる `InMemoryWasmtimeSession` も同梱しています。
@@ -56,11 +56,11 @@ fun main() {
     val wasmPath = Paths.get("arithmetic.wasm")
 
     // withSession ブロックを抜けると Wasmtime の Store / Instance が自動的に close されます
-    ArithmeticWorld.withSession(wasmPath) {
-        val sum = ArithmeticWorld.add(20, 7)      // 27
-        val diff = ArithmeticWorld.sub(50, 8)     // 42
-        val prod = ArithmeticWorld.mul(-6, -7)    // 42
-        val quot = ArithmeticWorld.div(84, 2)     // 42
+    withSession(wasmPath) {
+        val sum = add(20, 7)      // 27
+        val diff = sub(50, 8)     // 42
+        val prod = mul(-6, -7)    // 42
+        val quot = div(84, 2)     // 42
         println("sum=$sum, diff=$diff, prod=$prod, quot=$quot")
     }
 }
@@ -99,7 +99,7 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("counter.wasm")
 
-    CounterWorld.withSession(wasmPath) {
+    withSession(wasmPath) {
         // Counter(...) の生成時に Context Parameter から Session を自動キャプチャし、.use で自動解放
         Counter(10).use { c1 ->
             c1.increment()

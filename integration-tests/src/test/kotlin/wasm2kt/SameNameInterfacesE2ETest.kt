@@ -43,10 +43,8 @@ class SameNameInterfacesE2ETest {
         import $pkg.example.http.types.ErrorCode as HttpErrorCode
         import $pkg.example.http.types.Tally as HostTally
         import $pkg.example.http.types.Types as HttpTypes
-        import $pkg.exports.example.fs.types.Types as GuestFs
         import $pkg.exports.example.fs.types.ErrorCode as GuestFsErrorCode
         import $pkg.exports.example.fs.types.describe as describeFs
-        import $pkg.exports.example.http.types.Types as GuestHttp
         import $pkg.exports.example.http.types.ErrorCode as GuestHttpErrorCode
         import $pkg.exports.example.http.types.Tally as GuestTally
         import $pkg.exports.example.http.types.describe as describeHttp
@@ -56,7 +54,7 @@ class SameNameInterfacesE2ETest {
             override fun close() {}
         }
 
-        val imports = SameNameWorld.imports(
+        val imports = imports(
             exampleHttpTypes = {
                 object : HttpTypes {
                     override fun newTally(start: UInt): HostTally = Tally(start)
@@ -73,22 +71,22 @@ class SameNameInterfacesE2ETest {
             },
         )
 
-        context(session: SameNameWorld.Session)
+        context(session: Session)
         fun exercise(): String {
-            val run = SameNameWorld.run(7u)
-            val http = GuestHttp.describeHttp(GuestHttpErrorCode(3u))
-            val fs = GuestFs.describeFs(GuestFsErrorCode.Missing("x")) + "," + GuestFs.describeFs(GuestFsErrorCode.Denied)
+            val run = run(7u)
+            val http = describeHttp(GuestHttpErrorCode(3u))
+            val fs = describeFs(GuestFsErrorCode.Missing("x")) + "," + describeFs(GuestFsErrorCode.Denied)
             val tally = GuestTally(5u).use { it.get(); it.get() }
             return "${'$'}run;${'$'}http;${'$'}fs;tally=${'$'}tally"
         }
 
-        fun runWasmtime(wasm: Path): String = SameNameWorld.withSession(wasm, imports) { exercise() }
+        fun runWasmtime(wasm: Path): String = withSession(wasm, imports) { exercise() }
 
-        fun runChicory(component: ComponentBackendFactory): String = SameNameWorld.withSession(component, imports) { exercise() }
+        fun runChicory(component: ComponentBackendFactory): String = withSession(component, imports) { exercise() }
 
         /** Opens a session with an empty linker: the missing imports must be reported before instantiation. */
         fun openWithoutImports(component: ComponentBackendFactory) {
-            SameNameWorld.openSession(component, Linker()).close()
+            openSession(component, Linker()).close()
         }
     """.trimIndent()
 

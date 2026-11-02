@@ -38,9 +38,9 @@ class GeneratorUnitTest {
     @Test
     fun `option maps to a nullable type unless the payload is nullable`() {
         val world = generate("types").getValue("TypesWorld")
-        assertTrue(Regex("""fun TypesWorld\.echoName\(v: String\?\): String\?""").containsMatchIn(world), "echoName signature")
-        assertTrue(Regex("""fun TypesWorld\.nested\(v: WitOption<String\?>\): WitOption<String\?>""").containsMatchIn(world), "nested signature")
-        assertTrue(Regex("""fun TypesWorld\.echoBytes\(v: ByteArray\): ByteArray""").containsMatchIn(world), "list<u8> maps to ByteArray")
+        assertTrue(Regex("""fun echoName\(v: String\?\): String\?""").containsMatchIn(world), "echoName signature")
+        assertTrue(Regex("""fun nested\(v: WitOption<String\?>\): WitOption<String\?>""").containsMatchIn(world), "nested signature")
+        assertTrue(Regex("""fun echoBytes\(v: ByteArray\): ByteArray""").containsMatchIn(world), "list<u8> maps to ByteArray")
     }
 
     @Test

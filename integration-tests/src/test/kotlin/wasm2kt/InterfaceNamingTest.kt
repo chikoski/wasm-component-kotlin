@@ -165,4 +165,51 @@ class InterfaceNamingTest {
         val e = assertThrows<IllegalArgumentException> { WitToKotlinPoetConverter(resolve, base).generate() }
         assertTrue("exampleHttpTypes" in e.message.orEmpty(), e.message)
     }
+
+    @Test
+    fun `exported interface functions only compile in a session of a world that exports them`(@TempDir tempDir: Path) {
+        val resolve = resolve(
+            tempDir,
+            """
+            package example:two@0.1.0;
+
+            interface api {
+                ping: func() -> u32;
+            }
+
+            world with-api {
+                export api;
+            }
+
+            world without-api {
+                export other: func() -> u32;
+            }
+            """,
+        )
+        val out = tempDir.resolve("out")
+        // One world per package (ADR-0012).
+        WitToKotlinPoetConverter(resolve, "$base.a", targetWorldName = "with-api").generate().forEach { it.writeTo(out) }
+        WitToKotlinPoetConverter(resolve, "$base.b", targetWorldName = "without-api").generate().forEach { it.writeTo(out) }
+        assertThrows<IllegalArgumentException> { WitToKotlinPoetConverter(resolve, "$base.c").generate() }
+
+        fun compile(name: String, body: String): org.jetbrains.kotlin.cli.common.ExitCode {
+            val harness = out.resolve("harness/$name.kt")
+            Files.createDirectories(harness.parent)
+            Files.writeString(harness, "package harness\n\nimport $base.a.exports.example.two.api.ping\n\n$body\n")
+            val sources = generatedSources(out).filter { !it.contains("/harness/") || it.endsWith("/$name.kt") }
+            return org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+                System.err,
+                *(listOf("-Xcontext-parameters", "-jvm-target", "21", "-no-stdlib", "-classpath", System.getProperty("java.class.path"), "-d", tempDir.resolve("classes-$name").toString()) + sources).toTypedArray(),
+            )
+        }
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.OK,
+            compile("Ok", "fun ok(c: wasm2kt.runtime.ComponentBackendFactory) = $base.a.withSession(c) { ping() }"),
+        )
+        assertEquals(
+            org.jetbrains.kotlin.cli.common.ExitCode.COMPILATION_ERROR,
+            compile("Wrong", "fun wrong(c: wasm2kt.runtime.ComponentBackendFactory) = $base.b.withSession(c) { ping() }"),
+            "a world that does not export `api` must not be able to call it",
+        )
+    }
 }

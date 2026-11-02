@@ -6,7 +6,7 @@ import java.nio.file.Paths
 fun main() {
     val wasmPath = Paths.get("fixtures/counter.wasm")
 
-    CounterWorld.withSession(wasmPath) {
+    withSession(wasmPath) {
         Counter(10).use { c1 ->
             c1.increment()
             c1.increment()

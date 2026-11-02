@@ -29,60 +29,60 @@ class TypeMappingE2ETest {
         import java.nio.file.Path
         import wasm2kt.runtime.ComponentBackendFactory
 
-        context(session: TypesWorld.Session)
+        context(session: Session)
         fun exercise(): String {
             val out = mutableListOf<String>()
             fun check(label: String, ok: Boolean) { out += if (ok) label else "FAILED:${'$'}label" }
 
             // option<T> -> T?
-            check("echoName(null)", TypesWorld.echoName(null) == null)
-            check("echoName(chiko)", TypesWorld.echoName("chiko") == "chiko")
-            check("maybeLen", TypesWorld.maybeLen("日本🎌") == 3u && TypesWorld.maybeLen(null) == null)
-            val len = TypesWorld.maybeLen("abc")?.toInt() ?: -1
+            check("echoName(null)", echoName(null) == null)
+            check("echoName(chiko)", echoName("chiko") == "chiko")
+            check("maybeLen", maybeLen("日本🎌") == 3u && maybeLen(null) == null)
+            val len = maybeLen("abc")?.toInt() ?: -1
             check("elvis", len == 3)
 
             // list<u8> -> ByteArray
             val bytes = byteArrayOf(0, 1, 127, -128, -1)
-            check("echoBytes", TypesWorld.echoBytes(bytes).contentEquals(bytes))
-            check("reverseBytes", TypesWorld.reverseBytes(bytes).contentEquals(bytes.reversedArray()))
-            check("emptyBytes", TypesWorld.echoBytes(ByteArray(0)).isEmpty())
+            check("echoBytes", echoBytes(bytes).contentEquals(bytes))
+            check("reverseBytes", reverseBytes(bytes).contentEquals(bytes.reversedArray()))
+            check("emptyBytes", echoBytes(ByteArray(0)).isEmpty())
 
             // char -> CodePoint, including a code point outside the BMP
             val flag = CodePoint.of("🎌")
-            check("echoChar(bmp)", TypesWorld.echoChar(CodePoint.of('あ')) == CodePoint.of('あ'))
-            check("echoChar(non-bmp)", TypesWorld.echoChar(flag) == flag && TypesWorld.echoChar(flag).toString() == "🎌")
-            check("nextChar", TypesWorld.nextChar(CodePoint.of('a')) == CodePoint.of('b'))
+            check("echoChar(bmp)", echoChar(CodePoint.of('あ')) == CodePoint.of('あ'))
+            check("echoChar(non-bmp)", echoChar(flag) == flag && echoChar(flag).toString() == "🎌")
+            check("nextChar", nextChar(CodePoint.of('a')) == CodePoint.of('b'))
 
             // records and variants holding ByteArray compare by content
-            val blob = TypesWorld.Blob(name = "n", data = bytes, tag = 7u)
-            check("echoBlob", TypesWorld.echoBlob(blob) == blob)
-            check("echoBlob(noTag)", TypesWorld.echoBlob(blob.copy(tag = null)).tag == null)
-            check("blobHash", TypesWorld.echoBlob(blob).hashCode() == blob.hashCode())
-            check("packetBytes", TypesWorld.echoPacket(TypesWorld.Packet.Bytes(bytes)) == TypesWorld.Packet.Bytes(bytes))
-            check("packetEmpty", TypesWorld.echoPacket(TypesWorld.Packet.Empty) == TypesWorld.Packet.Empty)
-            check("packetText", TypesWorld.echoPacket(TypesWorld.Packet.Text("t")) == TypesWorld.Packet.Text("t"))
+            val blob = Blob(name = "n", data = bytes, tag = 7u)
+            check("echoBlob", echoBlob(blob) == blob)
+            check("echoBlob(noTag)", echoBlob(blob.copy(tag = null)).tag == null)
+            check("blobHash", echoBlob(blob).hashCode() == blob.hashCode())
+            check("packetBytes", echoPacket(Packet.Bytes(bytes)) == Packet.Bytes(bytes))
+            check("packetEmpty", echoPacket(Packet.Empty) == Packet.Empty)
+            check("packetText", echoPacket(Packet.Text("t")) == Packet.Text("t"))
 
             // list<option<T>> -> List<T?>
-            check("compact", TypesWorld.compact(listOf(1, null, 3)) == listOf(1, 3))
-            check("echoOptionalList", TypesWorld.echoOptionalList(listOf(null, 5, null)) == listOf(null, 5, null))
+            check("compact", compact(listOf(1, null, 3)) == listOf(1, 3))
+            check("echoOptionalList", echoOptionalList(listOf(null, 5, null)) == listOf(null, 5, null))
 
             // option<option<T>> -> WitOption<T?>: outer none, some(none), some(some)
-            check("nested(none)", TypesWorld.nested(WitOption.None) == WitOption.None)
-            check("nested(some(none))", TypesWorld.nested(WitOption.Some(null)) == WitOption.Some(null))
-            check("nested(some(some))", TypesWorld.nested(WitOption.Some("x")) == WitOption.Some("x"))
+            check("nested(none)", nested(WitOption.None) == WitOption.None)
+            check("nested(some(none))", nested(WitOption.Some(null)) == WitOption.Some(null))
+            check("nested(some(some))", nested(WitOption.Some("x")) == WitOption.Some("x"))
 
             // option<record> whose fields look like the tagged option form (#36)
-            val looksNone = TypesWorld.Flagged(option = "none", value = 1u, note = "n")
-            val looksSome = TypesWorld.Flagged(option = "some", value = 2u, note = "s")
-            check("flagged(none-like)", TypesWorld.echoFlagged(looksNone) == looksNone)
-            check("flagged(some-like)", TypesWorld.echoFlagged(looksSome) == looksSome)
-            check("flagged(null)", TypesWorld.echoFlagged(null) == null)
+            val looksNone = Flagged(option = "none", value = 1u, note = "n")
+            val looksSome = Flagged(option = "some", value = 2u, note = "s")
+            check("flagged(none-like)", echoFlagged(looksNone) == looksNone)
+            check("flagged(some-like)", echoFlagged(looksSome) == looksSome)
+            check("flagged(null)", echoFlagged(null) == null)
             return out.joinToString(",")
         }
 
-        fun runWasmtime(wasm: Path): String = TypesWorld.withSession(wasm) { exercise() }
+        fun runWasmtime(wasm: Path): String = withSession(wasm) { exercise() }
 
-        fun runChicory(component: ComponentBackendFactory): String = TypesWorld.withSession(component) { exercise() }
+        fun runChicory(component: ComponentBackendFactory): String = withSession(component) { exercise() }
     """.trimIndent()
 
     private fun compile(tempDir: Path): ClassLoader {

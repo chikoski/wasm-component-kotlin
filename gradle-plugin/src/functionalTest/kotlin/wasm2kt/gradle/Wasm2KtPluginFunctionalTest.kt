@@ -64,13 +64,12 @@ class Wasm2KtPluginFunctionalTest {
             """
             import com.example.rt.*
             import com.example.rt.example.roundtrip.env_provider.EnvProvider
-            import com.example.rt.exports.example.roundtrip.math_api.MathApi
             import com.example.rt.exports.example.roundtrip.math_api.scale
             import com.example.ct.CounterComponent
             import com.example.ct.exports.example.counter.counter_api.Counter
 
             fun main() {
-                val imports = RootWorld.imports(
+                val imports = imports(
                     exampleRoundtripEnvProvider = {
                         object : EnvProvider {
                             override fun getMultiplier(): Int = 6
@@ -78,10 +77,10 @@ class Wasm2KtPluginFunctionalTest {
                         }
                     },
                 )
-                val rt = RootWorld.withSession(RoundtripComponent, imports) {
-                    "scaled=${'$'}{MathApi.scale(7)},tag=${'$'}{RootWorld.describeCode("ERR", 404u)}"
+                val rt = withSession(RoundtripComponent, imports) {
+                    "scaled=${'$'}{scale(7)},tag=${'$'}{describeCode("ERR", 404u)}"
                 }
-                val ct = com.example.ct.RootWorld.withSession(CounterComponent) {
+                val ct = com.example.ct.withSession(CounterComponent) {
                     Counter(41).use { c -> c.increment(); "counter=${'$'}{c.getValue()}" }
                 }
                 println("RESULT ${'$'}rt;${'$'}ct")
