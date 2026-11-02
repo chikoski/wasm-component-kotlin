@@ -4,6 +4,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Classpath
@@ -186,6 +187,14 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
     @get:Optional
     abstract val world: Property<String>
 
+    /** Explicit `with` mappings: imported interface to the Kotlin package of existing bindings (ADR-0014). */
+    @get:Input
+    abstract val interfaceMappings: MapProperty<String, String>
+
+    /** Jars and class directories whose wasm2kt interface manifests provide interfaces (ADR-0014). */
+    @get:Classpath
+    abstract val libraryClasspath: ConfigurableFileCollection
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -196,6 +205,8 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
         it.packageName.set(packageName)
         it.internalPackage.set(internalPackage)
         it.world.set(world)
+        it.interfaceMappings.set(interfaceMappings)
+        it.libraryClasspath.from(libraryClasspath)
         it.outputDir.set(outputDir)
     }
 
@@ -205,6 +216,8 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
         val packageName: Property<String>
         val internalPackage: Property<String>
         val world: Property<String>
+        val interfaceMappings: MapProperty<String, String>
+        val libraryClasspath: ConfigurableFileCollection
         val outputDir: DirectoryProperty
     }
 
@@ -222,6 +235,8 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
                 compiled = CoreModuleCompiler.layout(decomposed, p.internalPackage.get()),
                 planResource = "/" + p.internalPackage.get().replace('.', '/') + "/plan.json",
                 worldName = p.world.orNull,
+                interfaceMappings = p.interfaceMappings.get(),
+                libraryClasspath = p.libraryClasspath.files.map { it.toPath() },
             )
         }
     }

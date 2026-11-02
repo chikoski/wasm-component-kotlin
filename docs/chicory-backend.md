@@ -50,6 +50,7 @@ wasm2kt {
 
 * `io.github.wasm2kt:runtime-chicory`（プラグインと同じバージョン）を `implementation` に追加（`wasm2kt { addRuntimeDependency.set(false) }` で無効化）
 * Kotlin コンパイラに `-Xcontext-parameters` を追加（生成 DSL が Context Parameters を使うため）
+* 依存関係（モジュールとプロジェクト）の jar に wasm2kt のインターフェースのマニフェストがあれば、コンポーネントが同じ版を import する interface は生成せず、ライブラリの型と `Linker.add` を使う。明示的に対応付けるには `register("app") { with("wasi:filesystem/types@0.3.0", "wasm2kt.wasi.wasi.filesystem.types") }`、自動設定を止めるには `wasm2kt { useLibraryInterfaces.set(false) }`（[ADR-0014](adr/0014-interface-mappings.md)）
 * コンポーネントが Chicory バックエンドの未対応の機能（コンポーネントの組み込み関数、型、async）を使っていれば、分解のタスクで警告する。`wasm2kt { failOnUnsupportedFeatures.set(true) }` にすると、ビルドを失敗させる
 
 > `.wasm` から生成した場合、ワールド名はコンポーネント自身の world（通常 `root` → `RootWorld`）になります。

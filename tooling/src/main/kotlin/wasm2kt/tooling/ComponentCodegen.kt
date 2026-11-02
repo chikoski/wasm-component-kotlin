@@ -9,6 +9,7 @@ import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
 import wasm2kt.ast.WitResolve
+import wasm2kt.generator.InterfaceManifest
 import wasm2kt.generator.NamingConventions
 import wasm2kt.generator.WitToKotlinPoetConverter
 import java.nio.file.Files
@@ -22,6 +23,9 @@ object ComponentCodegen {
      *   the Wasmtime sessions so the result has no native or `java.lang.foreign` dependency;
      * - `<Name>Component`, a [wasm2kt.runtime.ComponentBackendFactory] wiring the AOT-compiled core
      *   modules to the plan, to pass to `<World>.withSession(...)`.
+     *
+     * Imported interfaces in [interfaceMappings], or provided by a library on [libraryClasspath]
+     * (its `--interfaces-only` manifest), use those existing bindings (ADR-0014).
      */
     fun generate(
         decomposedDir: Path,
@@ -31,6 +35,8 @@ object ComponentCodegen {
         compiled: List<CoreModuleCompiler.Compiled>,
         planResource: String,
         worldName: String? = null,
+        interfaceMappings: Map<String, String> = emptyMap(),
+        libraryClasspath: List<Path> = emptyList(),
     ) {
         val resolve = WitResolve.parse(Files.readString(decomposedDir.resolve("wit.json")))
         WitToKotlinPoetConverter(
@@ -38,6 +44,8 @@ object ComponentCodegen {
             targetPackage = packageName,
             targetWorldName = worldName,
             emitWasmtimeSessions = false,
+            interfaceMappings = interfaceMappings,
+            libraryManifests = InterfaceManifest.readAll(libraryClasspath),
         ).generate().forEach { it.writeTo(outputDir) }
 
         componentFile(componentName, packageName, compiled, planResource).writeTo(outputDir)
