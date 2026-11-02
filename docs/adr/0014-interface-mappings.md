@@ -88,7 +88,7 @@ ADR-0011 で、名前が決定的、キーが完全修飾名、interface 単位�
 **マニフェストからの自動設定**
 
 * CLI: `--library <jar またはディレクトリ>`（繰り返し可）のマニフェストを読む
-* Gradle プラグイン: コンパイル時のクラスパスからマニフェストを読む。Kotlin/JVM は `compileClasspath` のうちモジュールとプロジェクトの依存（ファイルの依存、つまりプラグイン自身が加える AOT コンパイル結果の jar は除く）、Android は variant ごとの `compileClasspath`。読むのは生成タスクの実行時で、設定時に tooling のクラスを参照しない（ADR-0004）
+* Gradle プラグイン: コンパイル時のクラスパスからマニフェストを読む。Kotlin/JVM は `compileClasspath` のうちモジュールとプロジェクトの依存（ファイルの依存、つまりプラグイン自身が加える AOT コンパイル結果の jar は除く）、Android は variant ごとの `<variant>CompileClasspath` のうちモジュールとプロジェクトの依存の classes jar（AAR から取り出したものを含む。`variant.compileClasspath` はアプリ自身のコンパイル結果を含み、生成がコンパイルに依存して循環するため使わない）。読むのは生成タスクの実行時で、設定時に tooling のクラスを参照しない（ADR-0004）
 * world が import する interface と同じキーのものだけを使う。明示した対応表が優先する
 
 **`imports(...)` の既定値**

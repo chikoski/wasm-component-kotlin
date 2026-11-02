@@ -5,6 +5,8 @@ import org.gradle.api.DomainObjectSet
 import org.gradle.api.Project
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.attributes.Attribute
+import org.gradle.api.file.FileCollection
 import org.gradle.api.file.SourceDirectorySet
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.SourceSetContainer
@@ -62,8 +64,10 @@ internal object AndroidWiring {
                     t.internalPackage.set(shared.flatMap { it.internalPackage })
                     t.world.set(c.component.world)
                     t.interfaceMappings.set(c.component.interfaceMappings)
-                    // Libraries that may provide interfaces (ADR-0014), as this variant compiles against them.
-                    t.libraryClasspath.from(extension.useLibraryInterfaces.map { use -> if (use) variant.compileClasspath else project.files() })
+                    // Libraries that may provide interfaces (ADR-0014): the classes jars of this variant's module
+                    // and project dependencies. Not `variant.compileClasspath`, which also holds the app's own
+                    // compiled classes and would make generating depend on compiling.
+                    t.libraryClasspath.from(extension.useLibraryInterfaces.map { use -> if (use) androidLibraries(project, variant.name) else project.files() })
                 }
                 // Kotlin compilations read the variant's Java source directories; `sources.kotlin` is not
                 // consumed by every AGP/KGP combination (e.g. AGP 8.9 + KGP 2.2).
@@ -74,6 +78,15 @@ internal object AndroidWiring {
         }
     }
 }
+
+/** Classes jars (also extracted from AARs) of the module and project dependencies a variant compiles against. */
+private fun androidLibraries(project: Project, variantName: String): FileCollection =
+    project.configurations.getByName("${variantName}CompileClasspath").incoming.artifactView { view ->
+        view.attributes { it.attribute(ARTIFACT_TYPE, "android-classes-jar") }
+        view.componentFilter { id -> id is ModuleComponentIdentifier || id is ProjectComponentIdentifier }
+    }.files
+
+private val ARTIFACT_TYPE: Attribute<String> = Attribute.of("artifactType", String::class.java)
 
 /**
  * The generated world DSL uses context parameters, still behind a flag in Kotlin 2.2. Configured
