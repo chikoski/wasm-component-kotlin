@@ -4,6 +4,8 @@ import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import wasm2kt.ast.WitResolve
+import wasm2kt.generator.WitToKotlinPoetConverter
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -139,5 +141,102 @@ class Wasm2KtPluginFunctionalTest {
         val failed = runner(dir, "wasm2ktDecomposeComposed").buildAndFail()
         assertTrue("ResourceTransferOwn" in failed.output, failed.output)
         assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktDecomposeComposed")?.outcome)
+    }
+
+    @Test
+    fun `interfaces provided by a library project are used instead of generated`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("same-name.wasm"), dir.resolve("same-name.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "consumer"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            include("hostlib", "app")
+            """.trimIndent(),
+        )
+        val repos = """
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+        """.trimIndent()
+        dir.resolve("build.gradle.kts").writeText("""plugins { kotlin("jvm") version "$kotlinVersion" apply false }""")
+
+        // The library: the imported interfaces of same-name, generated with --interfaces-only.
+        val lib = dir.resolve("hostlib").apply { mkdirs() }
+        lib.resolve("build.gradle.kts").writeText(
+            """
+            plugins { kotlin("jvm") }
+            $repos
+            dependencies { implementation("io.github.wasm2kt:runtime-api:${System.getProperty("wasm2kt.version")}") }
+            """.trimIndent(),
+        )
+        val converter = WitToKotlinPoetConverter(
+            WitResolve.parse(Files.readString(fixtures.resolve("same-name.json"))),
+            "com.example.hostlib",
+            interfacesOnly = true,
+        )
+        converter.generate().forEach { it.writeTo(lib.resolve("src/main/kotlin").toPath()) }
+        checkNotNull(converter.manifest).writeTo(lib.resolve("src/main/resources").toPath())
+
+        val app = dir.resolve("app").apply { mkdirs() }
+        Files.move(dir.resolve("same-name.wasm").toPath(), app.resolve("same-name.wasm").toPath())
+        app.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                kotlin("jvm")
+                id("io.github.wasm2kt")
+                application
+            }
+            $repos
+            dependencies { implementation(project(":hostlib")) }
+            wasm2kt {
+                components {
+                    register("samename") {
+                        source.set(file("same-name.wasm"))
+                        packageName.set("com.example.app")
+                    }
+                }
+            }
+            application { mainClass.set("MainKt") }
+            """.trimIndent(),
+        )
+        app.resolve("src/main/kotlin").apply { mkdirs() }.resolve("Main.kt").writeText(
+            """
+            import com.example.app.*
+            import com.example.hostlib.example.fs.types.ErrorCode as FsErrorCode
+            import com.example.hostlib.example.fs.types.Types as FsTypes
+            import com.example.hostlib.example.http.types.ErrorCode as HttpErrorCode
+            import com.example.hostlib.example.http.types.Tally
+            import com.example.hostlib.example.http.types.Types as HttpTypes
+
+            class CountingTally(private var value: UInt) : Tally {
+                override fun get(): UInt { value += 10u; return value }
+                override fun close() {}
+            }
+
+            fun main() {
+                val imports = imports(
+                    exampleHttpTypes = {
+                        object : HttpTypes {
+                            override fun newTally(start: UInt): Tally = CountingTally(start)
+                            override fun describe(e: HttpErrorCode): String = "http:${'$'}{e.code}"
+                        }
+                    },
+                    exampleFsTypes = {
+                        object : FsTypes {
+                            override fun describe(e: FsErrorCode): String = if (e is FsErrorCode.Missing) "missing:${'$'}{e.value}" else "denied"
+                        }
+                    },
+                )
+                println("RESULT " + withSession(SamenameComponent, imports) { run(7u) })
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, ":app:run", "--configuration-cache").build()
+        assertTrue("RESULT http:7|missing:f7|denied|tally=17" in result.output, result.output)
+        val generated = app.resolve("build/wasm2kt/samename/kotlin/com/example/app")
+        assertTrue(generated.resolve("RootWorld.kt").isFile, generated.list().orEmpty().joinToString())
+        assertTrue(!generated.resolve("example").exists(), "the library's interfaces must not be generated again")
     }
 }

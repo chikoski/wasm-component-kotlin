@@ -3,6 +3,8 @@ package wasm2kt.gradle
 import com.android.build.api.variant.AndroidComponentsExtension
 import org.gradle.api.DomainObjectSet
 import org.gradle.api.Project
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.file.SourceDirectorySet
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.SourceSetContainer
@@ -14,11 +16,21 @@ import org.gradle.api.tasks.SourceSetContainer
  * plugin's class loader (e.g. when the plugins are declared in different build scripts).
  */
 internal object KotlinJvmWiring {
-    fun wire(project: Project, components: DomainObjectSet<ComponentTasks>) {
+    fun wire(project: Project, extension: Wasm2KtExtension, components: DomainObjectSet<ComponentTasks>) {
         enableContextParameters(project)
         val main = project.extensions.getByType(SourceSetContainer::class.java).getByName("main")
         val kotlinSources = main.extensions.getByName("kotlin") as SourceDirectorySet
+        // Libraries that may provide interfaces (ADR-0014): module and project dependencies, not the
+        // file dependencies this plugin adds (the compiled core modules).
+        val libraries = project.configurations.named(main.compileClasspathConfigurationName).map { config ->
+            config.incoming.artifactView { view ->
+                view.componentFilter { id -> id is ModuleComponentIdentifier || id is ProjectComponentIdentifier }
+            }.files
+        }
         components.all { c ->
+            c.generate.configure { t ->
+                t.libraryClasspath.from(extension.useLibraryInterfaces.flatMap { use -> libraries.map { if (use) it else project.files() } })
+            }
             kotlinSources.srcDir(c.generate.flatMap { it.outputDir })
             project.dependencies.add("implementation", project.files(c.compile.flatMap { it.jar }))
         }
@@ -31,7 +43,7 @@ internal object KotlinJvmWiring {
  * the output location, so each variant gets its own (cheap) generate task.
  */
 internal object AndroidWiring {
-    fun wire(project: Project, components: DomainObjectSet<ComponentTasks>) {
+    fun wire(project: Project, extension: Wasm2KtExtension, components: DomainObjectSet<ComponentTasks>) {
         components.all { c -> project.dependencies.add("implementation", project.files(c.compile.flatMap { it.jar })) }
         // Covers both the kotlin-android plugin and AGP 9's built-in Kotlin support.
         enableContextParameters(project)
@@ -49,6 +61,9 @@ internal object AndroidWiring {
                     t.packageName.set(c.component.packageName)
                     t.internalPackage.set(shared.flatMap { it.internalPackage })
                     t.world.set(c.component.world)
+                    t.interfaceMappings.set(c.component.interfaceMappings)
+                    // Libraries that may provide interfaces (ADR-0014), as this variant compiles against them.
+                    t.libraryClasspath.from(extension.useLibraryInterfaces.map { use -> if (use) variant.compileClasspath else project.files() })
                 }
                 // Kotlin compilations read the variant's Java source directories; `sources.kotlin` is not
                 // consumed by every AGP/KGP combination (e.g. AGP 8.9 + KGP 2.2).

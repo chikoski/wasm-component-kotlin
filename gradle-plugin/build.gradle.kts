@@ -14,6 +14,8 @@ dependencies {
     compileOnly(libs.android.gradle.api)
     compileOnly(libs.kotlin.gradle.plugin)
 
+    // Generates the interface library a functional test maps to (ADR-0014).
+    "functionalTestImplementation"(project(":generator"))
     "functionalTestImplementation"(kotlin("test"))
     "functionalTestImplementation"(libs.junit.jupiter)
     "functionalTestImplementation"(gradleTestKit())

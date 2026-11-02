@@ -5,6 +5,7 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.DomainObjectSet
 import org.gradle.api.tasks.TaskProvider
@@ -40,6 +41,13 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
      */
     abstract val failOnUnsupportedFeatures: Property<Boolean>
 
+    /**
+     * Use the interfaces that libraries on the compile class path provide (their wasm2kt interface
+     * manifests) instead of generating them, when a component imports the same interface and version
+     * (ADR-0014). On by default; explicit [Wasm2KtComponent.with] mappings always apply.
+     */
+    abstract val useLibraryInterfaces: Property<Boolean>
+
     fun components(action: org.gradle.api.Action<NamedDomainObjectContainer<Wasm2KtComponent>>) = action.execute(components)
 }
 
@@ -54,6 +62,17 @@ abstract class Wasm2KtComponent @Inject constructor(private val name: String) : 
 
     /** World to generate when the component's WIT defines several; defaults to the component's own world. */
     abstract val world: Property<String>
+
+    /** Imported interfaces (`wasi:filesystem/types@0.3.0`) mapped to the Kotlin package of existing bindings (ADR-0014). */
+    abstract val interfaceMappings: MapProperty<String, String>
+
+    /**
+     * Uses the bindings already generated into [packageName] for the imported interface [interfaceName]
+     * (fully qualified, with its version) instead of generating it, like wit-bindgen's `with` (ADR-0014).
+     */
+    fun with(interfaceName: String, packageName: String) {
+        interfaceMappings.put(interfaceName, packageName)
+    }
 }
 
 class Wasm2KtPlugin : Plugin<Project> {
@@ -61,6 +80,7 @@ class Wasm2KtPlugin : Plugin<Project> {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
         extension.addRuntimeDependency.convention(true)
         extension.failOnUnsupportedFeatures.convention(false)
+        extension.useLibraryInterfaces.convention(true)
 
         // The tooling runs in workers with its own class path (see Wasm2KtToolingTask).
         val tooling = project.configurations.create(TOOLING_CONFIGURATION) { c ->
@@ -86,10 +106,10 @@ class Wasm2KtPlugin : Plugin<Project> {
         }
 
         project.pluginManager.withPlugin("org.jetbrains.kotlin.jvm") {
-            KotlinJvmWiring.wire(project, wired)
+            KotlinJvmWiring.wire(project, extension, wired)
         }
         for (id in listOf("com.android.application", "com.android.library")) {
-            project.pluginManager.withPlugin(id) { AndroidWiring.wire(project, wired) }
+            project.pluginManager.withPlugin(id) { AndroidWiring.wire(project, extension, wired) }
         }
     }
 
@@ -121,6 +141,7 @@ class Wasm2KtPlugin : Plugin<Project> {
             t.packageName.set(component.packageName)
             t.internalPackage.set(internalPackage)
             t.world.set(component.world)
+            t.interfaceMappings.set(component.interfaceMappings)
             t.outputDir.set(base.map { it.dir("kotlin") })
         }
         return ComponentTasks(component, decompose, compile, generate)

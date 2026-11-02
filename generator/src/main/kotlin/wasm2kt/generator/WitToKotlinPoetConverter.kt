@@ -99,8 +99,28 @@ class WitToKotlinPoetConverter(
      * such as the Chicory backend (e.g. Android), so the bindings don't reference the Wasmtime bridge.
      */
     private val emitWasmtimeSessions: Boolean = true,
+    /**
+     * Imported interfaces not to generate (ADR-0014): fully qualified interface name with version
+     * (`wasi:filesystem/types@0.3.0`) to the Kotlin package its bindings were generated into.
+     * Every entry must match an interface the world imports.
+     */
+    private val interfaceMappings: Map<String, String> = emptyMap(),
+    /** Manifests of libraries on the class path: their interfaces are used when the world imports them. */
+    private val libraryManifests: List<InterfaceManifest> = emptyList(),
+    /**
+     * Generate only the interfaces the world imports, value-type support and an [InterfaceManifest]
+     * (see [manifest]), for a library other bindings map their imports to (ADR-0014).
+     */
+    private val interfacesOnly: Boolean = false,
 ) {
     private val generatedTupleArities = mutableSetOf<Int>()
+
+    /** Imported interfaces mapped to existing packages, by interface id (ADR-0014). */
+    private var mappedPackages: Map<Int, String> = emptyMap()
+
+    /** The manifest of the generated library; set by [generate] when [interfacesOnly] is on. */
+    var manifest: InterfaceManifest? = null
+        private set
 
     // State of the world being generated (ADR-0011).
     private var currentWorldClassName: ClassName = ClassName(targetPackage, "World")
@@ -141,6 +161,25 @@ class WitToKotlinPoetConverter(
             resolve.worlds.filter { it.name == targetWorldName }
         } else {
             resolve.worlds
+        }
+
+        if (interfacesOnly) {
+            require(targetWorldName == null || worldsToGenerate.isNotEmpty()) {
+                "World '$targetWorldName' not found; available worlds: ${resolve.worlds.joinToString { it.name }}"
+            }
+            require(worldsToGenerate.size <= 1) {
+                "The WIT defines several worlds (${worldsToGenerate.joinToString { it.name }}); choose the one whose imports to generate with --world"
+            }
+            // Without a world, every interface of the WIT is part of the library.
+            val world = worldsToGenerate.singleOrNull() ?: WitWorld(
+                name = "interfaces",
+                imports = resolve.interfaces.indices.associate { idx -> (resolve.interfaces[idx].name ?: "interface-$idx") to WitWorldItem.InterfaceRef(idx) },
+            )
+            checkPackageVersions(listOf(world))
+            generateInterfaces(world)
+            fileSpecs += interfaceFiles.values.map { it.builder.build() }
+            fileSpecs.add(0, generateCommonSupportFile())
+            return fileSpecs.map { GeneratedKotlinFile(it.packageName, it.name, formatIdiomaticKotlin(it)) }
         }
 
         // If the WIT file only defines interfaces and no worlds, synthesize a default world
@@ -222,6 +261,7 @@ class WitToKotlinPoetConverter(
 
     /** `<base>.<ns>.<pkg>.<iface>`, under `<base>.exports` for exports (ADR-0011). */
     private fun interfacePackage(ifaceId: Int, direction: Direction): String {
+        if (direction == Direction.IMPORT) mappedPackages[ifaceId]?.let { return it }
         val segments = buildList {
             if (direction == Direction.EXPORT) add("exports")
             interfaceNameSegments(ifaceId).forEach { add(NamingConventions.toPackageSegment(it)) }
@@ -251,6 +291,7 @@ class WitToKotlinPoetConverter(
     private class InterfaceFile(val ifaceId: Int, val direction: Direction, val builder: FileSpec.Builder)
 
     private fun interfaceFile(ifaceId: Int, direction: Direction): InterfaceFile {
+        check(direction == Direction.EXPORT || ifaceId !in mappedPackages) { "Mapped interface '${interfaceKey(ifaceId)}' must not be generated" }
         val pkg = interfacePackage(ifaceId, direction)
         val existing = interfaceFiles[pkg]
         if (existing != null) {
@@ -306,31 +347,15 @@ class WitToKotlinPoetConverter(
         val fileBuilder = FileSpec.builder(targetPackage, worldObjectName)
         val worldObjBuilder = fileBuilder
 
-        val worldId = resolve.worlds.indexOf(world)
-        currentWorldId = worldId
-
-        // Interfaces the world imports (including the owners of types it `use`s) and exports.
-        val importedIds = linkedSetOf<Int>()
-        world.imports.values.forEach { item ->
-            if (item is WitWorldItem.InterfaceRef) importedIds += item.id
-            if (item is WitWorldItem.TypeRef) {
-                val targetId = resolveRootTypeIndex(item.id)
-                resolve.types.getOrNull(targetId)?.owner?.`interface`?.let { importedIds += it }
-            }
-        }
-        val exportedIds = linkedSetOf<Int>()
-        world.exports.values.forEach { item -> if (item is WitWorldItem.InterfaceRef) exportedIds += item.id }
-        currentImportedIfaces = importedIds
-        currentExportedIfaces = exportedIds
-        currentInlineNames = (world.imports + world.exports).entries
-            .mapNotNull { (key, item) -> (item as? WitWorldItem.InterfaceRef)?.takeIf { resolve.interfaces.getOrNull(it.id)?.name == null }?.let { it.id to key } }
-            .toMap()
-        exportContext = false
+        enterWorld(world)
+        val worldId = currentWorldId
+        val importedIds = currentImportedIfaces
+        val exportedIds = currentExportedIfaces
 
         val resourceFunctions = collectResourceFunctions(importedIds + exportedIds, world)
 
         // 1. Types: interface types go to the interface's own file and package, world types into the world object.
-        for (ifaceId in importedIds) emitInterfaceTypes(ifaceId, Direction.IMPORT, resourceFunctions)
+        for (ifaceId in importedIds) if (ifaceId !in mappedPackages) emitInterfaceTypes(ifaceId, Direction.IMPORT, resourceFunctions)
         for (ifaceId in exportedIds) emitInterfaceTypes(ifaceId, Direction.EXPORT, resourceFunctions)
         val worldSink = TypeSink(
             id = "world:$targetPackage",
@@ -522,6 +547,158 @@ class WitToKotlinPoetConverter(
         return fileBuilder.build()
     }
 
+    /**
+     * Sets up the state of the world being generated: the interfaces it imports (including the
+     * owners of types it `use`s) and exports, inline interface names, and the mappings (ADR-0014).
+     */
+    private fun enterWorld(world: WitWorld) {
+        currentWorldId = resolve.worlds.indexOf(world)
+        val importedIds = linkedSetOf<Int>()
+        world.imports.values.forEach { item ->
+            if (item is WitWorldItem.InterfaceRef) importedIds += item.id
+            if (item is WitWorldItem.TypeRef) {
+                val targetId = resolveRootTypeIndex(item.id)
+                resolve.types.getOrNull(targetId)?.owner?.`interface`?.let { importedIds += it }
+            }
+        }
+        val exportedIds = linkedSetOf<Int>()
+        world.exports.values.forEach { item -> if (item is WitWorldItem.InterfaceRef) exportedIds += item.id }
+        currentImportedIfaces = importedIds
+        currentExportedIfaces = exportedIds
+        currentInlineNames = (world.imports + world.exports).entries
+            .mapNotNull { (key, item) -> (item as? WitWorldItem.InterfaceRef)?.takeIf { resolve.interfaces.getOrNull(it.id)?.name == null }?.let { it.id to key } }
+            .toMap()
+        exportContext = false
+        mappedPackages = resolveMappings(world)
+    }
+
+    // ------------------------------------------------------------------ interface mappings (ADR-0014)
+
+    /** `ns:pkg/iface` without the version, to find the same interface at another version. */
+    private fun unversioned(key: String): String = key.substringBefore('@')
+
+    /**
+     * Which imported interfaces use existing packages: the explicit [interfaceMappings] first, then
+     * the [libraryManifests]. Reports keys the world does not import, version mismatches, exported
+     * interfaces and mapped interfaces whose dependencies are not mapped.
+     */
+    private fun resolveMappings(world: WitWorld): Map<Int, String> {
+        val imported = currentImportedIfaces.filter { !isInlineInterface(it) }.associateBy { interfaceKey(it) }
+        val exported = currentExportedIfaces.filter { !isInlineInterface(it) }.associateBy { interfaceKey(it) }
+        val libraryByPackage = libraryManifests.flatMap { m -> m.interfaces.map { (key, pkg) -> pkg to (key to m) } }.groupBy({ it.first }, { it.second })
+        val result = linkedMapOf<Int, String>()
+
+        for ((key, pkg) in interfaceMappings) {
+            val id = imported[key]
+            if (id == null) {
+                val sameInterface = imported.keys.filter { unversioned(it) == unversioned(key) }
+                throw IllegalArgumentException(
+                    when {
+                        sameInterface.isNotEmpty() ->
+                            "Interface mapping '$key' does not match the version the world '${world.name}' imports: ${sameInterface.joinToString()}"
+                        key in exported ->
+                            "Interface mapping '$key': the world '${world.name}' only exports it, and exported interfaces cannot be mapped (ADR-0014)"
+                        else -> "Interface mapping '$key': the world '${world.name}' does not import this interface"
+                    },
+                )
+            }
+            for ((libKey, m) in libraryByPackage[pkg].orEmpty()) {
+                require(libKey == key) {
+                    "Interface mapping '$key' points to '$pkg', which library ${m.source} generated from '$libKey' (ADR-0014)"
+                }
+            }
+            result[id] = pkg
+        }
+
+        for ((key, id) in imported) {
+            if (id in result) continue
+            val provided = libraryManifests.mapNotNull { m -> m.interfaces[key]?.let { it to m } }
+            if (provided.isNotEmpty()) {
+                val packages = provided.map { it.first }.distinct()
+                require(packages.size == 1) {
+                    "Libraries provide '$key' in several packages (${provided.joinToString { "${it.first} in ${it.second.source}" }}); choose one with an explicit mapping"
+                }
+                result[id] = packages.single()
+                continue
+            }
+            val otherVersions = libraryManifests.flatMap { m -> m.interfaces.keys.filter { unversioned(it) == unversioned(key) }.map { it to m } }
+            require(otherVersions.isEmpty()) {
+                "The world '${world.name}' imports '$key', but ${otherVersions.joinToString { "${it.second.source} provides '${it.first}'" }}. " +
+                    "Use a library generated from the same version, or turn off library mappings (ADR-0014)"
+            }
+        }
+
+        // A mapped library refers to the interfaces its types use with its own classes, so those must
+        // be mapped too.
+        for ((id, pkg) in result) {
+            val missing = interfaceDependencies(id).filter { it !in result }
+            require(missing.isEmpty()) {
+                "Interface '${interfaceKey(id)}' is mapped to '$pkg', but the interfaces its types use are not: " +
+                    missing.joinToString { "'${interfaceKey(it)}'" } + " (ADR-0014)"
+            }
+        }
+        return result
+    }
+
+    /** Interfaces (other than [ifaceId]) whose named types the types and functions of [ifaceId] refer to. */
+    private fun interfaceDependencies(ifaceId: Int): Set<Int> {
+        val iface = resolve.interfaces[ifaceId]
+        val found = linkedSetOf<Int>()
+        val visited = mutableSetOf<Int>()
+        fun visit(ref: WitTypeRef?) {
+            if (ref !is WitTypeRef.Id || !visited.add(ref.index)) return
+            val def = resolve.types.getOrNull(ref.index) ?: return
+            val owner = def.owner?.`interface`
+            if (def.name != null && owner != null && owner != ifaceId) {
+                found += owner
+                return
+            }
+            when (val kind = def.kind) {
+                is WitTypeDefKind.TypeAlias -> visit(kind.type)
+                is WitTypeDefKind.OptionType -> visit(kind.type)
+                is WitTypeDefKind.ResultType -> { visit(kind.ok); visit(kind.err) }
+                is WitTypeDefKind.ListType -> visit(kind.type)
+                is WitTypeDefKind.Tuple -> kind.types.forEach(::visit)
+                is WitTypeDefKind.Record -> kind.fields.forEach { visit(it.type) }
+                is WitTypeDefKind.Variant -> kind.cases.forEach { visit(it.type) }
+                is WitTypeDefKind.Handle -> visit(WitTypeRef.Id(kind.resourceId))
+                is WitTypeDefKind.FutureType -> visit(kind.type)
+                is WitTypeDefKind.StreamType -> visit(kind.element)
+                else -> Unit
+            }
+        }
+        iface.types.values.forEach { visit(WitTypeRef.Id(it)) }
+        iface.functions.values.forEach { fn -> fn.params.forEach { visit(it.type) }; fn.results.forEach { visit(it.type) } }
+        return found
+    }
+
+    /** True for a named type alias owned by an interface whose import copy is mapped: it is expanded. */
+    private fun isMappedAlias(typeIdx: Int): Boolean {
+        val owner = resolve.types.getOrNull(typeIdx)?.owner?.`interface` ?: return false
+        return owner in mappedPackages && directionOf(owner) == Direction.IMPORT
+    }
+
+    // ------------------------------------------------------------------ interfaces only (ADR-0014)
+
+    /** A library: the world's imported interfaces and their manifest, without the world itself. */
+    private fun generateInterfaces(world: WitWorld) {
+        enterWorld(world)
+        currentWorldClassName = ClassName(targetPackage, worldObjectName(world.name))
+        val inline = currentImportedIfaces.filter { isInlineInterface(it) }
+        require(inline.isEmpty()) {
+            "--interfaces-only generates package interfaces; the world '${world.name}' imports inline interfaces: " +
+                inline.joinToString { "'${inlineInterfaceName(it)}'" }
+        }
+        val generated = currentImportedIfaces.filter { it !in mappedPackages }
+        val resourceFunctions = collectResourceFunctions(currentImportedIfaces, WitWorld(world.name))
+        for (ifaceId in generated) emitInterfaceTypes(ifaceId, Direction.IMPORT, resourceFunctions)
+        for (ifaceId in generated) hostContract(ifaceId)
+        manifest = InterfaceManifest(
+            basePackage = targetPackage,
+            interfaces = generated.associate { interfaceKey(it) to interfacePackage(it, Direction.IMPORT) }.toSortedMap(),
+        )
+    }
+
     /** Where emitted type definitions go: an interface file (top level) or a world object (nested). */
     private class TypeSink(val id: String, val addType: (TypeSpec) -> Unit, val addAlias: (TypeAliasSpec) -> Unit)
 
@@ -575,6 +752,13 @@ class WitToKotlinPoetConverter(
             .distinct()
         val functions = iface.functions.values.filter { it.kind is WitFunctionKind.Freestanding || isHostResourceFunction(it) }
         if (functions.isEmpty() && hostResources.isEmpty()) return null
+
+        // A mapped interface: the library generated the same contract under the same keys (ADR-0014).
+        mappedPackages[ifaceId]?.let { pkg ->
+            val keyPrefix = "${interfaceKey(ifaceId)}#"
+            val keys = functions.map { "$keyPrefix${it.name}" } + hostResources.map { "$keyPrefix[resource-drop]${resolve.types[it].name}" }
+            return HostContract(ClassName(pkg, interfaceTypeName(ifaceId)), MemberName(pkg, "add"), keys)
+        }
 
         val file = interfaceFile(ifaceId, Direction.IMPORT)
         val contractClass = ClassName(file.builder.packageName, interfaceTypeName(ifaceId))
@@ -923,7 +1107,12 @@ class WitToKotlinPoetConverter(
         return if (ifaceId != null) ClassName(interfacePackage(ifaceId, directionOf(ifaceId)), pascal) else ClassName(targetPackage, pascal)
     }
 
-    private fun containsResource(typeRef: WitTypeRef, visited: MutableSet<Int> = mutableSetOf()): Boolean =
+    /**
+     * Whether a value of [typeRef] holds a guest resource, whose wrapper needs the session. Host
+     * resources go through the [wasm2kt.runtime.HostResourceTable], so types of imported interfaces
+     * never take a session and can be shared with other generations (ADR-0014).
+     */
+    private fun containsGuestResource(typeRef: WitTypeRef, visited: MutableSet<Int> = mutableSetOf()): Boolean =
         when (typeRef) {
             is WitTypeRef.Primitive -> false
             is WitTypeRef.Id -> {
@@ -931,18 +1120,19 @@ class WitToKotlinPoetConverter(
                     false
                 } else {
                     when (val kind = resolve.types.getOrNull(typeRef.index)?.kind) {
-                        is WitTypeDefKind.Resource, is WitTypeDefKind.Handle -> true
-                        is WitTypeDefKind.TypeAlias -> containsResource(kind.type, visited)
-                        is WitTypeDefKind.OptionType -> containsResource(kind.type, visited)
+                        is WitTypeDefKind.Resource -> !isHostResource(typeRef.index)
+                        is WitTypeDefKind.Handle -> !isHostResource(kind.resourceId)
+                        is WitTypeDefKind.TypeAlias -> containsGuestResource(kind.type, visited)
+                        is WitTypeDefKind.OptionType -> containsGuestResource(kind.type, visited)
                         is WitTypeDefKind.ResultType ->
-                            (kind.ok?.let { containsResource(it, visited) } ?: false) ||
-                                (kind.err?.let { containsResource(it, visited) } ?: false)
-                        is WitTypeDefKind.ListType -> containsResource(kind.type, visited)
-                        is WitTypeDefKind.Tuple -> kind.types.any { containsResource(it, visited) }
-                        is WitTypeDefKind.Record -> kind.fields.any { containsResource(it.type, visited) }
-                        is WitTypeDefKind.Variant -> kind.cases.any { c -> c.type?.let { containsResource(it, visited) } ?: false }
-                        is WitTypeDefKind.FutureType -> kind.type?.let { containsResource(it, visited) } ?: false
-                        is WitTypeDefKind.StreamType -> kind.element?.let { containsResource(it, visited) } ?: false
+                            (kind.ok?.let { containsGuestResource(it, visited) } ?: false) ||
+                                (kind.err?.let { containsGuestResource(it, visited) } ?: false)
+                        is WitTypeDefKind.ListType -> containsGuestResource(kind.type, visited)
+                        is WitTypeDefKind.Tuple -> kind.types.any { containsGuestResource(it, visited) }
+                        is WitTypeDefKind.Record -> kind.fields.any { containsGuestResource(it.type, visited) }
+                        is WitTypeDefKind.Variant -> kind.cases.any { c -> c.type?.let { containsGuestResource(it, visited) } ?: false }
+                        is WitTypeDefKind.FutureType -> kind.type?.let { containsGuestResource(it, visited) } ?: false
+                        is WitTypeDefKind.StreamType -> kind.element?.let { containsGuestResource(it, visited) } ?: false
                         else -> false
                     }
                 }
@@ -1056,7 +1246,7 @@ class WitToKotlinPoetConverter(
         }
         builder.addFunction(toWitJsonBuilder.build())
 
-        val hasResourceFields = fields.any { containsResource(it.type) }
+        val hasResourceFields = fields.any { containsGuestResource(it.type) }
         val sessionExpr = if (hasResourceFields) CodeBlock.of("session") else null
         val fromWitJsonBuilder = FunSpec.builder("fromWitJson")
             .addParameter("elem", jsonElementClass)
@@ -1298,7 +1488,7 @@ class WitToKotlinPoetConverter(
             }
         }
 
-        val hasResourceCases = cases.any { c -> c.type?.let { containsResource(it) } ?: false }
+        val hasResourceCases = cases.any { c -> c.type?.let { containsGuestResource(it) } ?: false }
         val sessionExpr = if (hasResourceCases) CodeBlock.of("session") else null
         val fromJsonCode = CodeBlock.builder()
             .addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
@@ -1674,7 +1864,7 @@ class WitToKotlinPoetConverter(
                     is WitTypeDefKind.Variant,
                     -> {
                         val typeClass = typeClassName(typeRef.index)
-                        if (sessionExpr != null && containsResource(typeRef)) {
+                        if (sessionExpr != null && containsGuestResource(typeRef)) {
                             CodeBlock.of("%T.fromWitJson(%L, %L)", typeClass, elemExpr, sessionExpr)
                         } else {
                             CodeBlock.of("%T.fromWitJson(%L)", typeClass, elemExpr)
@@ -1967,6 +2157,8 @@ class WitToKotlinPoetConverter(
             -> typeClassName(index)
             is WitTypeDefKind.TypeAlias -> {
                 if (name != null) {
+                    // The library's typealias may name its own WitResult etc.; use the definition (ADR-0014).
+                    if (isMappedAlias(index)) return mapTypeRef(kind.type, worldClassName)
                     val aliased = kind.type
                     if (aliased is WitTypeRef.Id) {
                         val targetDef = resolve.types.getOrNull(aliased.index)
@@ -2039,6 +2231,8 @@ class WitToKotlinPoetConverter(
         for (arity in generatedTupleArities.sorted()) {
             fileBuilder.addType(buildTupleTypeSpec(arity))
         }
+        // A library of interfaces has no sessions (ADR-0014).
+        if (interfacesOnly) return fileBuilder.build()
 
         // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
         fileBuilder.addType(buildWasmtimeSessionTypeSpec())

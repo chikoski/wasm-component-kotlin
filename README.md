@@ -179,6 +179,13 @@ Options:
   -w, --world=<text>         対象の WIT world 名を指定（省略時はすべての world を生成）
   --from-json                入力を wasm-tools の JSON AST として直接読み込むフラグ
   --no-wasmtime              Wasmtime (FFM/JNI) セッション実装を生成しない（Chicory のみ・Android 向け）
+  --with=<interface=package> import した interface を生成せず、既存のバインディングの package を使う
+                             （例: wasi:filesystem/types@0.3.0=wasm2kt.wasi.wasi.filesystem.types。繰り返し可。ADR-0014）
+  --library=<path>           --interfaces-only で生成したライブラリの jar / クラスディレクトリ。マニフェストにある
+                             interface を、world が同じ版を import していれば生成せずに使う（繰り返し可）
+  --no-library-interfaces    --library のマニフェストを使わない（--with だけを使う）
+  --interfaces-only          world が import する interface と、そのマニフェストだけを生成する（ライブラリ用）
+  --resources-output=<path>  --interfaces-only のマニフェストの出力先（省略時は --output）
   --wasm-tools-path=<text>   wasm-tools 実行バイナリのパス（デフォルト: "wasm-tools"）
   -h, --help                 ヘルプを表示
 ```
