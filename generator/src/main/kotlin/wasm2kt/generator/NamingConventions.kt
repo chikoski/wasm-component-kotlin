@@ -45,4 +45,21 @@ object NamingConventions {
         val afterDot = rawName.substringAfter('.', rawName)
         return toCamelCase(afterDot)
     }
+
+    /** Kotlin hard keywords, which cannot be package segments without backticks. */
+    private val HARD_KEYWORDS = setOf(
+        "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface",
+        "is", "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias",
+        "typeof", "val", "var", "when", "while",
+    )
+
+    /**
+     * Converts a WIT namespace, package or interface name to a Kotlin package segment (ADR-0011):
+     * lowercase with `-` replaced by `_` (`outgoing-handler` -> `outgoing_handler`), and a trailing `_`
+     * for Kotlin hard keywords (`is` -> `is_`). WIT names never contain `_`, so the mapping is one-to-one.
+     */
+    fun toPackageSegment(witName: String): String {
+        val segment = witName.trim().removePrefix("%").lowercase().replace('-', '_')
+        return if (segment in HARD_KEYWORDS) "${segment}_" else segment
+    }
 }

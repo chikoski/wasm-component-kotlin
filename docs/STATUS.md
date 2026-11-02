@@ -48,6 +48,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
+* 短い名前が同じ interface（`example:http/types` と `example:fs/types`）の import と export を、両バックエンドで区別して扱える。キーは完全修飾名で、短い名前と版なしの名前は一意のときだけ受け付け、曖昧ならエラー（`same-name` フィクスチャ、[ADR-0011](adr/0011-qualified-interface-keys.md)、#32）
 * ホスト定義 resource: Wasmtime（FFM / JNI）と Chicory で同じハーネスのイベント列が一致（own / borrow / 入れ子の option・result / static / world 直下の resource / drop 時の `close()`、貸し出し中のハンドルの drop の拒否）
 * 参照実装の Wasmtime は 48 LTS（decomposer の wasmtime-environ と同じ版。[ADR-0010](adr/0010-wasmtime-lts.md)）。UTF-16 のアラインメントとホストの整数の範囲検査も、差分テストで一致を確認。Wasmtime と挙動が違う唯一の項目（lift で見つかったトラップの後の poison）と再入は、Chicory 単体のテストで確認（[ADR-0007](adr/0007-canonical-abi-validation.md)）
 * コンポーネント定義の resource の所有権: own で返したハンドルはコンポーネントの表から取り除かれ、戻すと新しいハンドルになる（仕様の `lift_own` / `lower_own`）。手書きの WAT フィクスチャ `res-edge` で、返したハンドルの再利用などを Chicory 単体のテストで確認（#31）
@@ -62,7 +63,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
 * Chicory バックエンドの未対応機能: async（WASI P3）、WASI のホスト実装、子コンポーネントの間で resource を受け渡す合成コンポーネント。いずれも使用時に例外になる。plan から分かるものは、Gradle プラグインがビルド時に警告する（`failOnUnsupportedFeatures` でエラーにもできる。#39）
 * メモリを持つ子コンポーネント同士の合成は、decomposer が panic する（[#47](https://github.com/chikoski/wasm-component-kotlin/issues/47)）
-* 短い名前が同じ interface（`wasi:filesystem/types` と `wasi:http/types` など）を同時に扱えない（[#32](https://github.com/chikoski/wasm-component-kotlin/issues/32)。方針を検討中）
+* 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うとエラーになる（Kotlin の package にバージョンを含めないため。[ADR-0011](adr/0011-qualified-interface-keys.md)）
+* export した interface の呼び出しと、コンポーネント定義の resource は、どの world の `Session` でも受け付ける（`WitSession`）。world がその interface を export しているかはコンパイル時に検査しない。world の形と合わせて ADR-0012 で決める
 * ホスト resource の受け渡しは、セッションの呼び出し中（同じスレッド）に限られる。Wasmtime ではホストの borrow を一時的な所有ハンドルで代用している（48 でも必要。[ADR-0008](adr/0008-host-defined-resources.md)、[ADR-0010](adr/0010-wasmtime-lts.md)）
 * コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
@@ -86,11 +88,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### P1
 
-QC レビュー（2026-10-31）で見つかった残りの 1 件を、async より先に片付けます。#13 の前提です。
-
-| Issue | 内容 |
-| :--- | :--- |
-| [#32](https://github.com/chikoski/wasm-component-kotlin/issues/32) | interface を完全修飾名で識別する（方針案を Issue で検討中） |
+QC レビュー（2026-10-31）で見つかったものは、すべて片付けました（「完了」を参照）。
 
 async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。
 
@@ -121,6 +119,7 @@ QC レビュー（2026-10-31）で見つかったもの:
 * [#36](https://github.com/chikoski/wasm-component-kotlin/issues/36) JSON 境界のスカラーの型の検査と option のタグの判定 — #44、[ADR-0009](adr/0009-json-boundary-option-tag-and-scalar-types.md)
 * [#38](https://github.com/chikoski/wasm-component-kotlin/issues/38) wasm-tools と Rust の版の固定、Rust の clippy / test、generator のユニットテスト — #45
 * [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) Chicory 未対応の機能をビルド時に報告する — #46
+* [#32](https://github.com/chikoski/wasm-component-kotlin/issues/32) interface を完全修飾名で識別し、Kotlin では WIT の構造を package に写す — [ADR-0011](adr/0011-qualified-interface-keys.md)（`Linker` と型付きの `imports(...)`、`WitSession`）
 * [#34](https://github.com/chikoski/wasm-component-kotlin/issues/34) decomposer と rust-bridge を Wasmtime 48 LTS に揃える — [ADR-0010](adr/0010-wasmtime-lts.md)（plan v3、import した resource 型ごとの動的なホスト型、ブリッジの整数の範囲検査）
 
 それ以前:

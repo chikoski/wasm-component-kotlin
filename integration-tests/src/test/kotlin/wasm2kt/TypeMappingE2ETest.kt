@@ -92,7 +92,7 @@ class TypeMappingE2ETest {
         Files.writeString(pkgDir.resolve("Harness.kt"), harness)
         val classes = tempDir.resolve("classes")
         Files.createDirectories(classes)
-        val sources = Files.list(pkgDir).use { s -> s.filter { it.toString().endsWith(".kt") }.map { it.toString() }.toList() }
+        val sources = generatedSources(tempDir)
         // `types-world` must become TypesWorld, not TypesWorldWorld (ADR-0006).
         assert(sources.any { it.endsWith("TypesWorld.kt") }) { "unexpected generated files: $sources" }
         val exit = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(

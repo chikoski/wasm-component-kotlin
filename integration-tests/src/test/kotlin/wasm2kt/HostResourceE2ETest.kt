@@ -29,8 +29,11 @@ class HostResourceE2ETest {
 
         import java.nio.file.Path
         import wasm2kt.runtime.ComponentBackendFactory
+        import $pkg.example.host_res.store.Blob
+        import $pkg.example.host_res.store.Store
+        import $pkg.exports.example.host_res.guest_api.Counter
 
-        class HostBlob(val name: String, var bytes: ByteArray, private val log: MutableList<String>) : HostResWorld.Blob {
+        class HostBlob(val name: String, var bytes: ByteArray, private val log: MutableList<String>) : Blob {
             override fun size(): UInt = bytes.size.toUInt()
             override fun append(data: ByteArray) { bytes += data }
             override fun read(): ByteArray = bytes
@@ -47,22 +50,23 @@ class HostResourceE2ETest {
             var onLog: (() -> Unit)? = null
             private var created = 0
 
-            val imports = object : HostResWorld.Imports {
-                override val store = object : HostResWorld.Store {
-                    override fun newBlob(init: ByteArray): HostResWorld.Blob =
+            private val store = object : Store {
+                    override fun newBlob(init: ByteArray): Blob =
                         HostBlob("g${'$'}{created++}", init, log).also { log += "new:${'$'}{it.name}:${'$'}{init.size}" }
-                    override fun blobMerge(a: HostResWorld.Blob, b: HostResWorld.Blob): HostResWorld.Blob {
+                    override fun blobMerge(a: Blob, b: Blob): Blob {
                         a as HostBlob; b as HostBlob
                         log += "merge:${'$'}{a.name}+${'$'}{b.name}"
                         b.close() // the host owns b now
                         return HostBlob("m", a.bytes + b.bytes, log)
                     }
                     override fun log(msg: String) { log += "log:${'$'}msg"; onLog?.invoke() }
-                    override fun find(name: String): HostResWorld.Blob? =
+                    override fun find(name: String): Blob? =
                         if (name == "none") null else HostBlob("found-${'$'}name", byteArrayOf(1, 2), log)
                 }
+            private val worldImports = object : HostResWorld.Imports {
                 override fun newTicket(id: UInt): HostResWorld.Ticket = HostTicket(id, log).also { log += "new-ticket:${'$'}id" }
             }
+            val imports = HostResWorld.imports(exampleHostResStore = { store }, world = { worldImports })
 
             context(session: HostResWorld.Session)
             fun exercise() {
@@ -99,7 +103,7 @@ class HostResourceE2ETest {
 
                 // A component-defined resource that calls the host while borrowed: the host cannot
                 // drop it from inside that call.
-                val counter = HostResWorld.Counter(5)
+                val counter = Counter(5)
                 onLog = { log += if (runCatching { counter.close() }.isFailure) "drop-in-call:failed" else "drop-in-call:ok" }
                 counter.poke()
                 onLog = null
@@ -135,7 +139,7 @@ class HostResourceE2ETest {
         Files.writeString(pkgDir.resolve("Harness.kt"), harness)
         val classes = tempDir.resolve("classes")
         Files.createDirectories(classes)
-        val sources = Files.list(pkgDir).use { s -> s.filter { it.toString().endsWith(".kt") }.map { it.toString() }.toList() }
+        val sources = generatedSources(tempDir)
         val exit = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
             System.err,
             *(listOf("-Xcontext-parameters", "-jvm-target", "21", "-no-stdlib", "-classpath", System.getProperty("java.class.path"), "-d", classes.toString()) + sources).toTypedArray(),

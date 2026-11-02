@@ -1,21 +1,22 @@
 package com.example.counter
 
+import com.example.counter.exports.example.counter.counter_api.Counter
 import java.nio.file.Paths
 
 fun main() {
     val wasmPath = Paths.get("fixtures/counter.wasm")
 
     CounterWorld.withSession(wasmPath) {
-        CounterWorld.Counter(10).use { c1 ->
+        Counter(10).use { c1 ->
             c1.increment()
             c1.increment()
             c1.add(5)
             println("c1 initial value = ${c1.getValue()}")
 
-            val c2 = CounterWorld.Counter(25)
+            val c2 = Counter(25)
             c2.increment()
 
-            CounterWorld.Counter.merge(c1, c2).use { merged ->
+            Counter.merge(c1, c2).use { merged ->
                 println("c1 after merge   = ${c1.getValue()}")
                 println("c2 isClosed      = ${c2.isClosed}")
                 println("merged value     = ${merged.getValue()}")

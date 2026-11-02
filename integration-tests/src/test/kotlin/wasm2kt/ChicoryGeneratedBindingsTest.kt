@@ -39,10 +39,9 @@ class ChicoryGeneratedBindingsTest {
             "-Xcontext-parameters", "-jvm-target", "21", "-no-stdlib",
             "-classpath", System.getProperty("java.class.path"),
             "-d", classesOutDir.toString(),
-            pkgDir.resolve("WitSupport.kt").toString(),
-            pkgDir.resolve(worldFile).toString(),
-            harnessPath.toString(),
+            *generatedSources(tempDir).toTypedArray(),
         )
+        check(generatedSources(tempDir).any { it.endsWith(worldFile) }) { "missing $worldFile" }
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exit, "Generated bindings + harness must compile")
 
         val loader = java.net.URLClassLoader(arrayOf(classesOutDir.toUri().toURL()), javaClass.classLoader)
@@ -70,16 +69,18 @@ class ChicoryGeneratedBindingsTest {
         val out = generateCompileRun(
             tempDir, "counter", "com.example.chicory.counter", "CounterWorld.kt",
             """
+            import com.example.chicory.counter.exports.example.counter.counter_api.Counter
+
             fun run(component: ComponentBackendFactory): String =
                 CounterWorld.withSession(component) {
-                    CounterWorld.Counter(10).use { c1 ->
+                    Counter(10).use { c1 ->
                         c1.increment()
                         c1.increment()
                         c1.add(5)
                         val v1 = c1.getValue()
-                        val c2 = CounterWorld.Counter(25)
+                        val c2 = Counter(25)
                         c2.increment()
-                        CounterWorld.Counter.merge(c1, c2).use { merged ->
+                        Counter.merge(c1, c2).use { merged ->
                             "v1=${'$'}v1,v1After=${'$'}{c1.getValue()},c2Closed=${'$'}{c2.isClosed},merged=${'$'}{merged.getValue()}"
                         }
                     }
@@ -95,15 +96,21 @@ class ChicoryGeneratedBindingsTest {
         val out = generateCompileRun(
             tempDir, "roundtrip", "com.example.chicory.roundtrip", "RoundtripWorld.kt",
             """
+            import com.example.chicory.roundtrip.example.roundtrip.env_provider.EnvProvider
+            import com.example.chicory.roundtrip.exports.example.roundtrip.math_api.MathApi
+            import com.example.chicory.roundtrip.exports.example.roundtrip.math_api.scale
+
             fun run(component: ComponentBackendFactory): String {
-                val imports = object : RoundtripWorld.Imports {
-                    override val envProvider = object : RoundtripWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 6
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
-                    }
-                }
+                val imports = RoundtripWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
                 return RoundtripWorld.withSession(component, imports) {
-                    val scaled = with(RoundtripWorld.MathApi) { scale(7) }
+                    val scaled = MathApi.scale(7)
                     val tag = RoundtripWorld.describeCode("ERR", 404u)
                     val initial = RoundtripWorld.ItemSummary(
                         count = 10u,

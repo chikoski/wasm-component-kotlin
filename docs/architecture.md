@@ -52,7 +52,7 @@ JNI（Java Native Interface）のボイラープレートや C ヘッダ生成�
   * `wasm2kt_session_close`: `Store` の解放
 * **Upcall Stub（Rust Wasmtime → Kotlin Host Imports）**:
   * `Linker.nativeLinker().upcallStub(...)` により、Kotlin の `HostCallbackDispatcher.onHostCall` メソッドを C 関数ポインタ（`extern "C" fn`）として Rust 側の `wasmtime::component::Linker` に渡します。
-  * これにより、Wasm コンポーネント内部からホストの `Imports` インターフェースのメソッドが呼ばれた際、シームレスに Kotlin 側の実装がコールバックされます。
+  * これにより、Wasm コンポーネント内部からホストの import が呼ばれた際、`Linker` に登録された Kotlin 側の実装（import した interface ごとの Kotlin interface。ADR-0011）がシームレスにコールバックされます。
 
 ### 3.3 Rust Wasmtime ブリッジ ([rust-bridge/src/lib.rs](../rust-bridge/src/lib.rs))
 * Wasmtime の公式 C API (`libwasmtime`) は現時点で Core Wasm が中心であり Component Model の高レベル型 (`wasmtime::component::Val` や `ResourceAny`) の操作が難しいため、Rust の `wasmtime` クレート（`48.0.8` LTS、`component-model` feature 有効。版の方針は [ADR-0010](adr/0010-wasmtime-lts.md)）を直接ラップした薄い `cdylib` を採用しています。

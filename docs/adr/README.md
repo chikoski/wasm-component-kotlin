@@ -18,3 +18,4 @@
 | [0008](0008-host-defined-resources.md) | ホスト定義 resource を interface + Imports で表し、rep の表で受け渡す | 承認 |
 | [0009](0009-json-boundary-option-tag-and-scalar-types.md) | JSON 境界で option のタグを型に基づいて判定し、スカラーの JSON 型を検査する | 承認 |
 | [0010](0010-wasmtime-lts.md) | decomposer と rust-bridge を同じ Wasmtime の LTS に揃える | 承認 |
+| [0011](0011-qualified-interface-keys.md) | interface を完全修飾名で識別し、Kotlin では WIT の構造を package に写す | 承認 |

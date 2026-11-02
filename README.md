@@ -92,6 +92,8 @@ world counter-world {
 **ホスト側 Kotlin コード:**
 ```kotlin
 import com.example.counter.*
+// export した interface は package <base>.exports.<namespace>.<package>.<interface> に生成される（ADR-0011）
+import com.example.counter.exports.example.counter.counter_api.Counter
 import java.nio.file.Paths
 
 fun main() {
@@ -99,16 +101,16 @@ fun main() {
 
     CounterWorld.withSession(wasmPath) {
         // Counter(...) の生成時に Context Parameter から Session を自動キャプチャし、.use で自動解放
-        CounterWorld.Counter(10).use { c1 ->
+        Counter(10).use { c1 ->
             c1.increment()
             c1.add(5)
             println("c1 = ${c1.getValue()}") // 16
 
-            val c2 = CounterWorld.Counter(26)
+            val c2 = Counter(26)
 
             // merge(a: borrow<counter>, b: own<counter>) -> counter
             // c1 は借用(borrow)なので引き続き利用可能、c2 は所有権移動(own)により消費される
-            CounterWorld.Counter.merge(c1, c2).use { merged ->
+            Counter.merge(c1, c2).use { merged ->
                 println("c1 after merge = ${c1.getValue()}") // 16 (引き続き有効)
                 println("c2 isClosed = ${c2.isClosed}")      // true (所有権が移動済み)
                 println("merged = ${merged.getValue()}")     // 42
@@ -198,6 +200,6 @@ Options:
 
 ### 使用例 (`examples/`)
 * **[01-arithmetic](examples/01-arithmetic/README.md)**: 最小構成の四則演算コンポーネントのネイティブ実行。
-* **[02-host-imports](examples/02-host-imports/README.md)**: ホスト関数 (`Imports`) の実装と Wasm からの FFM Upcall コールバック。
+* **[02-host-imports](examples/02-host-imports/README.md)**: ホスト関数 (`Imports` と `imports(...)`) の実装と Wasm からの FFM Upcall コールバック。
 * **[03-counter-resource](examples/03-counter-resource/README.md)**: ステートフルな `resource` のライフサイクル（`.use` 自動解放、`borrow` と `own` による `merge`）。
 * **[04-algebraic-types-and-mock](examples/04-algebraic-types-and-mock/README.md)**: `record`, `variant`, `flags`, `option`（`T?`）, `WitResult` の操作と、`InMemoryWasmtimeSession` を使った単体テスト。

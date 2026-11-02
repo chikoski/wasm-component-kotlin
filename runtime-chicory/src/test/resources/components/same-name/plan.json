@@ -1,0 +1,603 @@
+{
+  "version": 3,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "[export]example:http/types@0.1.0",
+          "name": "[resource-new]tally",
+          "kind": "func"
+        },
+        {
+          "module": "[export]example:http/types@0.1.0",
+          "name": "[resource-drop]tally",
+          "kind": "func"
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "describe",
+          "kind": "func"
+        },
+        {
+          "module": "example:fs/types@0.1.0",
+          "name": "describe",
+          "kind": "func"
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[constructor]tally",
+          "kind": "func"
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[method]tally.get",
+          "kind": "func"
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[resource-drop]tally",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "actual",
+          "name": "0",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "1",
+          "kind": "func"
+        },
+        {
+          "module": "actual",
+          "name": "2",
+          "kind": "func"
+        },
+        {
+          "module": "shim",
+          "name": "$imports",
+          "kind": "table"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "resource",
+      "resource": 1,
+      "dtor": {
+        "instance": 0,
+        "name": "2",
+        "kind": "export"
+      },
+      "instance": 0
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 0,
+      "args": [
+        {
+          "module": "[export]example:http/types@0.1.0",
+          "name": "[resource-new]tally",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "[export]example:http/types@0.1.0",
+          "name": "[resource-drop]tally",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "describe",
+          "def": {
+            "instance": 0,
+            "name": "0",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:fs/types@0.1.0",
+          "name": "describe",
+          "def": {
+            "instance": 0,
+            "name": "1",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[constructor]tally",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[method]tally.get",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "example:http/types@0.1.0",
+          "name": "[resource-drop]tally",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 1,
+        "name": "memory"
+      }
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_realloc",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 2,
+      "args": [
+        {
+          "module": "actual",
+          "name": "0",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "actual",
+          "name": "1",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "actual",
+          "name": "2",
+          "def": {
+            "instance": 1,
+            "name": "example:http/types@0.1.0#[dtor]tally",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "shim",
+          "name": "$imports",
+          "def": {
+            "instance": 0,
+            "name": "$imports",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-post-return",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_post_example:fs/types@0.1.0#describe",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "resource-new",
+      "table": 1,
+      "index": 0
+    },
+    {
+      "kind": "resource-drop",
+      "table": 1,
+      "index": 1
+    },
+    {
+      "kind": "lower-import",
+      "import": 1,
+      "type": {
+        "params": [
+          {
+            "name": "start",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 0
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 2
+    },
+    {
+      "kind": "lower-import",
+      "import": 2,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 3
+    },
+    {
+      "kind": "resource-drop",
+      "table": 0,
+      "index": 4
+    },
+    {
+      "kind": "lower-import",
+      "import": 3,
+      "type": {
+        "params": [
+          {
+            "name": "e",
+            "type": {
+              "k": "record",
+              "fields": [
+                {
+                  "name": "code",
+                  "type": {
+                    "k": "u32"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      },
+      "options": 3,
+      "index": 5
+    },
+    {
+      "kind": "lower-import",
+      "import": 4,
+      "type": {
+        "params": [
+          {
+            "name": "e",
+            "type": {
+              "k": "variant",
+              "cases": [
+                {
+                  "name": "missing",
+                  "type": {
+                    "k": "string"
+                  }
+                },
+                {
+                  "name": "denied",
+                  "type": null
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      },
+      "options": 4,
+      "index": 6
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": 0,
+      "async": false
+    },
+    {
+      "index": 1,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 2,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": 0,
+      "async": false
+    },
+    {
+      "index": 3,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    },
+    {
+      "index": 4,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "example:http/types@0.1.0",
+      "path": [
+        "tally"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "example:http/types@0.1.0",
+      "path": [
+        "[constructor]tally"
+      ]
+    },
+    {
+      "index": 2,
+      "name": "example:http/types@0.1.0",
+      "path": [
+        "[method]tally.get"
+      ]
+    },
+    {
+      "index": 3,
+      "name": "example:http/types@0.1.0",
+      "path": [
+        "describe"
+      ]
+    },
+    {
+      "index": 4,
+      "name": "example:fs/types@0.1.0",
+      "path": [
+        "describe"
+      ]
+    }
+  ],
+  "resourceTables": [
+    {
+      "index": 0,
+      "resource": 0,
+      "instance": 0,
+      "imported": true,
+      "import": 0
+    },
+    {
+      "index": 1,
+      "resource": 1,
+      "instance": 0,
+      "imported": false,
+      "import": null
+    }
+  ],
+  "exports": [
+    {
+      "instance": "example:fs/types@0.1.0",
+      "name": "describe",
+      "func": {
+        "instance": 1,
+        "name": "example:fs/types@0.1.0#describe",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "e",
+            "type": {
+              "k": "variant",
+              "cases": [
+                {
+                  "name": "missing",
+                  "type": {
+                    "k": "string"
+                  }
+                },
+                {
+                  "name": "denied",
+                  "type": null
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:http/types@0.1.0",
+      "name": "[constructor]tally",
+      "func": {
+        "instance": 1,
+        "name": "example:http/types@0.1.0#[constructor]tally",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "start",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "own",
+            "table": 1
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:http/types@0.1.0",
+      "name": "[method]tally.get",
+      "func": {
+        "instance": 1,
+        "name": "example:http/types@0.1.0#[method]tally.get",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 1
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": "example:http/types@0.1.0",
+      "name": "describe",
+      "func": {
+        "instance": 1,
+        "name": "example:http/types@0.1.0#describe",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "e",
+            "type": {
+              "k": "record",
+              "fields": [
+                {
+                  "name": "code",
+                  "type": {
+                    "k": "u32"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "run",
+      "func": {
+        "instance": 1,
+        "name": "run",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "code",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "string"
+          }
+        ],
+        "async": false
+      }
+    }
+  ]
+}

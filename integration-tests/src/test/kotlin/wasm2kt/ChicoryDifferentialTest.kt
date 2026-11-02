@@ -83,8 +83,8 @@ class ChicoryDifferentialTest {
     private val envProvider = {
         object : WitHostImportDispatcher {
             override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = when (importSpec) {
-                "env-provider#get-multiplier" -> JsonPrimitive(3)
-                "env-provider#format-tag" -> JsonPrimitive("${args[0].jsonPrimitive.content}-${args[1].jsonPrimitive.content}")
+                "example:roundtrip/env-provider@0.1.0#get-multiplier" -> JsonPrimitive(3)
+                "example:roundtrip/env-provider@0.1.0#format-tag" -> JsonPrimitive("${args[0].jsonPrimitive.content}-${args[1].jsonPrimitive.content}")
                 else -> error("Unexpected import: $importSpec")
             }
         }
@@ -112,7 +112,10 @@ class ChicoryDifferentialTest {
             }
             for (u in listOf("0", "1", "9223372036854775807", "9223372036854775813", "18446744073709551615")) add(Call("echo-u64", JsonPrimitive(u)))
             for ((p, c) in listOf("tag" to 0L, "" to 42L, "日本語🎌" to 4294967295L)) add(Call("describe-code", JsonPrimitive(p), JsonPrimitive(c)))
-            for (v in listOf(0, 14, -7)) add(Call("math-api#scale", JsonPrimitive(v)))
+            for (v in listOf(0, 14, -7)) add(Call("example:roundtrip/math-api@0.1.0#scale", JsonPrimitive(v)))
+            // Short and unversioned interface names stay accepted while they are unambiguous (ADR-0011).
+            add(Call("math-api#scale", JsonPrimitive(3)))
+            add(Call("example:roundtrip/math-api#scale", JsonPrimitive(4)))
             add(Call("scale", JsonPrimitive(5)))
             add(Call("check-even", JsonPrimitive(1), JsonPrimitive(2))) // arity error on both sides
         }
@@ -244,10 +247,10 @@ class ChicoryDifferentialTest {
             fun bytes(e: JsonElement) = ByteArray(e.jsonArray.size) { e.jsonArray[it].jsonPrimitive.int.toByte() }
             fun store(b: ByteArray) = next++.also { data[it] = b }
             override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = when (importSpec) {
-                "store#[constructor]blob" -> JsonPrimitive(store(bytes(args[0])))
-                "store#[static]blob.merge" -> JsonPrimitive(store(data.getValue(args[0].jsonPrimitive.int) + data.getValue(args[1].jsonPrimitive.int)))
-                "store#[method]blob.read" -> JsonArray(data.getValue(args[0].jsonPrimitive.int).map { JsonPrimitive(it.toInt() and 0xFF) })
-                "store#[resource-drop]blob" -> JsonNull.also { data.remove(args[0].jsonPrimitive.int) }
+                "example:host-res/store@0.1.0#[constructor]blob" -> JsonPrimitive(store(bytes(args[0])))
+                "example:host-res/store@0.1.0#[static]blob.merge" -> JsonPrimitive(store(data.getValue(args[0].jsonPrimitive.int) + data.getValue(args[1].jsonPrimitive.int)))
+                "example:host-res/store@0.1.0#[method]blob.read" -> JsonArray(data.getValue(args[0].jsonPrimitive.int).map { JsonPrimitive(it.toInt() and 0xFF) })
+                "example:host-res/store@0.1.0#[resource-drop]blob" -> JsonNull.also { data.remove(args[0].jsonPrimitive.int) }
                 else -> error("Unexpected import: $importSpec")
             }
         }

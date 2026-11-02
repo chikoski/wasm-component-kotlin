@@ -6,11 +6,16 @@ fun main() {
     val wasmPath = Paths.get("fixtures/live_calc.wasm")
     val auditLog = mutableListOf<String>()
 
-    val hostImports = object : LiveCalcWorld.Imports {
-        override fun recordCalc(a: Int, b: Int) {
-            auditLog += "Guest requested calculation with ($a, $b)"
-        }
-    }
+    // World-level imports are implemented through LiveCalcWorld.Imports and passed with imports(...).
+    val hostImports = LiveCalcWorld.imports(
+        world = {
+            object : LiveCalcWorld.Imports {
+                override fun recordCalc(a: Int, b: Int) {
+                    auditLog += "Guest requested calculation with ($a, $b)"
+                }
+            }
+        },
+    )
 
     LiveCalcWorld.withSession(wasmPath, hostImports) {
         val sum = LiveCalcWorld.add(15, 27)

@@ -63,20 +63,26 @@ class Wasm2KtPluginFunctionalTest {
         src.resolve("Main.kt").writeText(
             """
             import com.example.rt.*
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.MathApi
+            import com.example.rt.exports.example.roundtrip.math_api.scale
             import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
 
             fun main() {
-                val imports = object : RootWorld.Imports {
-                    override val envProvider = object : RootWorld.EnvProvider {
-                        override fun getMultiplier(): Int = 6
-                        override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
-                    }
-                }
+                val imports = RootWorld.imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
                 val rt = RootWorld.withSession(RoundtripComponent, imports) {
-                    "scaled=${'$'}{with(RootWorld.MathApi) { scale(7) }},tag=${'$'}{RootWorld.describeCode("ERR", 404u)}"
+                    "scaled=${'$'}{MathApi.scale(7)},tag=${'$'}{RootWorld.describeCode("ERR", 404u)}"
                 }
                 val ct = com.example.ct.RootWorld.withSession(CounterComponent) {
-                    com.example.ct.RootWorld.Counter(41).use { c -> c.increment(); "counter=${'$'}{c.getValue()}" }
+                    Counter(41).use { c -> c.increment(); "counter=${'$'}{c.getValue()}" }
                 }
                 println("RESULT ${'$'}rt;${'$'}ct")
             }
