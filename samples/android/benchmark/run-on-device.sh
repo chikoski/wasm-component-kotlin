@@ -26,8 +26,12 @@ for i in $(seq 1 "$runs"); do
   done
 done
 adb logcat -d -s wasm2kt-bench:I | grep PHASE > "$out/art-cold-start.txt"
+# Also in the job log (artifacts may not be downloadable everywhere).
+echo "== device"; cat "$out/device.txt"
+echo "== cold start"; sed 's/^.*PHASE /PHASE /' "$out/art-cold-start.txt"
 
 # Steady state.
 adb shell am instrument -w -r -e class com.example.wasm2kt.bench.CallBenchmark \
   -e androidx.benchmark.suppressErrors "$suppress" "$runner" | tee "$out/art-calls.txt"
 adb pull "/sdcard/Android/media/$pkg/" "$out/media" || true
+echo "== benchmark data"; find "$out/media" -name '*benchmarkData.json' -exec cat {} \; || true

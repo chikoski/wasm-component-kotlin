@@ -30,6 +30,12 @@ jobs:
           workspaces: rust-bridge
       - run: cargo build --locked --release --manifest-path rust-bridge/Cargo.toml
       - run: ./gradlew -Pwasm2kt.bench :benchmarks:bench :benchmarks:coldStart
+      # HotSpot does not JIT methods over 8000 bytes of bytecode; large wasm functions compile to such
+      # methods. Repeat the compute benchmarks with that limit lifted.
+      - run: >-
+          ./gradlew -Pwasm2kt.bench :benchmarks:bench -Pwasm2kt.bench.filter=compute/.*/chicory-aot
+          -Pwasm2kt.bench.outFile=calls-huge-methods.tsv "-Pwasm2kt.bench.jvmArgs=-XX:-DontCompileHugeMethods"
+      - run: ./gradlew -Pwasm2kt.bench :benchmarks:profile -Pwasm2kt.bench.filter=regex
       - uses: actions/upload-artifact@v4
         with:
           name: bench-jvm

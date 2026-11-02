@@ -98,7 +98,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
         s.close()
     }
 
-    h.write("calls.tsv")
+    h.write(System.getProperty("wasm2kt.bench.outFile") ?: "calls.tsv")
 }
 
 private fun wasmtime(b: String, jni: () -> Unit, ffm: () -> Unit) { if (b == "wasmtime-jni") jni() else ffm() }

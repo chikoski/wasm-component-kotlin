@@ -61,9 +61,12 @@ fun JavaExec.benchJvm() {
     classpath = sourceSets.main.get().runtimeClasspath
     workingDir = rootDir
     jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED", "-Xms1g", "-Xmx1g")
+    // -Pwasm2kt.bench.jvmArgs="-XX:-DontCompileHugeMethods" etc. for experiments.
+    providers.gradleProperty("wasm2kt.bench.jvmArgs").orNull?.let { jvmArgs(it.split(' ')) }
     systemProperty("wasm2kt.bench.gen", benchGen.get().asFile.path)
     systemProperty("wasm2kt.bench.out", layout.buildDirectory.dir("results").get().asFile.path)
     providers.gradleProperty("wasm2kt.bench.filter").orNull?.let { systemProperty("wasm2kt.bench.filter", it) }
+    providers.gradleProperty("wasm2kt.bench.outFile").orNull?.let { systemProperty("wasm2kt.bench.outFile", it) }
 }
 
 tasks.register<JavaExec>("bench") {
@@ -75,5 +78,11 @@ tasks.register<JavaExec>("bench") {
 tasks.register<JavaExec>("coldStart") {
     description = "Measures first instantiation and first call in fresh JVMs."
     mainClass.set("wasm2kt.bench.ColdStartKt")
+    benchJvm()
+}
+
+tasks.register<JavaExec>("profile") {
+    description = "Samples where a heavy Chicory AOT call spends its time."
+    mainClass.set("wasm2kt.bench.ProfileKt")
     benchJvm()
 }
