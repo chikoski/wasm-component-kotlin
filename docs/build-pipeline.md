@@ -1,7 +1,8 @@
 # ビルドの順序
 
 > 2026-11-03 時点の `main` と、[ADR-0015](adr/0015-binary-value-boundary.md)（提案）で加わる型付きブリッジのビルドを説明します。
-> ADR-0015 の未決の点のうち、ビルドに関わる 2 つ（型付きブリッジのビルドとキャッシュ、WIT のテキストの出し方）を判断するための資料です。
+> ADR-0015 の未決の点のうち、ビルドに関わるもの（WIT の取り出し、型付きブリッジのビルドとキャッシュ、CLI）を判断するための資料です。
+> A と B の一部は 2026-11-04 に決まりました（4 節、5 節）。
 
 ## 1. 成果物と、それを使う時期
 
@@ -13,7 +14,7 @@
 | 生成した Kotlin | 生成器 | ビルド時（コンパイル） | Kotlin コンパイラー |
 | `.wasm`（コンポーネント） | 利用者 | 実行時 | Wasmtime（汎用ブリッジ） |
 | rust-bridge（cdylib） | 利用者の `cargo build` | 実行時 | Wasmtime バックエンド |
-| WIT のテキスト（新規、ADR-0015） | 未決 | ビルド時だけ | 型付きブリッジの `bindgen!` |
+| WIT（新規、ADR-0015） | decomposer（`wit-component`） | ビルド時だけ | 型付きブリッジの `bindgen!` |
 | 型付きブリッジ（cdylib、新規） | 生成した Cargo クレートの `cargo build` | 実行時 | Wasmtime バックエンド |
 
 WIT のテキストは、型付きブリッジの Rust をコンパイルするときに、`bindgen!` マクロが読むだけです。実行時には使いません。
@@ -83,7 +84,7 @@ flowchart LR
 flowchart LR
     wasm[".wasm（各コンポーネント）"] --> D["wasm2ktDecompose&lt;C&gt;"]
     D --> dec["decomposed/<br/>plan.json, wit.json, coreN.wasm"]
-    D -. "未決 A: WIT のテキスト" .-> wit["world.wit"]
+    D --> wit["WIT（world.wasm / world.wit）"]
     dec --> G["wasm2ktGenerate&lt;C&gt;<br/>Kotlin"]
     dec --> R["wasm2ktGenerateBridge（新規）<br/>全コンポーネントで 1 つの Cargo クレート"]
     wit --> R
@@ -111,7 +112,9 @@ flowchart LR
 * ネイティブライブラリを jar のリソースから読み込む仕組み（今は、ファイルのパスから読み込むだけ）
 * Android では、ABI ごとのビルドと `jniLibs` への配置（#60 の判断による）
 
-## 4. 未決 A: WIT のテキストをどこで作るか
+## 4. A: WIT をどこで取り出すか
+
+**決定（2026-11-04）:** A1。decomposer が `wit-component` で出力する。
 
 `bindgen!` は、WIT をビルド時に読みます（`path` の指定を wit-parser の `Resolve::push_path` に渡す）。
 
@@ -137,7 +140,10 @@ printer の書式の違いを気にせずに済みます。どちらを出すか
 world の名前: コンポーネントから取り出した WIT は `package root:component; world root { ... }` になります（Kotlin の生成で `RootWorld` になるのと同じ）。
 `bindgen!` には `world: "root"` を渡します。
 
-## 5. 未決 B: 型付きブリッジのタスクと、キャッシュのキー
+## 5. B: 型付きブリッジのタスクと、キャッシュのキー
+
+**決定（2026-11-04）:** 型付きブリッジを有効にしたビルドでは、`cargo` を前提にする。見つからなければビルドを失敗させる（汎用ブリッジには落とさない）。
+ビルドが遅いことは受け入れ、改善は後で行う。
 
 **タスクの分け方**
 
@@ -164,9 +170,32 @@ world の名前: コンポーネントから取り出した WIT は `package roo
   * ディレクトリの中身は Gradle のキャッシュのキーに含めません
 * Cargo.lock はプラグインが持ち、生成したクレートに置きます。依存の版を固定し、キャッシュのキーを安定させるためです
 
-**判断が要る点**
+**改善の候補（後で）**
 
-* `cargo` が見つからないとき
-  * ビルドを失敗させるか、警告して汎用ブリッジに落とすか
-  * オプションを明示的に有効にした場合は、失敗させるのが自然です
-* CLI の利用者（Gradle を使わない場合）に、同じ生成と `cargo` の実行を提供するか（`wasm2kt bridge` のようなサブコマンド）
+* Cargo の target ディレクトリの共有（上記）で、2 回目以降は wasmtime のコンパイルを省く
+* wasmtime の features を必要なものに絞る
+* 開発中は汎用ブリッジで動かし、型付きブリッジは release のビルドだけで作る
+
+## 6. D: CLI から型付きブリッジを作る
+
+今の CLI（`wasm2kt`）は、ビルドの 1 段階として呼ぶコード生成器です。`.wit` / `.wasm` から Kotlin のバインディングを生成するだけで、ビルドそのものは実行しません。
+分解、AOT コンパイル、`<Name>Component` の生成（Chicory 向け）は tooling（`ComponentBuild`）にあり、使っているのは Gradle プラグインだけです。
+
+Gradle を使わない利用者も、型付きブリッジを作れるようにします。提案は、生成とは別のサブコマンドです。
+
+```text
+wasm2kt generate ...                      # 今の生成（今のオプションのまま）
+wasm2kt bridge -o <クレートの出力先> \
+    --component calc=calc.wasm --component http=http.wasm \
+    [--build] [--target <トリプル>]       # --build で cargo build も実行する
+```
+
+* サブコマンドに分ける理由は 2 つ
+  * 今の生成は、1 回の呼び出しで world を 1 つ扱う（ADR-0012）。型付きブリッジは、プロジェクトの全コンポーネントで 1 つのライブラリにする（wasmtime をプロセスに 1 つだけ読み込むため）。生成のオプションにすると、コンポーネントごとにライブラリができてしまう
+  * 生成は `cargo` なしで動く。ブリッジには `cargo` が要る
+* `bridge` は、Gradle プラグインと同じ tooling の処理（WIT の取り出し、クレートの生成、`cargo` の実行）を呼ぶ
+* `--build` を付けないときは、クレートを生成するだけにする。利用者が自分のビルド（`cargo` のワークスペースなど）に組み込めるようにするため
+* 今の `wasm2kt <入力> -o ... -p ...` の形は、`generate` の別名として残す
+* コンポーネント名は、Kotlin の生成（`generate`）で使う ID と一致させる必要がある（3.2 節）
+
+Chicory 向けのビルド（分解と AOT コンパイル）を CLI に出すかは、別の論点として扱います。
