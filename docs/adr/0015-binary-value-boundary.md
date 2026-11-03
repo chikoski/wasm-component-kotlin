@@ -97,7 +97,8 @@ Wasmtime の型付きの API:
 **型付きブリッジ**（新規。Gradle プラグインのオプション）
 
 * tooling が、プロジェクトのすべてのコンポーネントをまとめた 1 つの Cargo クレートを生成し、`cargo build` で 1 つの cdylib を作る
-  * コンポーネントごとに、`wasmtime::component::bindgen!` に WIT を渡したモジュールを生成する。WIT のテキストは decomposer が `.wasm` から出力する
+  * コンポーネントごとに、`wasmtime::component::bindgen!` に WIT を渡したモジュールを生成する。WIT はビルド時にだけ使う（実行時に Wasmtime が読むのは今と同じ `.wasm`）。
+    `bindgen!` はコンポーネントの `.wasm` をそのままは受け付けないので、コンポーネントから WIT を取り出す段階が要る（[ビルドの順序](../build-pipeline.md) の 4 節）
   * エクスポートの呼び出し: 形式から Rust の型（`Vec<u8>`、`String`、bindgen が生成した record など）に読み、型付きの関数を呼び、戻り値を形式に書く
   * ホスト import: bindgen が生成した trait を実装し、引数を形式に書いてコールバックで Kotlin を呼ぶ
   * ホスト定義 resource は、Kotlin の `HostResourceTable` の rep をそのまま `Resource<T>` の rep に使う（ADR-0008）。ゲストの resource は、`ResourceAny` をブリッジのハンドル表に入れる
@@ -144,6 +145,8 @@ Wasmtime の型付きの API:
 
 ## 未決の点
 
-* 型付きブリッジのビルドを Gradle のどのタスクに入れるか。キャッシュのキーをどうするか（Rust のツールチェーン、wasmtime の版、コンポーネント）
-* WIT のテキストを decomposer が出力するか（`wit-component` の printer を使う）、生成器が `wit.json` から出力するか
-* `invoke` の戻り値のバッファを、呼び出しごとに確保するか、セッションごとに使い回すか
+判断のための資料: [ビルドの順序](../build-pipeline.md)、[Kotlin から wasm の関数を呼び出す経路](../call-path.md)
+
+* A. WIT をどこで取り出すか（ビルドの順序の 4 節）。提案: decomposer が `wit-component` で出力する
+* B. 型付きブリッジのビルドを Gradle のどのタスクに入れるか。キャッシュのキーをどうするか（ビルドの順序の 5 節）
+* C. 呼び出しのバッファを、呼び出しごとに確保するか、セッションごとに使い回すか（呼び出しの経路の 4 節）。提案: 呼び出しごとに確保して計り、必要なら使い回しに変える
