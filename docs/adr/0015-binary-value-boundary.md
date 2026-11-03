@@ -1,0 +1,149 @@
+# 0015. 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える
+
+* ステータス: 提案
+* 日付: 2026-11-03
+* 関連: ADR-0003（置き換える）、ADR-0005、ADR-0007、ADR-0008、#15、#19、#59、#60
+
+## 背景
+
+ADR-0003 で、生成コードとバックエンドの間の値は JSON の木（`kotlinx.serialization` の `JsonElement`）で受け渡すことにした。
+#19 の計測（[docs/performance.md](../performance.md)）では、データを渡す呼び出しの時間のほぼすべてが、この境界にかかっていた。
+
+* `list<u8>` の往復は、JVM で 1 バイトあたり約 100 ns、ART で約 800 ns（64 KiB で JVM 6.6 ms、ART 52 ms）。wasm 側の処理はほぼゼロ
+* 1 バイトが 1 つの `JsonPrimitive` になる。数値も中身は文字列なので、割り当てと文字列の解析が要素ごとに起きる
+* 往復で、要素ごとの変換が 4 回走る（生成コード → JSON → 線形メモリ → JSON → 生成コード）
+* Wasmtime では、さらに JSON の木と文字列を相互に変換し、Rust 側で解析し直す（Chicory の 2.5 倍遅い）
+
+Wasmtime 側には、もう 1 つ限界がある。今の rust-bridge は、すべてのコンポーネントで共有する汎用のライブラリで、値を動的な `Val` で扱う。
+`Val` では `list<u8>` も `Val::List(Vec<Val>)` になり、要素ごとの変換が残る。Wasmtime の型付きの API（`bindgen!`、`TypedFunc`）を使えば、
+`Vec<u8>` や `String` をまとめてコピーできるが、Rust のコンパイル時に型を知っている必要がある。
+
+ビルド時には `.wasm` があり、WIT も取り出せるので、コンポーネントごとに Rust のコードを生成すれば型付きの API を使える。
+Wasmtime バックエンドを使うには、今も利用者が rust-bridge を `cargo build` している（#59）ので、Rust のツールチェーンが要ること自体は増えるコストではない。
+
+JSON の経路を、差分テストの基準として残す必要はない。差分テスト（`ChicoryDifferentialTest`）が比べているのは、Chicory と Wasmtime の結果で、
+正しさの基準は Wasmtime 自身の Canonical ABI の実装だから。性能の効果は、docs/performance.md の数値をベースラインにして測れる。
+
+## 検討した選択肢
+
+受け渡しの形式:
+
+1. **JSON のまま、バイト列と文字列だけ Chicory 専用の高速経路を足す** — 変更が小さい / Wasmtime は速くならない。2 つの経路が残り、コードが膨らむ
+2. **型に沿ったバイナリ形式に置き換え、両バックエンドで共有する** — 両方が速くなる。形式は 1 つ / 公開 API（`ComponentBackend`、`Linker`）が変わる
+3. **生成コードがバックエンドごとのエンコーダーを直接呼ぶ（中間のバッファなし）** — Chicory は線形メモリへ直接書けて、コピーが 1 回減る / 型に沿った配置（flat か メモリか、`cabi_realloc` の順序）を生成コードが知る必要があり、複雑。Rust との間には結局バイト列が要る
+
+Wasmtime の型付きの API:
+
+1. **使わない（汎用ブリッジだけ）** — ビルドが単純 / `Val` の要素ごとの変換が残る
+2. **コンポーネントごとに Rust を生成し、型付きのブリッジを作る** — まとめてコピーできる / ビルドに `cargo` が加わり、コンポーネントを変えるたびに Rust をコンパイルする
+3. **よく使うシグネチャの型付きの関数を、汎用ブリッジに用意する** — 生成が要らない / 当てはまる関数が限られ、record などには効かない
+
+## 決定
+
+形式は選択肢 2、Wasmtime は選択肢 2 を採る。汎用ブリッジも残し、両方のブリッジが同じ C ABI と同じ形式を使う。JSON の経路は削除する。
+
+### 1. 値の形式（wire format）
+
+型に沿ったタグなしのバイト列。どちらの側も関数の型を知っているので、型の情報は含めない。
+
+| WIT | 形式 |
+| :--- | :--- |
+| `bool`、`u8`、`s8` | 1 バイト |
+| `u16`、`s16`、`u32`、`s32`、`u64`、`s64` | 固定長のリトルエンディアン |
+| `f32`、`f64` | IEEE 754 のビット列のリトルエンディアン（NaN の正規化は ADR-0007 のまま、lift / lower の側で行う） |
+| `char` | `u32`（Unicode のスカラー値） |
+| `string` | `u32` のバイト長 + UTF-8 |
+| `list<T>` | `u32` の要素数 + 要素を順に。`T` が固定長の数値（`u8`〜`u64`、`f32`、`f64`）なら要素の並びはそのままのバイト列になり、まとめてコピーできる |
+| `record`、`tuple` | フィールドを宣言順に。パディングなし |
+| `variant`、`enum` | 判別子（ケースの数に応じて `u8` / `u16` / `u32`。Canonical ABI と同じ幅）+ ペイロード |
+| `option<T>`、`result<T, E>` | `u8`（0 / 1）+ ペイロード |
+| `flags` | ビット列（`u8` / `u16` / `u32` の配列。Canonical ABI と同じ） |
+| `own<R>`、`borrow<R>` | `u32`（ホスト定義 resource は rep。ADR-0008。ゲストの resource はバックエンドのハンドル） |
+| `future`、`stream` | `u32` のハンドル（async は Chicory のみ。#16 で詳細を決める） |
+
+* 引数は宣言順に並べる。戻り値も同じ（複数の戻り値は順に並べる）
+* 呼び出しの結果は、状態（成功、トラップ、ホストのエラー）+ 戻り値またはメッセージ
+* 検査の分担は ADR-0007 のまま
+  * ホストの値の誤り（孤立サロゲートを含む文字列、範囲外の `CodePoint`、上限を超える長さ）は、生成コードがエンコードするときに `IllegalArgumentException` にする
+  * ゲストの値の誤り（不正な判別子、`char`、エンコーディング、範囲外のポインタ）は、バックエンドが lift で検出し、`ComponentTrapException` にする
+  * Kotlin の型で表せない値（範囲外の整数など）は、生成コードを通る限り起きない
+
+### 2. Kotlin 側
+
+* `runtime-api` に `WitWriter` / `WitReader`（`ByteArray` を使う、JVM 11 の範囲）を置く。`FfmJsonCodec` と `WitJsonSerializable` は削除する
+* 生成器は、型ごとの静的なエンコードとデコードを出力する（#15 の「静的な lift / lower」は、この形式への変換として実現する）
+  * record や variant は、型のクラスに `write(w: WitWriter)` と `read(r: WitReader)` を生成する
+  * `ByteArray` と `String` は、長さとバイト列をまとめて書く
+* `ComponentBackend` を次の形にする
+  * `resolve(functionName): Int`: セッションを開いたときに関数名をインデックスにする。名前の解決規則は ADR-0011 のまま
+  * `invoke(index, args: ByteArray): ByteArray`
+  * `dropResource(handle)` は今のまま
+* `Linker.define(key, handler)` のハンドラーは、`(WitReader) -> ByteArray`（引数を読み、戻り値を書く）にする。キーは ADR-0011 のまま。
+  バックエンドは、セッションを開くときにキーをインデックスにし、呼び出しはインデックスで行う
+
+### 3. Chicory
+
+* `CanonicalAbi` の lower / lift を、`JsonElement` ではなく `WitReader` / `WitWriter` を相手にするように書き換える。型は plan の `WitType` に沿ってたどる
+* `string` と、固定長の数値の `list` は、`cabi_realloc` で確保した領域に `Memory.write` でまとめて書く。lift は `Memory.readBytes` でまとめて読む
+* 文字列のエンコーディングの変換（UTF-16、latin1+UTF-16）は、今の検査と変換を使い続ける（#58 の `CharsetEncoder` の使い回しも、ここで扱う）
+
+### 4. Wasmtime: 2 つのブリッジ
+
+**汎用ブリッジ**（今の rust-bridge を書き換える）
+
+* 形式と `Val` を、関数の型（`Func::params` / `results`）に沿って相互に変換する。`serde_json` の経路は削除する
+* ビルドなしで任意の `.wasm` を動かせる。テスト、実行時に読み込むコンポーネント、型付きブリッジをビルドしない利用者のため
+
+**型付きブリッジ**（新規。Gradle プラグインのオプション）
+
+* tooling が、プロジェクトのすべてのコンポーネントをまとめた 1 つの Cargo クレートを生成し、`cargo build` で 1 つの cdylib を作る
+  * コンポーネントごとに、`wasmtime::component::bindgen!` に WIT を渡したモジュールを生成する。WIT のテキストは decomposer が `.wasm` から出力する
+  * エクスポートの呼び出し: 形式から Rust の型（`Vec<u8>`、`String`、bindgen が生成した record など）に読み、型付きの関数を呼び、戻り値を形式に書く
+  * ホスト import: bindgen が生成した trait を実装し、引数を形式に書いてコールバックで Kotlin を呼ぶ
+  * ホスト定義 resource は、Kotlin の `HostResourceTable` の rep をそのまま `Resource<T>` の rep に使う（ADR-0008）。ゲストの resource は、`ResourceAny` をブリッジのハンドル表に入れる
+* ライブラリをコンポーネントごとではなく 1 つにまとめるのは、wasmtime を 1 つのプロセスに何度も読み込まないため。シグナルハンドラーやコードのサイズが重複する
+* Cargo の target ディレクトリを Gradle のユーザーディレクトリの下で共有し、wasmtime のコンパイルを 1 回で済ませる
+* ターゲットの指定と複数のプラットフォーム向けのビルドは #59、Android は #60 で扱う
+
+**共通の C ABI**
+
+* 両方のブリッジは、同じ名前の関数を公開する。セッションを開く、`resolve`、`invoke`、`drop_resource`、close、ホストのコールバック。
+  引数は、ポインタと長さで渡すバイト列
+* Kotlin 側（`runtime-wasmtime`）は、どちらのライブラリを読み込んだかを区別しない。型付きブリッジには、コンポーネントの ID（tooling が割り当てる）を渡してセッションを開く
+* FFM: `MemorySegment` で引数のバイト列を渡す。戻り値はブリッジが確保したバッファで返し、Kotlin が読んだあと解放する
+* JNI: `byte[]` で受け渡す。シンボル名はどちらのライブラリでも同じ
+
+### 5. テスト
+
+* 差分テストは、Chicory、汎用ブリッジ、型付きブリッジの 3 つの結果が一致することを確かめる
+* バックエンドに直接値を渡すテスト（`CanonicalAbiStrictnessTest`、`ChicoryDifferentialTest` の一部。いまは JSON で 47 か所）は、テストのソースに置く動的なエンコーダーに移す
+  * plan の `WitType` に沿って、テスト用の値の木から形式を作る
+  * 本体のコードには含めない
+  * ホストの値の誤りのうち、Kotlin の型で表せないものを確かめていたテストは、生成コードのエンコードのテストに移すか削除する
+* 性能は、docs/performance.md の数値と比べる。ランナーの差が大きいので、絶対値より、`core` 層（wasm の関数を直接呼ぶ時間）に対する倍率で比べる
+
+## 進め方
+
+1. 形式、`WitWriter` / `WitReader`、生成器の静的なエンコードとデコードを作る。Chicory と汎用ブリッジを移行し、JSON の経路を削除する。計測して、docs/performance.md を更新する
+2. 型付きブリッジの生成（tooling、Gradle プラグインのオプション）。計測する
+3. 必要なら最適化する。たとえば、引数と戻り値が数値だけの関数は、バイト列を通さず C の引数で直接渡す（FFM のダウンコールのシグネチャを生成する）
+
+1 で形式を一度に切り替えるので、JSON と新しい形式が長く併存することはない。
+
+## 結果
+
+* データを渡す呼び出しで、要素ごとのオブジェクトの割り当てがなくなる。バイト列と文字列は、両バックエンドでまとめてコピーされる
+  * Chicory: 生成コード → バッファ → 線形メモリ
+  * 型付きブリッジ: バッファ → Rust の値 → 線形メモリ
+* 公開 API が変わる: `ComponentBackend`、`Linker.define` のハンドラー、`WitHostImportDispatcher`、生成される型の `toWitJson` / `fromWitJson`。成果物は未公開なので、影響はリポジトリ内だけ
+* ADR-0003 を置き換える。値の形式、関数名の解決、ホスト import のキーを両バックエンドで揃える、という方針は維持する（揃える対象が JSON からこの形式になる）
+* ADR-0005 の「値の受け渡しは JSON 境界を継続する」を、この ADR で置き換える。Wasmtime バックエンドが同期の機能の参照実装であることは変わらない
+* `InMemoryWasmtimeSession`（ネイティブなしのテスト用セッション）も、新しい形式に合わせる
+* 型付きブリッジを使うビルドでは、Rust のツールチェーンと、コンポーネントを変えるたびの Rust のコンパイル（初回は wasmtime を含む）が必要になる。使わない利用者には影響しない
+* 型付きブリッジは生成コードを含むので、ビルド済みのものを配れない。ビルド済みの配布（#10、#59）は、汎用ブリッジが担う
+
+## 未決の点
+
+* 型付きブリッジのビルドを Gradle のどのタスクに入れるか。キャッシュのキーをどうするか（Rust のツールチェーン、wasmtime の版、コンポーネント）
+* WIT のテキストを decomposer が出力するか（`wit-component` の printer を使う）、生成器が `wit.json` から出力するか
+* `invoke` の戻り値のバッファを、呼び出しごとに確保するか、セッションごとに使い回すか
