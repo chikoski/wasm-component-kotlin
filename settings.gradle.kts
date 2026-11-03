@@ -16,3 +16,6 @@ include(":gradle-plugin")
 
 // End-to-end tests across the generator, the CLI and both runtimes
 include(":integration-tests")
+
+// Performance measurements (#19); kept out of the default build.
+if (providers.gradleProperty("wasm2kt.bench").isPresent) include(":benchmarks")
