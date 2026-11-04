@@ -23,6 +23,7 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 * `rust-bridge/`: Rust のワークスペース。`core/`（`wasm2kt-bridge-core`: セッション、形式、C ABI / JNI を `export_bridge!` で公開）と、汎用ブリッジの cdylib（`src/`）。`core/` と `Cargo.lock` は tooling のリソースとして型付きブリッジに同梱される
 * `test-support`: テスト専用。plan.json の型に沿って JSON とバイナリ形式を変換し、テストを JSON で書けるようにする
 * `integration-tests`: CLI で生成 → コンパイル → Wasmtime / Chicory で実行する E2E テストと差分テスト（テストの作業ディレクトリはリポジトリルート）
+* `conformance/`: Component Model の公式テストスイートの写し（`component-model/`）と既知の失敗（`skip.txt`）。`ConformanceTest`（integration-tests）が Chicory で実行する（ADR-0017）
 * `fixtures/`: テスト用のコンポーネント（`.wasm` / `.wit`）。integration-tests、tooling、gradle-plugin、decomposer で共有
 * `samples/android`: composite build。ルートの wrapper で `./gradlew -p samples/android ...`
 
@@ -33,6 +34,8 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 ./gradlew check                                 # 上記 + gradle-plugin の functionalTest（TestKit）
 ./gradlew :runtime-chicory:test                 # Chicory バックエンド単体
 ./gradlew :integration-tests:test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト
+./gradlew :integration-tests:test --tests 'wasm2kt.conformance.ConformanceTest'   # 公式テストスイート（Chicory）
+conformance/update.sh <commit>                 # 公式テストスイートを更新する（そのあと skip.txt を見直す）
 ./gradlew :integration-tests:typedBridgeTest    # 型付きブリッジで同じ差分テスト（cargo で fixtures の型付きブリッジを作る。別の JVM）
 ./gradlew -p samples/android :app:testDebugUnitTest :app:assembleRelease
 # ART での確認（ヘッドレスエミュレーター、Android CLI）は samples/android/README.md を参照
@@ -60,6 +63,7 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない
 * 値のバイナリ形式、関数名の解決、ホスト import のキーは両バックエンドで揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら差分テストを通す
 * 汎用ブリッジと型付きブリッジは同じ C ABI / JNI の関数を公開する（`rust-bridge/core` の `export_bridge!`）。resource の規則は `core` の関数を両方から使う。`core` か `TypedBridge.kt` を変えたら `typedBridgeTest` も通す（ADR-0016）
+* Chicory の挙動を直したら `ConformanceTest` も通し、通るようになった項目を `conformance/skip.txt` から消す（ADR-0017）
 * `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）
 * ホスト定義 resource（world 直下か、import した interface の resource）は、値の境界では rep（整数）で受け渡す。オブジェクトとの対応は生成セッションが束縛する `HostResourceTable` が持ち、drop は `[resource-drop]<name>` の dispatch で伝える。両バックエンドで揃える（ADR-0008）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する。Wasmtime バックエンドは同期の機能の参照実装として維持する（ADR-0005）

@@ -38,7 +38,7 @@ object ComponentCodegen {
         interfaceMappings: Map<String, String> = emptyMap(),
         libraryClasspath: List<Path> = emptyList(),
     ) {
-        val resolve = WitResolve.parse(Files.readString(decomposedDir.resolve("wit.json")))
+        val resolve = WitResolve.parse(Files.readString(Decomposer.witJson(decomposedDir)))
         WitToKotlinPoetConverter(
             resolve = resolve,
             targetPackage = packageName,
