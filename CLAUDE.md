@@ -57,7 +57,7 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
 
 ## 守ること
 
-* `runtime-api` と `runtime-chicory` に JVM 11 を超える API や `java.lang.foreign` を持ち込まない
+* `runtime-api` と `runtime-chicory` に JVM 11 を超える API や `java.lang.foreign` を持ち込まない。Android の API 26 にない API も使わない（`check` の `animalsnifferMain` が検査する。#80）
 * `plan.json` の形式を変えるときは、`decomposer/src/main.rs` の `PLAN_VERSION` と `ComponentPlan.SUPPORTED_VERSION` を同時に上げる。
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない

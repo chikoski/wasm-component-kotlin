@@ -8,6 +8,7 @@ chicory = "1.7.5"
 android-gradle-api = "8.7.3"
 
 [libraries]
+android-api-signature = "net.sf.androidscents.signature:android-api-level-26:8.0.0_r2"
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
@@ -23,3 +24,5 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "jun
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+# Checks that runtime-api / runtime-chicory only call APIs Android's minSdk has (#80).
+animalsniffer = { id = "ru.vyarus.animalsniffer", version = "2.0.0" }
