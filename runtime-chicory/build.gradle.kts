@@ -10,8 +10,11 @@ dependencies {
     api(project(":runtime-api"))
     api(libs.chicory.runtime)
     api(libs.chicory.wasm)
+    // plan.json
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(kotlin("test"))
+    testImplementation(project(":test-support"))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

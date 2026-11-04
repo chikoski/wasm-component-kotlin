@@ -94,7 +94,7 @@ KotlinPoet）は Gradle ワーカー内の**独立したクラスローダー**�
 `ChicoryComponent` が `plan.json` を再生して core インスタンスを生成・配線し（関数・メモリ・テーブル・グローバル、
 トランポリン、インスタンスフラグ）、Canonical ABI で値を lift / lower します。
 
-* 値の受け渡しは Wasmtime ブリッジと同じ JSON 形式（`runtime-api` の `ComponentBackend`）なので、生成コードは共通です
+* 値の受け渡しは Wasmtime ブリッジと同じバイナリ形式（`runtime-api` の `WitWriter` / `WitReader`、ADR-0015）なので、生成コードは共通です
 * 文字列（utf8 / utf16 / latin1+utf16）、list、record、variant / enum / option / result（flat 表現の join を含む）、flags、
   16 個を超える flat 引数・2 個以上の flat 戻り値（線形メモリ経由）、post-return に対応
 * ホスト import（ディスパッチキーは Wasmtime ブリッジと同じ）、コンポーネントが定義する resource（`resource.new/rep/drop`、
@@ -152,7 +152,7 @@ Android CLI でヘッドレスエミュレーターを使う手順や、release 
 | `integration-tests` | Wasmtime / Chicory の E2E テストと差分テスト |
 | `fixtures/` | テスト用コンポーネント（各モジュールと decomposer で共有） |
 | `decomposer/` | 分解ツール（Rust）。`build-wasm.sh` で `dist/wasm2kt-decompose.wasm` を再生成（再現可能ビルド。CI で検証）、`regenerate-fixtures.sh` でテスト用の分解結果を再生成 |
-| `runtime-api` | `ComponentBackend` / `WitHostImportDispatcher` / `FfmJsonCodec`（JVM 11） |
+| `runtime-api` | `ComponentBackend` / `WitHostImportDispatcher` / `WitWriter` / `WitReader`（JVM 11） |
 | `runtime-chicory` | Chicory バックエンド（JVM 11、Android 対応） |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン（`ComponentBuild.run` で一括実行も可） |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン。`functionalTest` で TestKit による実ビルドを検証 |

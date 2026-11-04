@@ -15,6 +15,11 @@ import org.junit.jupiter.api.Test
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.FfmWasmtimeBridge
 import wasm2kt.runtime.WitHostImportDispatcher
+import wasm2kt.runtime.WitReader
+import wasm2kt.runtime.WitWriter
+import wasm2kt.testing.JsonBackend
+import wasm2kt.testing.JsonHostImports
+import wasm2kt.testing.PlanTypes
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -24,6 +29,8 @@ import kotlin.test.assertEquals
  * Runs identical call sequences against the Wasmtime bridge (the reference implementation) and the
  * Chicory backend, and requires identical results — including errors — at the JSON boundary.
  */
+private typealias JsonImports = (String, JsonArray) -> JsonElement
+
 class ChicoryDifferentialTest {
     private fun fixture(name: String): Path = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$name.wasm")).toURI())
 
@@ -35,37 +42,48 @@ class ChicoryDifferentialTest {
         private val bridge = FfmWasmtimeBridge.getDefault()
         private val session = bridge.openSession(wasm, imports)
 
-        override fun invoke(functionName: String, args: JsonArray): JsonElement =
-            unwrap(bridge.sessionInvoke(session, functionName, args.toString()))
+        override fun resolve(functionName: String): Int = bridge.resolve(session, functionName)
 
-        override fun dropResource(handle: Int) {
-            unwrap(bridge.sessionDropResource(session, handle))
+        override fun invoke(function: Int, args: WitReader): WitReader {
+            val writer = WitWriter()
+            val n = args.remaining
+            if (n > 0) args.region(n) { a, off -> writer.raw(a, off, n) }
+            return bridge.invoke(session, function, writer)
         }
+
+        override fun dropResource(handle: Int) = bridge.dropResource(session, handle)
 
         override fun close() = bridge.sessionClose(session)
+    }
 
-        private fun unwrap(resp: String): JsonElement {
-            val o = Json.parseToJsonElement(resp).jsonObject
-            if (!o.getValue("ok").jsonPrimitive.boolean) throw IllegalStateException(o["error"]?.jsonPrimitive?.content)
-            return o["value"] ?: JsonNull
-        }
+    /** Host imports answered with JSON-written values (typed by the component's plan). */
+    private fun types(name: String) = PlanTypes.fromDirectory(chicoryPlanDir(name))
+
+    private fun wasmtime(name: String, imports: JsonImports?): JsonBackend {
+        val types = types(name)
+        return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }), types)
+    }
+
+    private fun chicory(name: String, imports: JsonImports?): JsonBackend {
+        val types = types(name)
+        return JsonBackend(ChicoryComponent.fromDirectory(chicoryPlanDir(name)).instantiate(imports?.let { JsonHostImports(types, it) }), types)
     }
 
     private class Call(val fn: String, vararg val args: JsonElement)
 
-    private fun runBoth(name: String, imports: () -> WitHostImportDispatcher?, calls: List<Call>) {
-        fun run(backend: ComponentBackend): List<String> = backend.use { b ->
+    private fun runBoth(name: String, imports: () -> JsonImports?, calls: List<Call>) {
+        fun run(backend: JsonBackend): List<String> = backend.use { b ->
             calls.map { c ->
                 try {
                     normalize(b.invoke(c.fn, JsonArray(c.args.toList()))).toString()
                 } catch (e: Exception) {
-                    System.err.println("DIFF ${b.javaClass.simpleName} ${c.fn}(${c.args.joinToString()}): ${e.message}")
+                    System.err.println("DIFF ${b.backend.javaClass.simpleName} ${c.fn}(${c.args.joinToString()}): ${e.message}")
                     "error"
                 }
             }
         }
-        val expected = run(WasmtimeBackend(fixture(name), imports()))
-        val actual = run(ChicoryComponent.fromDirectory(chicoryPlanDir(name)).instantiate(imports()))
+        val expected = run(wasmtime(name, imports()))
+        val actual = run(chicory(name, imports()))
         calls.forEachIndexed { i, c ->
             assertEquals(expected[i], actual[i], "Mismatch for ${c.fn}(${c.args.joinToString()})")
         }
@@ -80,9 +98,9 @@ class ChicoryDifferentialTest {
 
     private fun j(text: String): JsonElement = Json.parseToJsonElement(text)
 
-    private val envProvider = {
-        object : WitHostImportDispatcher {
-            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = when (importSpec) {
+    private val envProvider: () -> JsonImports? = {
+        { importSpec, args ->
+            when (importSpec) {
                 "example:roundtrip/env-provider@0.1.0#get-multiplier" -> JsonPrimitive(3)
                 "example:roundtrip/env-provider@0.1.0#format-tag" -> JsonPrimitive("${args[0].jsonPrimitive.content}-${args[1].jsonPrimitive.content}")
                 else -> error("Unexpected import: $importSpec")
@@ -151,26 +169,19 @@ class ChicoryDifferentialTest {
         )
         runBoth("counter", { null }, calls)
         // Matching is not enough (both could fail): the refused call must leave handle 1 usable.
-        val backends = listOf(
-            WasmtimeBackend(fixture("counter"), null),
-            ChicoryComponent.fromDirectory(chicoryPlanDir("counter")).instantiate(null),
-        )
+        val backends = listOf(wasmtime("counter", null), chicory("counter", null))
         for (b in backends) b.use {
             val one = JsonArray(listOf(JsonPrimitive(1)))
             assertEquals(1, it.invoke("[constructor]counter", JsonArray(listOf(JsonPrimitive(10)))).jsonPrimitive.int)
             kotlin.test.assertFailsWith<IllegalStateException> {
                 it.invoke("[static]counter.merge", JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(1))))
             }
-            assertEquals(10, it.invoke("[method]counter.get-value", one).jsonPrimitive.int, "${it.javaClass.simpleName} lost the handle")
+            assertEquals(10, it.invoke("[method]counter.get-value", one).jsonPrimitive.int, "${it.backend.javaClass.simpleName} lost the handle")
             it.dropResource(1)
         }
     }
 
-    private val ping = {
-        object : WitHostImportDispatcher {
-            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = JsonNull
-        }
-    }
+    private val ping: () -> JsonImports? = { { _, _ -> JsonNull } }
 
     private fun u(vararg v: Long) = v.map { JsonPrimitive(it) }.toTypedArray()
 
@@ -265,22 +276,22 @@ class ChicoryDifferentialTest {
         // The FFM bridge used to copy responses into a fixed 64 KiB buffer (#35). merge-new makes two
         // host blobs, merges them and reads the result back through the `blob.read` import, whose
         // JSON response here is about 450 KB.
-        fun blobs() = object : WitHostImportDispatcher {
+        fun blobs(): JsonImports {
             val data = HashMap<Int, ByteArray>()
             var next = 1
             fun bytes(e: JsonElement) = ByteArray(e.jsonArray.size) { e.jsonArray[it].jsonPrimitive.int.toByte() }
             fun store(b: ByteArray) = next++.also { data[it] = b }
-            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = when (importSpec) {
+            return { importSpec, args -> when (importSpec) {
                 "example:host-res/store@0.1.0#[constructor]blob" -> JsonPrimitive(store(bytes(args[0])))
                 "example:host-res/store@0.1.0#[static]blob.merge" -> JsonPrimitive(store(data.getValue(args[0].jsonPrimitive.int) + data.getValue(args[1].jsonPrimitive.int)))
                 "example:host-res/store@0.1.0#[method]blob.read" -> JsonArray(data.getValue(args[0].jsonPrimitive.int).map { JsonPrimitive(it.toInt() and 0xFF) })
                 "example:host-res/store@0.1.0#[resource-drop]blob" -> JsonNull.also { data.remove(args[0].jsonPrimitive.int) }
                 else -> error("Unexpected import: $importSpec")
-            }
+            } }
         }
         fun list(n: Int, seed: Int) = JsonArray(List(n) { JsonPrimitive((it * 31 + seed) and 0xFF) })
         runBoth("host-res", ::blobs, listOf(Call("merge-new", list(60_000, 1), list(60_000, 2))))
-        WasmtimeBackend(fixture("host-res"), blobs()).use { b ->
+        wasmtime("host-res", blobs()).use { b ->
             val merged = b.invoke("merge-new", JsonArray(listOf(list(60_000, 1), list(60_000, 2)))).jsonArray
             assertEquals(120_000, merged.size, "the whole response must reach the component")
         }
@@ -306,7 +317,7 @@ class ChicoryDifferentialTest {
                 Call("echo-blob", j("""{"name":"ok","data":[1,2],"tag":7}""")),
             ),
         )
-        ChicoryComponent.fromDirectory(chicoryPlanDir("types")).instantiate(null).use { c ->
+        chicory("types", null).use { c ->
             val result = c.invoke("echo-flagged", JsonArray(listOf(j(flagged)))).jsonObject
             assertEquals("some", result.getValue("option").jsonPrimitive.content)
             assertEquals(j(flagged), result.getValue("value"))
@@ -316,11 +327,9 @@ class ChicoryDifferentialTest {
     @Test
     fun `a long error message from a host import is reported in full`() {
         val message = "x".repeat(100_000) + "-end"
-        val failing = object : WitHostImportDispatcher {
-            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement = throw IllegalStateException(message)
-        }
+        val failing: JsonImports = { _, _ -> throw IllegalStateException(message) }
         val e = kotlin.test.assertFailsWith<IllegalStateException> {
-            WasmtimeBackend(fixture("roundtrip"), failing).use { b ->
+            wasmtime("roundtrip", failing).use { b ->
                 b.invoke("describe-code", JsonArray(listOf(JsonPrimitive("p"), JsonPrimitive(1))))
             }
         }
@@ -329,19 +338,17 @@ class ChicoryDifferentialTest {
 
     @Test
     fun `host imports see the same arguments under both backends`() {
-        fun recorder(log: MutableList<String>) = object : WitHostImportDispatcher {
-            override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement {
-                log += "$importSpec(${args.joinToString { it.jsonPrimitive.int.toString() }})"
-                return JsonNull
-            }
+        fun recorder(log: MutableList<String>): JsonImports = { importSpec, args ->
+            log += "$importSpec(${args.joinToString { it.jsonPrimitive.int.toString() }})"
+            JsonNull
         }
         val wasmtimeLog = mutableListOf<String>()
         val chicoryLog = mutableListOf<String>()
         val inputs = listOf(15 to 27, 6 to 7, Int.MAX_VALUE to 1)
-        WasmtimeBackend(fixture("live_calc"), recorder(wasmtimeLog)).use { b ->
+        wasmtime("live_calc", recorder(wasmtimeLog)).use { b ->
             inputs.forEach { (a, c) -> b.invoke("add", JsonArray(listOf(JsonPrimitive(a), JsonPrimitive(c)))) }
         }
-        ChicoryComponent.fromDirectory(chicoryPlanDir("live_calc")).instantiate(recorder(chicoryLog)).use { b ->
+        chicory("live_calc", recorder(chicoryLog)).use { b ->
             inputs.forEach { (a, c) -> b.invoke("add", JsonArray(listOf(JsonPrimitive(a), JsonPrimitive(c)))) }
         }
         assertEquals(wasmtimeLog, chicoryLog)

@@ -1,19 +1,5 @@
 package wasm2kt.runtime
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.double
-import kotlinx.serialization.json.float
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
@@ -41,7 +27,6 @@ class FfmWasmtimeBridge private constructor(
 
     // extern "C" fn wasm2kt_session_open(
     //     wasm_path_ptr: *const c_char,
-    //     imports_json_ptr: *const c_char,
     //     host_callback: Option<HostCallbackFn>,
     //     precompiled: bool,
     //     err_buf: *mut c_char,
@@ -50,7 +35,6 @@ class FfmWasmtimeBridge private constructor(
     val sessionOpenHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_session_open").orElseThrow(),
         FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
@@ -63,7 +47,6 @@ class FfmWasmtimeBridge private constructor(
     // extern "C" fn wasm2kt_session_open_bytes(
     //     wasm_bytes_ptr: *const u8,
     //     wasm_bytes_len: usize,
-    //     imports_json_ptr: *const c_char,
     //     host_callback: Option<HostCallbackFn>,
     //     precompiled: bool,
     //     err_buf: *mut c_char,
@@ -75,7 +58,6 @@ class FfmWasmtimeBridge private constructor(
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_BOOLEAN,
             ValueLayout.ADDRESS,
@@ -117,43 +99,56 @@ class FfmWasmtimeBridge private constructor(
         ),
     )
 
+    // extern "C" fn wasm2kt_session_resolve(
+    //     session_ptr: *mut BridgeSession, name: *const c_char,
+    //     out_index: *mut u32, out_ptr: *mut *mut u8, out_len: *mut usize,
+    // ) -> i32
+    val sessionResolveHandle: MethodHandle = linker.downcallHandle(
+        lookup.find("wasm2kt_session_resolve").orElseThrow(),
+        FunctionDescriptor.of(
+            ValueLayout.JAVA_INT,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+        ),
+    )
+
     // extern "C" fn wasm2kt_session_invoke(
-    //     session_ptr: *mut BridgeSession,
-    //     func_spec_ptr: *const c_char,
-    //     args_json_ptr: *const c_char,
-    // ) -> *mut c_char
+    //     session_ptr: *mut BridgeSession, index: u32, args_ptr: *const u8, args_len: usize,
+    //     out_ptr: *mut *mut u8, out_len: *mut usize,
+    // ) -> i32
     val sessionInvokeHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_session_invoke").orElseThrow(),
         FunctionDescriptor.of(
+            ValueLayout.JAVA_INT,
             ValueLayout.ADDRESS,
+            ValueLayout.JAVA_INT,
             ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
         ),
     )
 
     // extern "C" fn wasm2kt_session_drop_resource(
-    //     session_ptr: *mut BridgeSession,
-    //     handle: i32,
-    // ) -> *mut c_char
+    //     session_ptr: *mut BridgeSession, handle: i32, out_ptr: *mut *mut u8, out_len: *mut usize,
+    // ) -> i32
     val sessionDropResourceHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_session_drop_resource").orElseThrow(),
         FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_INT,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_INT,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
         ),
     )
 
     // extern "C" fn wasm2kt_session_close(session_ptr: *mut BridgeSession)
     val sessionCloseHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_session_close").orElseThrow(),
-        FunctionDescriptor.ofVoid(ValueLayout.ADDRESS),
-    )
-
-    // extern "C" fn wasm2kt_free_string(ptr: *mut c_char)
-    val freeStringHandle: MethodHandle = linker.downcallHandle(
-        lookup.find("wasm2kt_free_string").orElseThrow(),
         FunctionDescriptor.ofVoid(ValueLayout.ADDRESS),
     )
 
@@ -214,13 +209,11 @@ class FfmWasmtimeBridge private constructor(
         val sessionArena = Arena.ofShared()
         try {
             val wasmPathPtr = allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())
-            val importsJsonPtr = allocateUtf8CString(sessionArena, "[]")
             val callbackStub = createHostCallbackStub(sessionArena, imports)
             val errCap = 4096L
             val errBuf = sessionArena.allocate(errCap)
             val ptr = sessionOpenHandle.invokeExact(
                 wasmPathPtr,
-                importsJsonPtr,
                 callbackStub,
                 precompiled,
                 errBuf,
@@ -250,14 +243,12 @@ class FfmWasmtimeBridge private constructor(
         val sessionArena = Arena.ofShared()
         try {
             val wasmBytesPtr = allocateBytes(sessionArena, wasmBytes)
-            val importsJsonPtr = allocateUtf8CString(sessionArena, "[]")
             val callbackStub = createHostCallbackStub(sessionArena, imports)
             val errCap = 4096L
             val errBuf = sessionArena.allocate(errCap)
             val ptr = sessionOpenBytesHandle.invokeExact(
                 wasmBytesPtr,
                 wasmBytes.size.toLong(),
-                importsJsonPtr,
                 callbackStub,
                 precompiled,
                 errBuf,
@@ -276,28 +267,81 @@ class FfmWasmtimeBridge private constructor(
         }
     }
 
-    fun sessionInvoke(sessionHandle: Long, functionName: String, argsJson: String): String {
+    /**
+     * The index of an exported function of the session's instance (ADR-0011 names), to pass to [invoke].
+     *
+     * @throws IllegalArgumentException if no export matches or the name is ambiguous.
+     */
+    fun resolve(sessionHandle: Long, functionName: String): Int {
         val state = acquireSession(sessionHandle)
         try {
             Arena.ofConfined().use { callArena ->
-                val fnPtr = allocateUtf8CString(callArena, functionName)
-                val argsPtr = allocateUtf8CString(callArena, argsJson)
-                val respPtr = sessionInvokeHandle.invokeExact(state.sessionPtr, fnPtr, argsPtr) as MemorySegment
-                return readAndFreeCString(respPtr)
+                val namePtr = allocateUtf8CString(callArena, functionName)
+                val outIndex = callArena.allocate(ValueLayout.JAVA_INT)
+                val out = NativeOut(callArena)
+                val status = sessionResolveHandle.invokeExact(state.sessionPtr, namePtr, outIndex, out.ptr, out.len) as Int
+                if (status != 0) throw IllegalArgumentException(out.takeMessage())
+                return outIndex.get(ValueLayout.JAVA_INT, 0L)
             }
         } finally {
             releaseSession(state)
         }
     }
 
-    fun sessionDropResource(sessionHandle: Long, handle: Int): String {
+    /**
+     * Calls the export [function] with the arguments in [args] (ADR-0015) and returns its results.
+     *
+     * @throws IllegalStateException with the bridge's message if the call fails or traps.
+     */
+    fun invoke(sessionHandle: Long, function: Int, args: WitWriter): WitReader {
         val state = acquireSession(sessionHandle)
         try {
-            val respPtr = sessionDropResourceHandle.invokeExact(state.sessionPtr, handle) as MemorySegment
-            return readAndFreeCString(respPtr)
+            Arena.ofConfined().use { callArena ->
+                val argsSeg = callArena.allocate(maxOf(args.size, 1).toLong())
+                MemorySegment.copy(args.buffer, 0, argsSeg, ValueLayout.JAVA_BYTE, 0L, args.size)
+                val out = NativeOut(callArena)
+                val status = sessionInvokeHandle.invokeExact(state.sessionPtr, function, argsSeg, args.size.toLong(), out.ptr, out.len) as Int
+                if (status != 0) throw IllegalStateException(out.takeMessage())
+                return WitReader(out.takeBytes())
+            }
         } finally {
             releaseSession(state)
         }
+    }
+
+    /** Drops a guest resource handle the host holds, running its destructor. */
+    fun dropResource(sessionHandle: Long, handle: Int) {
+        val state = acquireSession(sessionHandle)
+        try {
+            Arena.ofConfined().use { callArena ->
+                val out = NativeOut(callArena)
+                val status = sessionDropResourceHandle.invokeExact(state.sessionPtr, handle, out.ptr, out.len) as Int
+                if (status != 0) throw IllegalStateException(out.takeMessage())
+            }
+        } finally {
+            releaseSession(state)
+        }
+    }
+
+    /** A `*mut *mut u8` / `*mut usize` pair the bridge fills with a buffer it allocated (freed here). */
+    private inner class NativeOut(arena: Arena) {
+        val ptr: MemorySegment = arena.allocate(ValueLayout.ADDRESS).also { it.set(ValueLayout.ADDRESS, 0L, MemorySegment.NULL) }
+        val len: MemorySegment = arena.allocate(ValueLayout.JAVA_LONG).also { it.set(ValueLayout.JAVA_LONG, 0L, 0L) }
+
+        fun takeBytes(): ByteArray {
+            val p = ptr.get(ValueLayout.ADDRESS, 0L)
+            val n = len.get(ValueLayout.JAVA_LONG, 0L)
+            if (p == MemorySegment.NULL) return ByteArray(0)
+            try {
+                val bytes = ByteArray(n.toInt())
+                MemorySegment.copy(p.reinterpret(n), ValueLayout.JAVA_BYTE, 0L, bytes, 0, n.toInt())
+                return bytes
+            } finally {
+                freeBytesHandle.invokeExact(p, n)
+            }
+        }
+
+        fun takeMessage(): String = String(takeBytes(), StandardCharsets.UTF_8).ifEmpty { "Unknown Wasmtime error" }
     }
 
     /**
@@ -325,23 +369,29 @@ class FfmWasmtimeBridge private constructor(
 
     fun createHostCallbackStub(sessionArena: Arena, importsInstance: Any?): MemorySegment {
         if (importsInstance == null) return MemorySegment.NULL
-        val handler = HostCallbackDispatcher(importsInstance, ::allocateNativeResponse)
+        val imports = importsInstance as? WitHostImportDispatcher
+            ?: throw IllegalArgumentException("Host imports ${importsInstance::class.qualifiedName} do not implement WitHostImportDispatcher")
+        val handler = HostCallbackDispatcher(imports, ::allocateNativeResponse)
         val callbackMethodHandle = MethodHandles.lookup().bind(
             handler,
             "onHostCall",
             MethodType.methodType(
                 Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
                 MemorySegment::class.java,
                 MemorySegment::class.java,
+                Long::class.javaPrimitiveType,
                 MemorySegment::class.java,
                 MemorySegment::class.java,
             ),
         )
-        // fn(import_name, args_json, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32
+        // fn(import_index: u32, import_key, args_ptr, args_len, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32
         val descriptor = FunctionDescriptor.of(
+            ValueLayout.JAVA_INT,
             ValueLayout.JAVA_INT,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
+            ValueLayout.JAVA_LONG,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
         )
@@ -349,20 +399,11 @@ class FfmWasmtimeBridge private constructor(
     }
 
     /** Copies [bytes] into memory allocated by the bridge (`wasm2kt_alloc_bytes`), which Rust frees. */
-    private fun allocateNativeResponse(bytes: ByteArray): MemorySegment {
-        val ptr = allocBytesHandle.invokeExact(bytes.size.toLong()) as MemorySegment
-        check(ptr != MemorySegment.NULL) { "Could not allocate ${bytes.size} bytes for a host import response" }
-        MemorySegment.copy(bytes, 0, ptr.reinterpret(bytes.size.toLong()), ValueLayout.JAVA_BYTE, 0L, bytes.size)
+    private fun allocateNativeResponse(bytes: ByteArray, size: Int): MemorySegment {
+        val ptr = allocBytesHandle.invokeExact(size.toLong()) as MemorySegment
+        check(ptr != MemorySegment.NULL) { "Could not allocate $size bytes for a host import response" }
+        MemorySegment.copy(bytes, 0, ptr.reinterpret(size.toLong()), ValueLayout.JAVA_BYTE, 0L, size)
         return ptr
-    }
-
-    fun readAndFreeCString(ptr: MemorySegment): String {
-        if (ptr == MemorySegment.NULL) return ""
-        try {
-            return readNullTerminatedUtf8(ptr)
-        } finally {
-            freeStringHandle.invokeExact(ptr)
-        }
     }
 
     /**
@@ -483,44 +524,55 @@ class FfmWasmtimeBridge private constructor(
 }
 
 /**
- * Runs a host import for the native bridge. The response (JSON, or an error message when the
- * result is non-zero) goes into memory from [allocate] and its address and length into
- * `outPtrPtr` / `outLenPtr`, so responses of any size cross the boundary (#35).
+ * Runs a host import for the native bridge (ADR-0015). The bridge passes the import's index and key
+ * and the arguments; the results (or an error message when the status is non-zero) go into memory
+ * from [allocate], whose address and length are stored in `outPtrPtr` / `outLenPtr`, so responses of
+ * any size cross the boundary (#35). Host functions are looked up by key once per index.
  */
 internal class HostCallbackDispatcher(
-    private val importsInstance: Any,
-    private val allocate: (ByteArray) -> MemorySegment,
+    private val imports: WitHostImportDispatcher,
+    private val allocate: (ByteArray, Int) -> MemorySegment,
 ) {
+    private val functions = ArrayList<HostFunction?>()
+
     fun onHostCall(
-        importNamePtr: MemorySegment,
-        argsJsonPtr: MemorySegment,
+        importIndex: Int,
+        importKeyPtr: MemorySegment,
+        argsPtr: MemorySegment,
+        argsLen: Long,
         outPtrPtr: MemorySegment,
         outLenPtr: MemorySegment,
     ): Int {
         return try {
-            val importName = FfmWasmtimeBridge.readNullTerminatedUtf8(importNamePtr)
-            val argsJsonStr = FfmWasmtimeBridge.readNullTerminatedUtf8(argsJsonPtr)
-            val argsArray = Json.parseToJsonElement(argsJsonStr).jsonArray
-
-            val dispatcher = importsInstance as? WitHostImportDispatcher
-                ?: error("Host imports object ${importsInstance::class.qualifiedName} does not implement WitHostImportDispatcher")
-            val jsonElem = dispatcher.dispatchHostImport(importName, argsArray)
-
-            if (jsonElem !is JsonNull) {
-                respond(Json.encodeToString(JsonElement.serializer(), jsonElem), outPtrPtr, outLenPtr)
-            }
+            val function = function(importIndex) { FfmWasmtimeBridge.readNullTerminatedUtf8(importKeyPtr) }
+            val args = ByteArray(argsLen.toInt())
+            if (argsLen > 0) MemorySegment.copy(argsPtr.reinterpret(argsLen), ValueLayout.JAVA_BYTE, 0L, args, 0, args.size)
+            val results = WitWriter()
+            function.call(WitReader(args), results)
+            respond(results.buffer, results.size, outPtrPtr, outLenPtr)
             0
         } catch (t: Throwable) {
-            runCatching { respond(t.message ?: t.toString(), outPtrPtr, outLenPtr) }
+            runCatching {
+                val message = (t.message ?: t.toString()).toByteArray(StandardCharsets.UTF_8)
+                respond(message, message.size, outPtrPtr, outLenPtr)
+            }
             1
         }
     }
 
-    private fun respond(text: String, outPtrPtr: MemorySegment, outLenPtr: MemorySegment) {
-        val bytes = text.toByteArray(StandardCharsets.UTF_8)
-        if (bytes.isEmpty()) return
-        val ptr = allocate(bytes)
+    private fun function(index: Int, key: () -> String): HostFunction {
+        functions.getOrNull(index)?.let { return it }
+        val name = key()
+        val function = imports.hostFunction(name) ?: throw IllegalStateException("Unknown host import: $name")
+        while (functions.size <= index) functions.add(null)
+        functions[index] = function
+        return function
+    }
+
+    private fun respond(bytes: ByteArray, size: Int, outPtrPtr: MemorySegment, outLenPtr: MemorySegment) {
+        if (size == 0) return
+        val ptr = allocate(bytes, size)
         outPtrPtr.reinterpret(ValueLayout.ADDRESS.byteSize()).set(ValueLayout.ADDRESS, 0L, ptr)
-        outLenPtr.reinterpret(ValueLayout.JAVA_LONG.byteSize()).set(ValueLayout.JAVA_LONG, 0L, bytes.size.toLong())
+        outLenPtr.reinterpret(ValueLayout.JAVA_LONG.byteSize()).set(ValueLayout.JAVA_LONG, 0L, size.toLong())
     }
 }

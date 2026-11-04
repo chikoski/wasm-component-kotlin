@@ -1,8 +1,5 @@
 package wasm2kt.runtime
 
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-
 /**
  * Host imports, registered one interface at a time (ADR-0011).
  *
@@ -17,7 +14,7 @@ import kotlinx.serialization.json.JsonElement
  * its imports; it is then shared by every session opened with it.
  */
 class Linker : WitHostImportDispatcher, ImportsFactory {
-    private val handlers = LinkedHashMap<String, (JsonArray) -> JsonElement>()
+    private val handlers = LinkedHashMap<String, HostFunction>()
 
     /** The keys defined so far, in definition order. */
     val keys: Set<String>
@@ -28,7 +25,7 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
      *
      * @throws IllegalArgumentException if [key] is already defined (e.g. the same interface was added twice).
      */
-    fun define(key: String, handler: (JsonArray) -> JsonElement) {
+    fun define(key: String, handler: HostFunction) {
         require(key !in handlers) { "Host import '$key' is already defined" }
         handlers[key] = handler
     }
@@ -54,9 +51,18 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
 
     override fun newLinker(): Linker = this
 
-    override fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement {
-        val handler = handlers[importSpec] ?: error("Unknown host import: $importSpec")
-        return handler(args)
+    override fun hostFunction(key: String): HostFunction? = handlers[key]
+
+    /**
+     * Calls the handler of [key] directly, as a backend would (for tests and mocks).
+     *
+     * @throws IllegalStateException if [key] is not defined.
+     */
+    fun call(key: String, args: WitWriter): WitReader {
+        val handler = handlers[key] ?: throw IllegalStateException("Unknown host import: $key")
+        val results = WitWriter()
+        handler.call(args.toReader(), results)
+        return results.toReader()
     }
 }
 

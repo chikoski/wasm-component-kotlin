@@ -3,12 +3,10 @@ package com.example.wasm2kt.bench
 import androidx.benchmark.junit4.BenchmarkRule
 import androidx.benchmark.junit4.measureRepeated
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import wasm2kt.runtime.FfmJsonCodec
+import wasm2kt.runtime.WitWriter
 import com.example.wasm2kt.bench.arithmetic.ArithmeticComponent
 import com.example.wasm2kt.bench.heavy.HeavyComponent
 import com.example.wasm2kt.bench.types.TypesComponent
@@ -29,8 +27,9 @@ class CallBenchmark {
 
     @Test fun add_aot_backend() {
         val backend = ArithmeticComponent.instantiate(null)
-        val args = JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(2)))
-        rule.measureRepeated { backend.invoke("add", args) }
+        val args = WitWriter().apply { int(1); int(2) }
+        val add = backend.resolve("add")
+        rule.measureRepeated { backend.invoke(add, args.toReader()) }
         backend.close()
     }
 
@@ -49,19 +48,20 @@ class CallBenchmark {
 
     @Test fun echoBytes1024_aot_backend() {
         val backend = TypesComponent.instantiate(null)
-        val args = JsonArray(listOf(FfmJsonCodec.toJsonElement(Payloads.bytes.getValue(1024))))
-        rule.measureRepeated { backend.invoke("echo-bytes", args) }
+        val args = WitWriter().apply { bytes(Payloads.bytes.getValue(1024)) }
+        val echoBytes = backend.resolve("echo-bytes")
+        rule.measureRepeated { backend.invoke(echoBytes, args.toReader()) }
         backend.close()
     }
 
-    @Test fun codecBytes1024_jsonTree() {
+    @Test fun codecBytes1024_wire() {
         val b = Payloads.bytes.getValue(1024)
-        rule.measureRepeated { FfmJsonCodec.decodeByteArray(FfmJsonCodec.toJsonElement(b)) }
+        rule.measureRepeated { WitWriter().apply { bytes(b) }.toReader().bytes() }
     }
 
-    @Test fun codecBytes65536_jsonTree() {
+    @Test fun codecBytes65536_wire() {
         val b = Payloads.bytes.getValue(65536)
-        rule.measureRepeated { FfmJsonCodec.decodeByteArray(FfmJsonCodec.toJsonElement(b)) }
+        rule.measureRepeated { WitWriter().apply { bytes(b) }.toReader().bytes() }
     }
 
     private inline fun heavy(component: wasm2kt.runtime.ComponentBackendFactory, crossinline op: context(com.example.wasm2kt.bench.heavy.Session) () -> Any?) =

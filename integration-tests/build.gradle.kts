@@ -11,6 +11,7 @@ dependencies {
     testImplementation(project(":generator"))
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))
+    testImplementation(project(":test-support"))
     testImplementation(libs.clikt)
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))

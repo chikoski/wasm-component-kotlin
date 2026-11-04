@@ -48,8 +48,8 @@ class ComponentBuildTest {
         wasm2kt.runtime.chicory.ChicoryComponent(plan, modules).instantiate(null).use { c ->
             for (pair in listOf("utf8-utf16", "utf16-utf8", "compact-utf8", "utf8-compact")) {
                 val s = "aé日🎌".repeat(100)
-                val echoed = c.invoke("echo-$pair", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(s))))
-                assertEquals(s, (echoed as kotlinx.serialization.json.JsonPrimitive).content, "echo-$pair")
+                val echoed = c.invoke(c.resolve("echo-$pair"), wasm2kt.runtime.WitWriter().apply { string(s) }.toReader()).string()
+                assertEquals(s, echoed, "echo-$pair")
             }
         }
     }
@@ -73,7 +73,7 @@ class ComponentBuildTest {
         // unsupported intrinsics; instantiation must not fail on it, so the build-time warning holds.
         Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir)
         wasm2kt.runtime.chicory.ChicoryComponent.fromDirectory(dir).instantiate(null).use { c ->
-            val e = runCatching { c.invoke("g", kotlinx.serialization.json.JsonArray(emptyList())) }.exceptionOrNull()
+            val e = runCatching { c.invoke(c.resolve("g"), wasm2kt.runtime.WitWriter().toReader()) }.exceptionOrNull()
             assertTrue(e is UnsupportedOperationException && "not supported by the Chicory backend" in e.message!!, "got $e")
         }
     }

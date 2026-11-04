@@ -7,7 +7,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import wasm2kt.runtime.ComponentBackend
+import wasm2kt.testing.JsonBackend
 import wasm2kt.runtime.ComponentTrapException
 import java.nio.file.Paths
 import kotlin.test.assertEquals
@@ -18,15 +18,12 @@ import kotlin.test.assertEquals
  * Uses the hand-written `res-edge` component, which exposes raw handle numbers.
  */
 class ResourceOwnershipTest {
-    private fun open(): ComponentBackend =
-        ChicoryComponent.fromDirectory(
-            Paths.get(requireNotNull(javaClass.getResource("/components/res-edge/plan.json")).toURI()).parent,
-        ).instantiate(null)
+    private fun open(): JsonBackend = TestComponent("res-edge").open()
 
-    private fun ComponentBackend.call(name: String, vararg args: Int): JsonElement =
+    private fun JsonBackend.call(name: String, vararg args: Int): JsonElement =
         invoke("api#$name", JsonArray(args.map { JsonPrimitive(it) }))
 
-    private fun ComponentBackend.int(name: String, vararg args: Int): Int = call(name, *args).jsonPrimitive.int
+    private fun JsonBackend.int(name: String, vararg args: Int): Int = call(name, *args).jsonPrimitive.int
 
     @Test
     fun `a handle given to the host leaves the component's table`() {

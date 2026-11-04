@@ -5,10 +5,10 @@
 # removed, renamed, or have their signatures changed by shrinking / obfuscation.
 
 -keep class wasm2kt.runtime.JniHostCallback {
-    public java.lang.String onHostCall(java.lang.String, java.lang.String);
+    public byte[] onHostCall(int, java.lang.String, byte[]);
 }
 -keep class wasm2kt.runtime.HostCallbackDispatcher {
-    public int onHostCall(java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment);
+    public int onHostCall(int, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment, long, java.lang.foreign.MemorySegment, java.lang.foreign.MemorySegment);
 }
 -keep class wasm2kt.runtime.JniWasmtimeBridge {
     *;

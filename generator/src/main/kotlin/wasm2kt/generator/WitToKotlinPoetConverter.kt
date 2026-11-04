@@ -4,6 +4,8 @@ import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.STAR
 import com.squareup.kotlinpoet.CHAR
 import com.squareup.kotlinpoet.ANY
+import com.squareup.kotlinpoet.ARRAY
+import com.squareup.kotlinpoet.WildcardTypeName
 import com.squareup.kotlinpoet.BYTE_ARRAY
 import com.squareup.kotlinpoet.BYTE
 import com.squareup.kotlinpoet.ClassName
@@ -41,6 +43,7 @@ import wasm2kt.ast.WitEnumCase
 import wasm2kt.ast.WitField
 import wasm2kt.ast.WitFlag
 import wasm2kt.ast.WitFunction
+import wasm2kt.ast.WitParam
 import wasm2kt.ast.WitFunctionKind
 import wasm2kt.ast.WitResolve
 import wasm2kt.ast.WitTypeDefKind
@@ -77,6 +80,12 @@ data class GeneratedKotlinFile(
 private const val NO_PATH_BACKEND_MESSAGE =
     "These bindings were generated without the Wasmtime backend; open a session with a ComponentBackendFactory " +
         "(e.g. the generated <Name>Component) or assign WasmtimeSession.factory / bytesFactory."
+
+/** KDoc of the generated `writeTo` / `read` of WIT types (ADR-0015). */
+private const val WRITE_TO_KDOC =
+    "Writes this value in the binary format bindings and backends exchange (ADR-0015). Used by generated code.\n"
+private const val READ_KDOC =
+    "Reads a value written in the binary format bindings and backends exchange (ADR-0015). Used by generated code.\n"
 
 /** KDoc for every generated entry point that loads a precompiled `.cwasm` (#33). */
 private const val PRECOMPILED_TRUST_KDOC =
@@ -147,12 +156,9 @@ class WitToKotlinPoetConverter(
     private val witBorrowedClass = ClassName("wasm2kt.runtime", "WitBorrowed")
     private val hostResourceBoundSessionClass = ClassName(targetPackage, "HostResourceBoundSession")
 
-    private val witJsonSerializableClass = ClassName("wasm2kt.runtime", "WitJsonSerializable")
-    private val ffmCodecClass = ClassName("wasm2kt.runtime", "FfmJsonCodec")
+    private val witWriterClass = ClassName("wasm2kt.runtime", "WitWriter")
+    private val witReaderClass = ClassName("wasm2kt.runtime", "WitReader")
     private val codePointClass = ClassName(targetPackage, "CodePoint")
-    private val jsonElementClass = ClassName("kotlinx.serialization.json", "JsonElement")
-    private val jsonArrayClass = ClassName("kotlinx.serialization.json", "JsonArray")
-    private val jsonNullClass = ClassName("kotlinx.serialization.json", "JsonNull")
 
     fun generate(): List<GeneratedKotlinFile> {
         val fileSpecs = mutableListOf<FileSpec>()
@@ -846,23 +852,25 @@ class WitToKotlinPoetConverter(
     }
 
     /**
-     * `define(key) { args -> ... }` for one host import. Freestanding functions, constructors and
-     * statics become abstract members of [contractBuilder]; methods are called on the host object
+     * `define(key) { args, results -> ... }` for one host import. Freestanding functions, constructors
+     * and statics become abstract members of [contractBuilder]; methods are called on the host object
      * behind `self`.
      */
     private fun buildHostImportDefinition(fn: WitFunction, key: String, contractBuilder: TypeSpec.Builder): CodeBlock {
         val worldClassName = currentWorldClassName
-        val decodedArgs = fn.params.mapIndexed { idx, param ->
-            buildDecodeExpression(param.type, CodeBlock.of("args[$idx]"), worldClassName)
-        }
+        val b = CodeBlock.builder()
+        val argsName = if (fn.params.isEmpty()) "_" else "__args"
+        b.beginControlFlow("define(%S) { $argsName, __results ->", key)
+        fn.params.forEachIndexed { i, param -> b.addStatement("val __a$i = %L", buildRead(param.type, "__args")) }
+        val args = fn.params.indices.map { CodeBlock.of("__a$it") }
         val callExpr = when (fn.kind) {
             WitFunctionKind.Freestanding -> {
                 contractBuilder.addFunction(buildInterfaceFunctionSpec(fn, worldClassName))
-                CodeBlock.of("impl.%N(%L)", NamingConventions.toCamelCase(fn.name), decodedArgs.joinToCode(", "))
+                CodeBlock.of("impl.%N(%L)", NamingConventions.toCamelCase(fn.name), args.joinToCode(", "))
             }
             is WitFunctionKind.Method -> {
                 val member = NamingConventions.extractResourceMemberName(fn.name)
-                CodeBlock.of("%L.%N(%L)", decodedArgs.first(), member, decodedArgs.drop(1).joinToCode(", "))
+                CodeBlock.of("%L.%N(%L)", args.first(), member, args.drop(1).joinToCode(", "))
             }
             else -> {
                 val name = hostResourceImportName(fn)
@@ -874,32 +882,31 @@ class WitToKotlinPoetConverter(
                     else mapFunctionReturnType(fn, worldClassName),
                 )
                 contractBuilder.addFunction(spec.build())
-                CodeBlock.of("impl.%N(%L)", name, decodedArgs.joinToCode(", "))
+                CodeBlock.of("impl.%N(%L)", name, args.joinToCode(", "))
             }
         }
-        val argsName = if (fn.params.isEmpty()) "_" else "args"
-        return if (fn.results.isEmpty() && fn.kind !is WitFunctionKind.Constructor) {
-            CodeBlock.builder()
-                .beginControlFlow("define(%S) { $argsName ->", key)
-                .addStatement("%L", callExpr)
-                .addStatement("%T", jsonNullClass)
-                .endControlFlow()
-                .build()
-        } else {
-            CodeBlock.builder().addStatement("define(%S) { $argsName -> %T.toJsonElement(%L) }", key, ffmCodecClass, callExpr).build()
+        when {
+            // A constructor's result is the new object, moved to the component.
+            fn.kind is WitFunctionKind.Constructor -> b.addStatement("__results.ownHostResource(%L)", callExpr)
+            fn.results.isEmpty() -> b.addStatement("%L", callExpr)
+            fn.results.size == 1 -> {
+                b.addStatement("val __ret = %L", callExpr)
+                b.add(buildWrite(fn.results.first().type, CodeBlock.of("__ret"), "__results"))
+            }
+            else -> {
+                b.addStatement("val __ret = %L", callExpr)
+                fn.results.forEachIndexed { i, res -> b.add(buildWrite(res.type, CodeBlock.of("__ret.f$i"), "__results")) }
+            }
         }
+        b.endControlFlow()
+        return b.build()
     }
 
     /** The component dropped its last owning handle to a host resource. */
     private fun buildHostResourceDropDefinition(key: String): CodeBlock =
         CodeBlock.builder()
-            .beginControlFlow("define(%S) { args ->", key)
-            .addStatement("%T.current().drop(%T.decodeInt(args[0]))", hostResourceTableClass, ffmCodecClass)
-            .addStatement("%T", jsonNullClass)
-            .endControlFlow()
+            .addStatement("define(%S) { __args, _ -> %T.current().drop(__args.int()) }", key, hostResourceTableClass)
             .build()
-
-    // ------------------------------------------------------------------ exports
 
     /** `<Iface>Exports`: implemented by the `Session` of every world that exports the interface (ADR-0012). */
     private fun exportMarkerClassName(ifaceId: Int): ClassName =
@@ -1209,7 +1216,6 @@ class WitToKotlinPoetConverter(
     ): TypeSpec {
         val name = recordClassName.simpleName
         val builder = TypeSpec.classBuilder(name)
-            .addSuperinterface(witJsonSerializableClass)
         if (fields.isNotEmpty()) {
             builder.addModifiers(KModifier.DATA)
         }
@@ -1232,52 +1238,30 @@ class WitToKotlinPoetConverter(
             fields.map { NamingConventions.toCamelCase(it.name) to mapTypeRef(it.type, worldClassName) },
         )
 
-        val toWitJsonBuilder = FunSpec.builder("toWitJson")
-            .addModifiers(KModifier.OVERRIDE)
-            .returns(jsonElementClass)
-        if (fields.isEmpty()) {
-            toWitJsonBuilder.addStatement("return %T.encodeRecord()", ffmCodecClass)
-        } else {
-            val pairs = fields.map { field ->
-                val propName = NamingConventions.toCamelCase(field.name)
-                CodeBlock.of("%S to %N", field.name, propName)
-            }
-            toWitJsonBuilder.addStatement("return %T.encodeRecord(%L)", ffmCodecClass, pairs.joinToCode(", "))
+        val writeTo = FunSpec.builder("writeTo")
+            .addKdoc(WRITE_TO_KDOC)
+            .addParameter("writer", witWriterClass)
+        for (field in fields) {
+            writeTo.addCode(buildWrite(field.type, CodeBlock.of("this.%N", NamingConventions.toCamelCase(field.name)), "writer"))
         }
-        builder.addFunction(toWitJsonBuilder.build())
+        builder.addFunction(writeTo.build())
 
         val hasResourceFields = fields.any { containsGuestResource(it.type) }
         val sessionExpr = if (hasResourceFields) CodeBlock.of("session") else null
-        val fromWitJsonBuilder = FunSpec.builder("fromWitJson")
-            .addParameter("elem", jsonElementClass)
-            .apply {
-                if (hasResourceFields) {
-                    addParameter(
-                        ParameterSpec.builder("session", sessionClassName.copy(nullable = true))
-                            .defaultValue("null")
-                            .build(),
-                    )
-                }
-            }
+        val read = FunSpec.builder("read")
+            .addKdoc(READ_KDOC)
+            .addParameter("reader", witReaderClass)
+            .apply { if (hasResourceFields) addParameter(ParameterSpec.builder("session", sessionClassName.copy(nullable = true)).defaultValue("null").build()) }
             .returns(recordClassName)
         if (fields.isEmpty()) {
-            fromWitJsonBuilder.addStatement("return %T()", recordClassName)
+            read.addStatement("return %T()", recordClassName)
         } else {
-            fromWitJsonBuilder.addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
             val ctorArgs = fields.map { field ->
-                val propName = NamingConventions.toCamelCase(field.name)
-                val fieldElemExpr = CodeBlock.of("%T.field(obj, %S)", ffmCodecClass, field.name)
-                val decodedExpr = buildDecodeExpression(field.type, fieldElemExpr, worldClassName, sessionExpr = sessionExpr)
-                CodeBlock.of("%N = %L", propName, decodedExpr)
+                CodeBlock.of("%N = %L", NamingConventions.toCamelCase(field.name), buildRead(field.type, "reader", sessionExpr = sessionExpr))
             }
-            fromWitJsonBuilder.addStatement("return %T(%L)", recordClassName, ctorArgs.joinToCode(", "))
+            read.addStatement("return %T(\n⇥%L⇤)", recordClassName, ctorArgs.joinToCode(",\n", suffix = ",\n"))
         }
-        builder.addType(
-            TypeSpec.companionObjectBuilder()
-                .addFunction(fromWitJsonBuilder.build())
-                .build(),
-        )
-
+        builder.addType(TypeSpec.companionObjectBuilder().addFunction(read.build()).build())
         return builder.build()
     }
 
@@ -1288,7 +1272,6 @@ class WitToKotlinPoetConverter(
         selfClassName: ClassName,
     ): TypeSpec {
         val builder = TypeSpec.enumBuilder(name)
-            .addSuperinterface(witJsonSerializableClass)
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
         for (case in cases) {
             val entryName = NamingConventions.toUpperSnakeCase(case.name)
@@ -1297,42 +1280,26 @@ class WitToKotlinPoetConverter(
                 .build()
             builder.addEnumConstant(entryName, entrySpec)
         }
-
-        val toJsonCode = CodeBlock.builder()
-            .beginControlFlow("return when (this)")
-        for (case in cases) {
-            val entryName = NamingConventions.toUpperSnakeCase(case.name)
-            toJsonCode.addStatement("%N -> %T.toJsonElement(%S)", entryName, ffmCodecClass, case.name)
-        }
-        toJsonCode.endControlFlow()
         builder.addFunction(
-            FunSpec.builder("toWitJson")
-                .addModifiers(KModifier.OVERRIDE)
-                .returns(jsonElementClass)
-                .addCode(toJsonCode.build())
+            FunSpec.builder("writeTo")
+                .addKdoc(WRITE_TO_KDOC)
+                .addParameter("writer", witWriterClass)
+                .addStatement("%L", discriminantWrite(cases.size, "writer", "ordinal"))
                 .build(),
         )
-
-        val fromJsonCode = CodeBlock.builder()
-            .beginControlFlow("return when (val tag = %T.decodeString(elem))", ffmCodecClass)
-        for (case in cases) {
-            val entryName = NamingConventions.toUpperSnakeCase(case.name)
-            fromJsonCode.addStatement("%S -> %N", case.name, entryName)
-        }
-        fromJsonCode.addStatement("else -> error(%P)", "Unknown $name enum case: \$tag")
-        fromJsonCode.endControlFlow()
         builder.addType(
             TypeSpec.companionObjectBuilder()
                 .addFunction(
-                    FunSpec.builder("fromWitJson")
-                        .addParameter("elem", jsonElementClass)
+                    FunSpec.builder("read")
+                        .addKdoc(READ_KDOC)
+                        .addParameter("reader", witReaderClass)
                         .returns(selfClassName)
-                        .addCode(fromJsonCode.build())
+                        .addStatement("val d = ${discriminantRead(cases.size, "reader")}")
+                        .addStatement("return entries.getOrNull(d) ?: throw IllegalStateException(%P)", "Invalid $name discriminant \$d")
                         .build(),
                 )
                 .build(),
         )
-
         return builder.build()
     }
 
@@ -1350,7 +1317,6 @@ class WitToKotlinPoetConverter(
         val builder = TypeSpec.classBuilder(name)
             .addModifiers(KModifier.VALUE)
             .addAnnotation(JvmInline::class)
-            .addSuperinterface(witJsonSerializableClass)
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addParameter(
@@ -1396,12 +1362,20 @@ class WitToKotlinPoetConverter(
             )
         }
 
-        val decodeMethod = if (useULong) "decodeULong" else "decodeUInt"
+        // Canonical ABI widths: u8 / u16 / u32 words (ADR-0015).
+        val (writeCode, readExpr) = when {
+            flags.size <= 8 -> "writer.byte(raw.toInt())" to "(reader.byte().toUInt() and 0xFFu)"
+            flags.size <= 16 -> "writer.short(raw.toInt())" to "(reader.short().toUInt() and 0xFFFFu)"
+            flags.size <= 32 -> "writer.int(raw.toInt())" to "reader.int().toUInt()"
+            else -> "writer.int(raw.toInt())\nwriter.int((raw shr 32).toInt())" to
+                "((reader.int().toULong() and 0xFFFF_FFFFuL) or (reader.int().toULong() shl 32))"
+        }
         companionBuilder.addFunction(
-            FunSpec.builder("fromWitJson")
-                .addParameter("elem", jsonElementClass)
+            FunSpec.builder("read")
+                .addKdoc(READ_KDOC)
+                .addParameter("reader", witReaderClass)
                 .returns(selfClassName)
-                .addStatement("return %T(%T.$decodeMethod(elem))", selfClassName, ffmCodecClass)
+                .addStatement("return %T($readExpr)", selfClassName)
                 .build(),
         )
 
@@ -1422,10 +1396,10 @@ class WitToKotlinPoetConverter(
                 .build(),
         )
         builder.addFunction(
-            FunSpec.builder("toWitJson")
-                .addModifiers(KModifier.OVERRIDE)
-                .returns(jsonElementClass)
-                .addStatement("return %T.toJsonElement(raw)", ffmCodecClass)
+            FunSpec.builder("writeTo")
+                .addKdoc(WRITE_TO_KDOC)
+                .addParameter("writer", witWriterClass)
+                .addCode(writeCode.split("\n").joinToString("") { "$it\n" })
                 .build(),
         )
         builder.addType(companionBuilder.build())
@@ -1442,24 +1416,18 @@ class WitToKotlinPoetConverter(
         val name = variantClassName.simpleName
         val builder = TypeSpec.interfaceBuilder(name)
             .addModifiers(KModifier.SEALED)
-            .addSuperinterface(witJsonSerializableClass)
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
-        for (case in cases) {
+        val writeTo = CodeBlock.builder().beginControlFlow("when (this)")
+        cases.forEachIndexed { index, case ->
             val caseName = NamingConventions.toPascalCase(case.name)
             if (case.type == null) {
                 val objBuilder = TypeSpec.objectBuilder(caseName)
                     .addModifiers(KModifier.DATA)
                     .addSuperinterface(variantClassName)
-                    .addFunction(
-                        FunSpec.builder("toWitJson")
-                            .addModifiers(KModifier.OVERRIDE)
-                            .returns(jsonElementClass)
-                            .addStatement("return %T.encodeVariant(%S)", ffmCodecClass, case.name)
-                            .build(),
-                    )
                 case.docs?.contents?.let { objBuilder.addKdoc("%L\n", it.trim()) }
                 builder.addType(objBuilder.build())
+                writeTo.addStatement("is %N -> %L", caseName, discriminantWrite(cases.size, "writer", "$index"))
             } else {
                 val payloadType = mapTypeRef(checkNotNull(case.type), worldClassName)
                 val classBuilder = TypeSpec.classBuilder(caseName)
@@ -1475,57 +1443,55 @@ class WitToKotlinPoetConverter(
                             .initializer("value")
                             .build(),
                     )
-                    .addFunction(
-                        FunSpec.builder("toWitJson")
-                            .addModifiers(KModifier.OVERRIDE)
-                            .returns(jsonElementClass)
-                            .addStatement("return %T.encodeVariant(%S, value)", ffmCodecClass, case.name)
-                            .build(),
-                    )
                 addContentEqualityIfNeeded(classBuilder, variantClassName.nestedClass(caseName), listOf("value" to payloadType))
                 case.docs?.contents?.let { classBuilder.addKdoc("%L\n", it.trim()) }
                 builder.addType(classBuilder.build())
+                writeTo.beginControlFlow("is %N ->", caseName)
+                writeTo.addStatement("%L", discriminantWrite(cases.size, "writer", "$index"))
+                writeTo.add(buildWrite(checkNotNull(case.type), CodeBlock.of("this.value"), "writer"))
+                writeTo.endControlFlow()
             }
         }
+        writeTo.endControlFlow()
+        builder.addFunction(
+            FunSpec.builder("writeTo")
+                .addKdoc(WRITE_TO_KDOC)
+                .addParameter("writer", witWriterClass)
+                .addCode(writeTo.build())
+                .build(),
+        )
 
         val hasResourceCases = cases.any { c -> c.type?.let { containsGuestResource(it) } ?: false }
         val sessionExpr = if (hasResourceCases) CodeBlock.of("session") else null
-        val fromJsonCode = CodeBlock.builder()
-            .addStatement("val obj = %T.asJsonObject(elem)", ffmCodecClass)
-            .beginControlFlow("return when (val caseTag = %T.variantCase(obj))", ffmCodecClass)
-        for (case in cases) {
+        val read = CodeBlock.builder()
+            .beginControlFlow("return when (val d = ${discriminantRead(cases.size, "reader")})")
+        cases.forEachIndexed { index, case ->
             val caseName = NamingConventions.toPascalCase(case.name)
             if (case.type == null) {
-                fromJsonCode.addStatement("%S -> %N", case.name, caseName)
+                read.addStatement("$index -> %N", caseName)
             } else {
-                val payloadElem = CodeBlock.of("%T.variantPayload(obj)", ffmCodecClass)
-                val decodedPayload = buildDecodeExpression(checkNotNull(case.type), payloadElem, worldClassName, sessionExpr = sessionExpr)
-                fromJsonCode.addStatement("%S -> %N(%L)", case.name, caseName, decodedPayload)
+                read.addStatement("$index -> %N(%L)", caseName, buildRead(checkNotNull(case.type), "reader", sessionExpr = sessionExpr))
             }
         }
-        fromJsonCode.addStatement("else -> error(%P)", "Unknown $name variant case: \$caseTag")
-        fromJsonCode.endControlFlow()
+        read.addStatement("else -> throw IllegalStateException(%P)", "Invalid $name discriminant \$d")
+        read.endControlFlow()
         builder.addType(
             TypeSpec.companionObjectBuilder()
                 .addFunction(
-                    FunSpec.builder("fromWitJson")
-                        .addParameter("elem", jsonElementClass)
+                    FunSpec.builder("read")
+                        .addKdoc(READ_KDOC)
+                        .addParameter("reader", witReaderClass)
                         .apply {
                             if (hasResourceCases) {
-                                addParameter(
-                                    ParameterSpec.builder("session", sessionClassName.copy(nullable = true))
-                                        .defaultValue("null")
-                                        .build(),
-                                )
+                                addParameter(ParameterSpec.builder("session", sessionClassName.copy(nullable = true)).defaultValue("null").build())
                             }
                         }
                         .returns(variantClassName)
-                        .addCode(fromJsonCode.build())
+                        .addCode(read.build())
                         .build(),
                 )
                 .build(),
         )
-
         return builder.build()
     }
 
@@ -1579,7 +1545,6 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .addSuperinterface(autoCloseableClass)
-            .addSuperinterface(witJsonSerializableClass)
             .addFunction(
                 FunSpec.builder("consumeOwnership")
                     .addModifiers(KModifier.INTERNAL)
@@ -1589,19 +1554,13 @@ class WitToKotlinPoetConverter(
                     .addStatement("return handle")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("toWitJson")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(jsonElementClass)
-                    .addStatement("return %T.toJsonElement(handle)", ffmCodecClass)
-                    .build(),
-            )
 
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
         val companionBuilder = TypeSpec.companionObjectBuilder()
 
         for (fn in functions) {
+            val key = "$keyPrefix${fn.name}"
             when (fn.kind) {
                 is WitFunctionKind.Constructor -> {
                     val invokeBuilder = FunSpec.builder("invoke")
@@ -1609,96 +1568,44 @@ class WitToKotlinPoetConverter(
                         .apply { addSessionContext(this, contextClassName, viaMarker = true) }
                         .returns(resourceClassName)
                     addFunctionKdoc(invokeBuilder, fn)
-                    val argFormatPlaceholders = mutableListOf<String>()
-                    val formatArgs = mutableListOf<Any>("$keyPrefix${fn.name}")
-                    for (param in fn.params) {
-                        val paramName = NamingConventions.toCamelCase(param.name)
-                        invokeBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
-                        argFormatPlaceholders += fmt
-                        formatArgs.addAll(argVal)
-                    }
-                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-                    invokeBuilder.addStatement(
-                        "val handle = session.runtimeSession.newResource(%S$argsJoined)",
-                        *formatArgs.toTypedArray(),
-                    )
+                    for (param in fn.params) invokeBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
+                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+                    invokeBuilder.addCode(call.prelude)
+                    invokeBuilder.addStatement("val handle = session.runtimeSession.newResource(%S, %L, %L)", key, call.args, call.encode)
                     invokeBuilder.addStatement("return %T(session, handle)", resourceClassName)
                     companionBuilder.addFunction(invokeBuilder.build())
                 }
                 is WitFunctionKind.Method -> {
-                    val cleanMethodName = NamingConventions.extractResourceMemberName(fn.name)
-                    val methodBuilder = FunSpec.builder(cleanMethodName)
+                    val methodBuilder = FunSpec.builder(NamingConventions.extractResourceMemberName(fn.name))
                     addFunctionKdoc(methodBuilder, fn)
-                    val userParams = fn.params.dropWhile { it.name == "self" }
-                    val argFormatPlaceholders = mutableListOf<String>()
-                    val extraFormatArgs = mutableListOf<Any>()
-                    for (param in userParams) {
-                        val paramName = NamingConventions.toCamelCase(param.name)
-                        methodBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
-                        argFormatPlaceholders += fmt
-                        extraFormatArgs.addAll(argVal)
-                    }
+                    val userParams = fn.params.drop(1)
+                    for (param in userParams) methodBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
+                    methodBuilder.returns(mapFunctionReturnType(fn, worldClassName))
                     methodBuilder.addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
-                    val returnType = mapFunctionReturnType(fn, worldClassName)
-                    methodBuilder.returns(returnType)
-                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-                    if (returnType == UNIT) {
-                        methodBuilder.addStatement(
-                            "boundSession.runtimeSession.invokeMethod(handle, %S, { %T.decodeUnit(it) }$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", ffmCodecClass) + extraFormatArgs).toTypedArray(),
-                        )
-                    } else if (returnsOwnedResource(fn)) {
-                        methodBuilder.addStatement(
-                            "val resultHandle = boundSession.runtimeSession.invokeMethod(handle, %S, { %T.decodeInt(it) }$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", ffmCodecClass) + extraFormatArgs).toTypedArray(),
-                        )
-                        methodBuilder.addStatement("return %T(boundSession, resultHandle)", returnType)
-                    } else {
-                        val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
-                        methodBuilder.addStatement("val session = boundSession")
-                        methodBuilder.addStatement(
-                            "return session.runtimeSession.invokeMethod(handle, %S, %L$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", decoderLambda) + extraFormatArgs).toTypedArray(),
-                        )
-                    }
+                    methodBuilder.addStatement("val session = boundSession")
+                    val call = buildCallParts(fn, userParams, selfHandle = true, sessionExpr = CodeBlock.of("session"))
+                    methodBuilder.addCode(call.prelude)
+                    val target = if (returnsOwnedResource(fn)) "val resultHandle =" else "return"
+                    methodBuilder.addStatement(
+                        "$target session.runtimeSession.invokeMethod(handle, %S, %L, %L, %L)",
+                        key, call.args, call.encode, call.decode,
+                    )
+                    if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
                     builder.addFunction(methodBuilder.build())
                 }
                 is WitFunctionKind.Static -> {
-                    val staticName = NamingConventions.extractResourceMemberName(fn.name)
-                    val staticBuilder = FunSpec.builder(staticName)
+                    val staticBuilder = FunSpec.builder(NamingConventions.extractResourceMemberName(fn.name))
                         .apply { addSessionContext(this, contextClassName, viaMarker = true) }
                     addFunctionKdoc(staticBuilder, fn)
-                    val argFormatPlaceholders = mutableListOf<String>()
-                    val extraFormatArgs = mutableListOf<Any>()
-                    for (param in fn.params) {
-                        val paramName = NamingConventions.toCamelCase(param.name)
-                        staticBuilder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-                        val (fmt, argVal) = formatArgumentCode(paramName, param.type)
-                        argFormatPlaceholders += fmt
-                        extraFormatArgs.addAll(argVal)
-                    }
-                    val returnType = mapFunctionReturnType(fn, worldClassName)
-                    staticBuilder.returns(returnType)
-                    val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-                    if (returnType == UNIT) {
-                        staticBuilder.addStatement(
-                            "session.runtimeSession.invoke(%S, { %T.decodeUnit(it) }$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", ffmCodecClass) + extraFormatArgs).toTypedArray(),
-                        )
-                    } else if (returnsOwnedResource(fn)) {
-                        staticBuilder.addStatement(
-                            "val resultHandle = session.runtimeSession.invoke(%S, { %T.decodeInt(it) }$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", ffmCodecClass) + extraFormatArgs).toTypedArray(),
-                        )
-                        staticBuilder.addStatement("return %T(session, resultHandle)", returnType)
+                    for (param in fn.params) staticBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
+                    staticBuilder.returns(mapFunctionReturnType(fn, worldClassName))
+                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+                    staticBuilder.addCode(call.prelude)
+                    if (returnsOwnedResource(fn)) {
+                        staticBuilder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
+                        staticBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
                     } else {
-                        val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
-                        staticBuilder.addStatement(
-                            "return session.runtimeSession.invoke(%S, %L$argsJoined)",
-                            *(listOf<Any>("$keyPrefix${fn.name}", decoderLambda) + extraFormatArgs).toTypedArray(),
-                        )
+                        staticBuilder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
                     }
                     companionBuilder.addFunction(staticBuilder.build())
                 }
@@ -1751,39 +1658,18 @@ class WitToKotlinPoetConverter(
             .apply { addSessionContext(this, sessionClassName, viaMarker) }
 
         addFunctionKdoc(builder, fn)
-
-        val argFormatPlaceholders = mutableListOf<String>()
-        val extraFormatArgs = mutableListOf<Any>()
-        for (param in fn.params) {
-            val paramName = NamingConventions.toCamelCase(param.name)
-            builder.addParameter(paramName, mapTypeRef(param.type, worldClassName))
-            val (fmt, argVal) = formatArgumentCode(paramName, param.type)
-            argFormatPlaceholders += fmt
-            extraFormatArgs.addAll(argVal)
-        }
-
+        for (param in fn.params) builder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
         val returnType = mapFunctionReturnType(fn, worldClassName)
         builder.returns(returnType)
 
-        val fullExportName = "$invokeTargetPrefix${fn.name}"
-        val argsJoined = if (argFormatPlaceholders.isEmpty()) "" else ", " + argFormatPlaceholders.joinToString(", ")
-        if (returnType == UNIT) {
-            builder.addStatement(
-                "session.runtimeSession.invoke(%S, { %T.decodeUnit(it) }$argsJoined)",
-                *(listOf<Any>(fullExportName, ffmCodecClass) + extraFormatArgs).toTypedArray(),
-            )
-        } else if (returnsOwnedResource(fn)) {
-            builder.addStatement(
-                "val resultHandle = session.runtimeSession.invoke(%S, { %T.decodeInt(it) }$argsJoined)",
-                *(listOf<Any>(fullExportName, ffmCodecClass) + extraFormatArgs).toTypedArray(),
-            )
+        val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+        builder.addCode(call.prelude)
+        val key = "$invokeTargetPrefix${fn.name}"
+        if (returnsOwnedResource(fn)) {
+            builder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
             builder.addStatement("return %T(session, resultHandle)", returnType)
         } else {
-            val decoderLambda = buildFunctionReturnDecoderLambda(fn, worldClassName)
-            builder.addStatement(
-                "return session.runtimeSession.invoke(%S, %L$argsJoined)",
-                *(listOf<Any>(fullExportName, decoderLambda) + extraFormatArgs).toTypedArray(),
-            )
+            builder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
         }
         return builder.build()
     }
@@ -1801,190 +1687,253 @@ class WitToKotlinPoetConverter(
         }
     }
 
-    private fun buildFunctionReturnDecoderLambda(
-        fn: WitFunction,
-        worldClassName: ClassName,
-    ): CodeBlock {
-        val sessionExpr = CodeBlock.of("session")
-        return when (fn.results.size) {
-            0 -> CodeBlock.of("{ %T.decodeUnit(it) }", ffmCodecClass)
-            1 -> {
-                val body = buildDecodeExpression(fn.results.first().type, CodeBlock.of("elem"), worldClassName, sessionExpr = sessionExpr)
-                CodeBlock.of("{ elem -> %L }", body)
+    // ------------------------------------------------------------------ binary format (ADR-0015)
+
+    /** Discriminants are as wide as in the Canonical ABI: `u8`, `u16` or `u32` by case count. */
+    private fun discriminantWrite(count: Int, w: String, expr: String): CodeBlock = when {
+        count <= 256 -> CodeBlock.of("$w.byte($expr)")
+        count <= 65536 -> CodeBlock.of("$w.short($expr)")
+        else -> CodeBlock.of("$w.int($expr)")
+    }
+
+    private fun discriminantRead(count: Int, r: String): String = when {
+        count <= 256 -> "($r.byte().toInt() and 0xFF)"
+        count <= 65536 -> "($r.short().toInt() and 0xFFFF)"
+        else -> "$r.int()"
+    }
+
+    /** Statements writing [value] (of WIT type [typeRef]) to the [WitWriter] named [w]. */
+    private fun buildWrite(typeRef: WitTypeRef, value: CodeBlock, w: String, depth: Int = 0): CodeBlock = when (typeRef) {
+        is WitTypeRef.Primitive -> CodeBlock.builder().addStatement("%L", primitiveWrite(typeRef.name, value, w)).build()
+        is WitTypeRef.Id -> buildWriteId(typeRef.index, value, w, depth)
+    }
+
+    private fun primitiveWrite(name: String, v: CodeBlock, w: String): CodeBlock = when (name) {
+        "bool" -> CodeBlock.of("$w.bool(%L)", v)
+        "u8", "s8" -> CodeBlock.of("$w.byte((%L).toInt())", v)
+        "u16", "s16" -> CodeBlock.of("$w.short((%L).toInt())", v)
+        "u32" -> CodeBlock.of("$w.int((%L).toInt())", v)
+        "s32" -> CodeBlock.of("$w.int(%L)", v)
+        "u64" -> CodeBlock.of("$w.long((%L).toLong())", v)
+        "s64" -> CodeBlock.of("$w.long(%L)", v)
+        "f32", "float32" -> CodeBlock.of("$w.float(%L)", v)
+        "f64", "float64" -> CodeBlock.of("$w.double(%L)", v)
+        "char" -> CodeBlock.of("$w.codePoint((%L).value)", v)
+        "string" -> CodeBlock.of("$w.string(%L)", v)
+        "_" -> CodeBlock.of("Unit")
+        else -> throw IllegalArgumentException("Unknown WIT primitive type: $name")
+    }
+
+    private fun buildWriteId(index: Int, value: CodeBlock, w: String, depth: Int): CodeBlock {
+        val def = resolve.types.getOrNull(index) ?: throw IllegalArgumentException("Invalid WIT type index: $index")
+        val b = CodeBlock.builder()
+        when (val kind = def.kind) {
+            is WitTypeDefKind.Record, is WitTypeDefKind.Enum, is WitTypeDefKind.Flags, is WitTypeDefKind.Variant ->
+                b.addStatement("(%L).writeTo($w)", value)
+            is WitTypeDefKind.TypeAlias -> return buildWrite(kind.type, value, w, depth)
+            is WitTypeDefKind.Resource -> b.add(resourceWrite(index, own = true, value, w))
+            is WitTypeDefKind.Handle -> b.add(resourceWrite(kind.resourceId, own = kind.kind == wasm2kt.ast.HandleKind.OWN, value, w))
+            is WitTypeDefKind.OptionType -> {
+                val v = "__o$depth"
+                b.addStatement("val $v = %L", value)
+                if (mapTypeRef(kind.type, currentWorldClassName).isNullable) {
+                    val opt = ClassName(targetPackage, "WitOption")
+                    b.beginControlFlow("if ($v is %T.Some)", opt).addStatement("$w.byte(1)")
+                    b.add(buildWrite(kind.type, CodeBlock.of("$v.value"), w, depth + 1))
+                } else {
+                    b.beginControlFlow("if ($v != null)").addStatement("$w.byte(1)")
+                    b.add(buildWrite(kind.type, CodeBlock.of(v), w, depth + 1))
+                }
+                b.nextControlFlow("else").addStatement("$w.byte(0)").endControlFlow()
             }
+            is WitTypeDefKind.ResultType -> {
+                val v = "__res$depth"
+                val res = ClassName(targetPackage, "WitResult")
+                b.addStatement("val $v = %L", value)
+                b.beginControlFlow("when ($v)")
+                b.beginControlFlow("is %T.Ok ->", res).addStatement("$w.byte(0)")
+                kind.ok?.let { b.add(buildWrite(it, CodeBlock.of("$v.value"), w, depth + 1)) }
+                b.endControlFlow()
+                b.beginControlFlow("is %T.Err ->", res).addStatement("$w.byte(1)")
+                kind.err?.let { b.add(buildWrite(it, CodeBlock.of("$v.error"), w, depth + 1)) }
+                b.endControlFlow()
+                b.endControlFlow()
+            }
+            is WitTypeDefKind.ListType -> if (isPrimitive(kind.type, "u8")) {
+                b.addStatement("$w.bytes(%L)", value)
+            } else {
+                val v = "__l$depth"
+                val e = "__e$depth"
+                b.addStatement("val $v = %L", value)
+                b.addStatement("$w.length($v.size)")
+                b.beginControlFlow("for ($e in $v)")
+                b.add(buildWrite(kind.type, CodeBlock.of(e), w, depth + 1))
+                b.endControlFlow()
+            }
+            is WitTypeDefKind.Tuple -> {
+                generatedTupleArities += kind.types.size
+                val v = "__t$depth"
+                b.addStatement("val $v = %L", value)
+                kind.types.forEachIndexed { i, t -> b.add(buildWrite(t, CodeBlock.of("$v.f$i"), w, depth + 1)) }
+            }
+            is WitTypeDefKind.FutureType, is WitTypeDefKind.StreamType ->
+                b.addStatement("throw %T(%S)", UnsupportedOperationException::class, "future and stream values are not supported yet (#16)")
+        }
+        return b.build()
+    }
+
+    /** A host resource is moved (`own`) or lent (`borrow`) through the table; a guest resource is its handle. */
+    private fun resourceWrite(resourceIdx: Int, own: Boolean, value: CodeBlock, w: String): CodeBlock =
+        if (isHostResource(resourceIdx)) {
+            CodeBlock.builder().addStatement(if (own) "$w.ownHostResource(%L)" else "$w.borrowHostResource(%L)", value).build()
+        } else {
+            CodeBlock.builder().addStatement("$w.int((%L).handle)", value).build()
+        }
+
+    /**
+     * An expression reading a value of WIT type [typeRef] from the [WitReader] named [r]. Guest
+     * resources are bound to [sessionExpr] (unbound when null, e.g. in host imports).
+     */
+    private fun buildRead(typeRef: WitTypeRef, r: String, depth: Int = 0, sessionExpr: CodeBlock? = null): CodeBlock = when (typeRef) {
+        is WitTypeRef.Primitive -> when (typeRef.name) {
+            "bool" -> CodeBlock.of("$r.bool()")
+            "u8" -> CodeBlock.of("$r.byte().toUByte()")
+            "s8" -> CodeBlock.of("$r.byte()")
+            "u16" -> CodeBlock.of("$r.short().toUShort()")
+            "s16" -> CodeBlock.of("$r.short()")
+            "u32" -> CodeBlock.of("$r.int().toUInt()")
+            "s32" -> CodeBlock.of("$r.int()")
+            "u64" -> CodeBlock.of("$r.long().toULong()")
+            "s64" -> CodeBlock.of("$r.long()")
+            "f32", "float32" -> CodeBlock.of("$r.float()")
+            "f64", "float64" -> CodeBlock.of("$r.double()")
+            "char" -> CodeBlock.of("%T($r.codePoint())", codePointClass)
+            "string" -> CodeBlock.of("$r.string()")
+            "_" -> CodeBlock.of("Unit")
+            else -> throw IllegalArgumentException("Unknown WIT primitive type: ${typeRef.name}")
+        }
+        is WitTypeRef.Id -> buildReadId(typeRef.index, r, depth, sessionExpr)
+    }
+
+    private fun buildReadId(index: Int, r: String, depth: Int, sessionExpr: CodeBlock?): CodeBlock {
+        val def = resolve.types.getOrNull(index) ?: throw IllegalArgumentException("Invalid WIT type index: $index")
+        return when (val kind = def.kind) {
+            is WitTypeDefKind.Record, is WitTypeDefKind.Enum, is WitTypeDefKind.Flags, is WitTypeDefKind.Variant -> {
+                val cls = typeClassName(index)
+                if (sessionExpr != null && containsGuestResource(WitTypeRef.Id(index))) {
+                    CodeBlock.of("%T.read($r, %L)", cls, sessionExpr)
+                } else {
+                    CodeBlock.of("%T.read($r)", cls)
+                }
+            }
+            is WitTypeDefKind.TypeAlias -> buildRead(kind.type, r, depth, sessionExpr)
+            is WitTypeDefKind.Resource -> resourceRead(index, own = true, r, sessionExpr)
+            is WitTypeDefKind.Handle -> resourceRead(kind.resourceId, own = kind.kind == wasm2kt.ast.HandleKind.OWN, r, sessionExpr)
+            is WitTypeDefKind.OptionType -> {
+                val inner = buildRead(kind.type, r, depth + 1, sessionExpr)
+                if (mapTypeRef(kind.type, currentWorldClassName).isNullable) {
+                    val opt = ClassName(targetPackage, "WitOption")
+                    CodeBlock.of("(if ($r.bool()) %T.Some(%L) else %T.None)", opt, inner, opt)
+                } else {
+                    CodeBlock.of("(if ($r.bool()) %L else null)", inner)
+                }
+            }
+            is WitTypeDefKind.ResultType -> {
+                val res = ClassName(targetPackage, "WitResult")
+                val ok = kind.ok?.let { buildRead(it, r, depth + 1, sessionExpr) } ?: CodeBlock.of("Unit")
+                val err = kind.err?.let { buildRead(it, r, depth + 1, sessionExpr) } ?: CodeBlock.of("Unit")
+                CodeBlock.of("(if ($r.bool()) %T.Err(%L) else %T.Ok(%L))", res, err, res, ok)
+            }
+            is WitTypeDefKind.ListType -> if (isPrimitive(kind.type, "u8")) {
+                CodeBlock.of("$r.bytes()")
+            } else {
+                CodeBlock.of("List($r.length()) { %L }", buildRead(kind.type, r, depth + 1, sessionExpr))
+            }
+            is WitTypeDefKind.Tuple -> {
+                generatedTupleArities += kind.types.size
+                val tupleClass = ClassName(targetPackage, "Tuple${kind.types.size}")
+                CodeBlock.of("%T(%L)", tupleClass, kind.types.map { buildRead(it, r, depth + 1, sessionExpr) }.joinToCode(", "))
+            }
+            is WitTypeDefKind.FutureType, is WitTypeDefKind.StreamType ->
+                CodeBlock.of("throw %T(%S)", UnsupportedOperationException::class, "future and stream values are not supported yet (#16)")
+        }
+    }
+
+    /** A host resource comes back through the table (`own` returns it to the host); a guest resource is wrapped. */
+    private fun resourceRead(resourceIdx: Int, own: Boolean, r: String, sessionExpr: CodeBlock?): CodeBlock =
+        if (isHostResource(resourceIdx)) {
+            CodeBlock.of(
+                "%T.current().%N($r.int(), %T::class.java)",
+                hostResourceTableClass,
+                if (own) "take" else "borrow",
+                mapTypeDefByIndex(resourceIdx, currentWorldClassName),
+            )
+        } else {
+            CodeBlock.of("%T(%L, $r.int())", typeClassName(resourceIdx), sessionExpr ?: CodeBlock.of("null"))
+        }
+
+    /**
+     * The parts of one call into the component (ADR-0015): statements to run first, the arguments as
+     * Kotlin values (what `InMemoryWasmtimeSession` receives), the lambda writing them, and the lambda
+     * reading the results.
+     */
+    private class CallParts(val prelude: CodeBlock, val args: CodeBlock, val encode: CodeBlock, val decode: CodeBlock)
+
+    /**
+     * [params] are the WIT parameters after `self`; [selfHandle] writes the resource's own handle
+     * first (methods). A top-level `own` of a guest resource gives up the Kotlin object's ownership.
+     */
+    private fun buildCallParts(fn: WitFunction, params: List<WitParam>, selfHandle: Boolean, sessionExpr: CodeBlock?): CallParts {
+        val prelude = CodeBlock.builder()
+        val argValues = mutableListOf<CodeBlock>()
+        val encode = CodeBlock.builder()
+        if (selfHandle) encode.addStatement("__w.int(handle)")
+        params.forEachIndexed { i, param ->
+            val name = NamingConventions.toCamelCase(param.name)
+            val handle = (param.type as? WitTypeRef.Id)?.let { resolve.types.getOrNull(it.index)?.kind as? WitTypeDefKind.Handle }
+            when {
+                handle != null && !isHostResource(handle.resourceId) && handle.kind == wasm2kt.ast.HandleKind.OWN -> {
+                    prelude.addStatement("val __own$i = %N.consumeOwnership()", name)
+                    argValues += CodeBlock.of("__own$i")
+                    encode.addStatement("__w.int(__own$i)")
+                }
+                handle != null && !isHostResource(handle.resourceId) -> {
+                    argValues += CodeBlock.of("%N.handle", name)
+                    encode.addStatement("__w.int(%N.handle)", name)
+                }
+                handle != null && handle.kind == wasm2kt.ast.HandleKind.BORROW -> {
+                    argValues += CodeBlock.of("%T(%N)", witBorrowedClass, name)
+                    encode.addStatement("__w.borrowHostResource(%N)", name)
+                }
+                else -> {
+                    argValues += CodeBlock.of("%N", name)
+                    encode.add(buildWrite(param.type, CodeBlock.of("%N", name), "__w"))
+                }
+            }
+        }
+        val args = if (argValues.isEmpty()) CodeBlock.of("emptyArray<Any?>()") else CodeBlock.of("arrayOf<Any?>(%L)", argValues.joinToCode(", "))
+        // The encoder is a local lambda: statements cannot be nested inside the call's statement.
+        val encodeLambda = if (encode.isEmpty()) {
+            CodeBlock.of("{ }")
+        } else {
+            prelude.beginControlFlow("val __encode: %T = { __w ->", encodeLambdaType).add(encode.build()).endControlFlow()
+            CodeBlock.of("__encode")
+        }
+        val decode = when {
+            // An owned guest resource comes back as its handle; the caller wraps it, so that
+            // InMemoryWasmtimeSession can return plain handles.
+            returnsOwnedResource(fn) -> CodeBlock.of("{ __r -> __r.int() }")
+            fn.results.isEmpty() -> CodeBlock.of("{ }")
+            fn.results.size == 1 -> CodeBlock.of("{ __r -> %L }", buildRead(fn.results.first().type, "__r", sessionExpr = sessionExpr))
             else -> {
-                val arity = fn.results.size
-                generatedTupleArities += arity
-                val tupleClass = ClassName(targetPackage, "Tuple$arity")
-                val elemDecoders = fn.results.mapIndexed { idx, res ->
-                    buildDecodeExpression(res.type, CodeBlock.of("arr[$idx]"), worldClassName, sessionExpr = sessionExpr)
-                }
-                CodeBlock.of(
-                    "{ elem -> %T.asJsonArray(elem).let { arr -> %T(%L) } }",
-                    ffmCodecClass,
-                    tupleClass,
-                    elemDecoders.joinToCode(", "),
-                )
+                generatedTupleArities += fn.results.size
+                val tupleClass = ClassName(targetPackage, "Tuple${fn.results.size}")
+                CodeBlock.of("{ __r -> %T(%L) }", tupleClass, fn.results.map { buildRead(it.type, "__r", sessionExpr = sessionExpr) }.joinToCode(", "))
             }
         }
+        return CallParts(prelude.build(), args, encodeLambda, decode)
     }
 
-    private fun buildDecodeExpression(
-        typeRef: WitTypeRef,
-        elemExpr: CodeBlock,
-        worldClassName: ClassName,
-        depth: Int = 0,
-        sessionExpr: CodeBlock? = null,
-    ): CodeBlock {
-        return when (typeRef) {
-            is WitTypeRef.Primitive -> when (typeRef.name) {
-                "bool" -> CodeBlock.of("%T.decodeBoolean(%L)", ffmCodecClass, elemExpr)
-                "u8" -> CodeBlock.of("%T.decodeUByte(%L)", ffmCodecClass, elemExpr)
-                "s8" -> CodeBlock.of("%T.decodeByte(%L)", ffmCodecClass, elemExpr)
-                "u16" -> CodeBlock.of("%T.decodeUShort(%L)", ffmCodecClass, elemExpr)
-                "s16" -> CodeBlock.of("%T.decodeShort(%L)", ffmCodecClass, elemExpr)
-                "u32" -> CodeBlock.of("%T.decodeUInt(%L)", ffmCodecClass, elemExpr)
-                "s32" -> CodeBlock.of("%T.decodeInt(%L)", ffmCodecClass, elemExpr)
-                "u64" -> CodeBlock.of("%T.decodeULong(%L)", ffmCodecClass, elemExpr)
-                "s64" -> CodeBlock.of("%T.decodeLong(%L)", ffmCodecClass, elemExpr)
-                "f32", "float32" -> CodeBlock.of("%T.decodeFloat(%L)", ffmCodecClass, elemExpr)
-                "f64", "float64" -> CodeBlock.of("%T.decodeDouble(%L)", ffmCodecClass, elemExpr)
-                "char" -> CodeBlock.of("%T(%T.decodeCodePoint(%L))", codePointClass, ffmCodecClass, elemExpr)
-                "string" -> CodeBlock.of("%T.decodeString(%L)", ffmCodecClass, elemExpr)
-                "_" -> CodeBlock.of("%T.decodeUnit(%L)", ffmCodecClass, elemExpr)
-                else -> throw IllegalArgumentException("Unknown WIT primitive type: ${typeRef.name}")
-            }
-            is WitTypeRef.Id -> {
-                val typeDef = resolve.types.getOrNull(typeRef.index)
-                    ?: throw IllegalArgumentException("Invalid WIT type index: ${typeRef.index}")
-                when (val kind = typeDef.kind) {
-                    is WitTypeDefKind.Record,
-                    is WitTypeDefKind.Enum,
-                    is WitTypeDefKind.Flags,
-                    is WitTypeDefKind.Variant,
-                    -> {
-                        val typeClass = typeClassName(typeRef.index)
-                        if (sessionExpr != null && containsGuestResource(typeRef)) {
-                            CodeBlock.of("%T.fromWitJson(%L, %L)", typeClass, elemExpr, sessionExpr)
-                        } else {
-                            CodeBlock.of("%T.fromWitJson(%L)", typeClass, elemExpr)
-                        }
-                    }
-                    is WitTypeDefKind.TypeAlias -> {
-                        buildDecodeExpression(kind.type, elemExpr, worldClassName, depth, sessionExpr)
-                    }
-                    is WitTypeDefKind.Resource -> {
-                        if (isHostResource(typeRef.index)) return hostResourceDecode(typeRef.index, own = true, elemExpr, worldClassName)
-                        // Host-side decoding (no client Session) yields an unbound resource wrapper.
-                        val resourceClass = typeClassName(typeRef.index)
-                        CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
-                    }
-                    is WitTypeDefKind.Handle -> {
-                        if (isHostResource(kind.resourceId)) {
-                            return hostResourceDecode(kind.resourceId, own = kind.kind == wasm2kt.ast.HandleKind.OWN, elemExpr, worldClassName)
-                        }
-                        val resourceClass = typeClassName(kind.resourceId)
-                        CodeBlock.of("%T(%L, %T.decodeInt(%L))", resourceClass, sessionExpr ?: CodeBlock.of("null"), ffmCodecClass, elemExpr)
-                    }
-                    is WitTypeDefKind.OptionType -> {
-                        val varName = "optElem$depth"
-                        val innerDecode = buildDecodeExpression(kind.type, CodeBlock.of(varName), worldClassName, depth + 1, sessionExpr)
-                        if (mapTypeRef(kind.type, worldClassName).isNullable) {
-                            val witOptionClass = ClassName(targetPackage, "WitOption")
-                            CodeBlock.of("%T.fromWitJson(%L) { %L -> %L }", witOptionClass, elemExpr, varName, innerDecode)
-                        } else {
-                            CodeBlock.of("%T.decodeNullableOption(%L) { %L -> %L }", ffmCodecClass, elemExpr, varName, innerDecode)
-                        }
-                    }
-                    is WitTypeDefKind.ResultType -> {
-                        val witResultClass = ClassName(targetPackage, "WitResult")
-                        val okVar = "okElem$depth"
-                        val errVar = "errElem$depth"
-                        val okDecode = kind.ok?.let { buildDecodeExpression(it, CodeBlock.of(okVar), worldClassName, depth + 1, sessionExpr) }
-                            ?: CodeBlock.of("Unit")
-                        val errDecode = kind.err?.let { buildDecodeExpression(it, CodeBlock.of(errVar), worldClassName, depth + 1, sessionExpr) }
-                            ?: CodeBlock.of("Unit")
-                        CodeBlock.of(
-                            "%T.fromWitJson(%L, { %L -> %L }, { %L -> %L })",
-                            witResultClass,
-                            elemExpr,
-                            okVar,
-                            okDecode,
-                            errVar,
-                            errDecode,
-                        )
-                    }
-                    is WitTypeDefKind.ListType -> if (isPrimitive(kind.type, "u8")) {
-                        CodeBlock.of("%T.decodeByteArray(%L)", ffmCodecClass, elemExpr)
-                    } else {
-                        val itemVar = "itemElem$depth"
-                        val itemDecode = buildDecodeExpression(kind.type, CodeBlock.of(itemVar), worldClassName, depth + 1, sessionExpr)
-                        CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
-                    }
-                    is WitTypeDefKind.Tuple -> {
-                        val arity = kind.types.size
-                        generatedTupleArities += arity
-                        val arrVar = "tupArr$depth"
-                        val tupleClass = ClassName(targetPackage, "Tuple$arity")
-                        val elemDecoders = kind.types.mapIndexed { idx, t ->
-                            buildDecodeExpression(t, CodeBlock.of("$arrVar[$idx]"), worldClassName, depth + 1, sessionExpr)
-                        }
-                        CodeBlock.of(
-                            "%T.asJsonArray(%L).let { %L -> %T(%L) }",
-                            ffmCodecClass,
-                            elemExpr,
-                            arrVar,
-                            tupleClass,
-                            elemDecoders.joinToCode(", "),
-                        )
-                    }
-                    is WitTypeDefKind.FutureType -> {
-                        val futDecode = kind.type?.let { buildDecodeExpression(it, elemExpr, worldClassName, depth + 1, sessionExpr) }
-                            ?: CodeBlock.of("Unit")
-                        CodeBlock.of("%T.completedFuture(%L)", ClassName("java.util.concurrent", "CompletableFuture"), futDecode)
-                    }
-                    is WitTypeDefKind.StreamType -> {
-                        val itemVar = "streamElem$depth"
-                        val itemDecode = kind.element?.let { buildDecodeExpression(it, CodeBlock.of(itemVar), worldClassName, depth + 1, sessionExpr) }
-                            ?: CodeBlock.of("Unit")
-                        CodeBlock.of("%T.decodeList(%L) { %L -> %L }", ffmCodecClass, elemExpr, itemVar, itemDecode)
-                    }
-                }
-            }
-        }
-    }
-
-    /** A host resource coming back from the component: `own` returns it to the host, `borrow` lends it. */
-    private fun hostResourceDecode(resourceIdx: Int, own: Boolean, elemExpr: CodeBlock, worldClassName: ClassName): CodeBlock =
-        CodeBlock.of(
-            "%T.current().%N(%T.decodeInt(%L), %T::class.java)",
-            hostResourceTableClass,
-            if (own) "take" else "borrow",
-            ffmCodecClass,
-            elemExpr,
-            mapTypeDefByIndex(resourceIdx, worldClassName),
-        )
-
-    private fun formatArgumentCode(paramName: String, typeRef: WitTypeRef): Pair<String, List<Any>> {
-        if (typeRef is WitTypeRef.Id) {
-            val def = resolve.types.getOrNull(typeRef.index)
-            val kind = def?.kind
-            if (kind is WitTypeDefKind.Handle) {
-                if (isHostResource(kind.resourceId)) {
-                    // Host objects are moved by the codec; a borrow is only lent for the call.
-                    return when (kind.kind) {
-                        wasm2kt.ast.HandleKind.OWN -> "%N" to listOf(paramName)
-                        wasm2kt.ast.HandleKind.BORROW -> "%T(%N)" to listOf(witBorrowedClass, paramName)
-                    }
-                }
-                return when (kind.kind) {
-                    wasm2kt.ast.HandleKind.OWN -> "%N.consumeOwnership()" to listOf(paramName)
-                    wasm2kt.ast.HandleKind.BORROW -> "%N.handle" to listOf(paramName)
-                }
-            }
-        }
-        return "%N" to listOf(paramName)
-    }
 
     private fun returnsOwnedResource(fn: WitFunction): Boolean {
         if (fn.results.size != 1) return false
@@ -2285,7 +2234,8 @@ class WitToKotlinPoetConverter(
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val typeR = TypeVariableName("R")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
-        val decoderType = LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(jsonElementClass)), returnType = typeR)
+        val argsType = ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable))
+        val decodeType = LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR)
         return TypeSpec.classBuilder("HostResourceBoundSession")
             .addModifiers(KModifier.INTERNAL)
             .addSuperinterface(runtimeSessionClass)
@@ -2299,22 +2249,23 @@ class WitToKotlinPoetConverter(
             .addProperty(PropertySpec.builder("resources", hostResourceTableClass, KModifier.PRIVATE).initializer("resources").build())
             .addFunction(
                 FunSpec.builder("invoke").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
-                    .addParameter("functionName", STRING).addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG).returns(typeR)
-                    .addStatement("return resources.bind { delegate.invoke(functionName, decoder, *args) }")
+                    .addParameter("functionName", STRING).addParameter("args", argsType)
+                    .addParameter("encode", encodeLambdaType).addParameter("decode", decodeType).returns(typeR)
+                    .addStatement("return resources.bind { delegate.invoke(functionName, args, encode, decode) }")
                     .build(),
             )
             .addFunction(
                 FunSpec.builder("newResource").addModifiers(KModifier.OVERRIDE)
-                    .addParameter("constructorName", STRING).addParameter("args", anyNullable, KModifier.VARARG).returns(INT)
-                    .addStatement("return resources.bind { delegate.newResource(constructorName, *args) }")
+                    .addParameter("constructorName", STRING).addParameter("args", argsType)
+                    .addParameter("encode", encodeLambdaType).returns(INT)
+                    .addStatement("return resources.bind { delegate.newResource(constructorName, args, encode) }")
                     .build(),
             )
             .addFunction(
                 FunSpec.builder("invokeMethod").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
-                    .addParameter("handle", INT).addParameter("methodName", STRING).addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG).returns(typeR)
-                    .addStatement("return resources.bind { delegate.invokeMethod(handle, methodName, decoder, *args) }")
+                    .addParameter("handle", INT).addParameter("methodName", STRING).addParameter("args", argsType)
+                    .addParameter("encode", encodeLambdaType).addParameter("decode", decodeType).returns(typeR)
+                    .addStatement("return resources.bind { delegate.invokeMethod(handle, methodName, args, encode, decode) }")
                     .build(),
             )
             .addFunction(
@@ -2353,25 +2304,11 @@ class WitToKotlinPoetConverter(
                     .initializer("value")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("toWitJson")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(jsonElementClass)
-                    .addStatement("return %T.encodeOptionSome(value)", ffmCodecClass)
-                    .build(),
-            )
             .build()
 
         val noneObject = TypeSpec.objectBuilder("None")
             .addModifiers(KModifier.DATA)
             .addSuperinterface(witOptionClass.parameterizedBy(NOTHING))
-            .addFunction(
-                FunSpec.builder("toWitJson")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(jsonElementClass)
-                    .addStatement("return %T.encodeOptionNone()", ffmCodecClass)
-                    .build(),
-            )
             .build()
 
         val getOrNullFn = FunSpec.builder("getOrNull")
@@ -2386,41 +2323,13 @@ class WitToKotlinPoetConverter(
             )
             .build()
 
-        val fromWitJsonFn = FunSpec.builder("fromWitJson")
-            .addModifiers(KModifier.INLINE)
-            .addTypeVariable(typeTInvariant)
-            .addParameter("elem", jsonElementClass)
-            .addParameter(
-                "decodeValue",
-                LambdaTypeName.get(
-                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-                    returnType = typeTInvariant,
-                ),
-            )
-            .returns(witOptionClass.parameterizedBy(typeTInvariant))
-            .addCode(
-                CodeBlock.builder()
-                    .beginControlFlow("return if (%T.isOptionNone(elem))", ffmCodecClass)
-                    .addStatement("None")
-                    .nextControlFlow("else")
-                    .addStatement("Some(decodeValue(%T.optionValue(elem)))", ffmCodecClass)
-                    .endControlFlow()
-                    .build(),
-            )
-            .build()
 
         return TypeSpec.interfaceBuilder("WitOption")
             .addModifiers(KModifier.SEALED)
             .addTypeVariable(typeT)
-            .addSuperinterface(witJsonSerializableClass)
             .addType(someClass)
             .addType(noneObject)
             .addFunction(getOrNullFn)
-            .addType(
-                TypeSpec.companionObjectBuilder()
-                    .addFunction(fromWitJsonFn)
-                    .build(),
-            )
             .build()
     }
 
@@ -2445,13 +2354,6 @@ class WitToKotlinPoetConverter(
                     .initializer("value")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("toWitJson")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(jsonElementClass)
-                    .addStatement("return %T.encodeResultOk(value)", ffmCodecClass)
-                    .build(),
-            )
             .build()
 
         val errClass = TypeSpec.classBuilder("Err")
@@ -2468,58 +2370,15 @@ class WitToKotlinPoetConverter(
                     .initializer("error")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("toWitJson")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .returns(jsonElementClass)
-                    .addStatement("return %T.encodeResultErr(error)", ffmCodecClass)
-                    .build(),
-            )
             .build()
 
-        val fromWitJsonFn = FunSpec.builder("fromWitJson")
-            .addModifiers(KModifier.INLINE)
-            .addTypeVariable(typeTInvariant)
-            .addTypeVariable(typeEInvariant)
-            .addParameter("elem", jsonElementClass)
-            .addParameter(
-                "decodeOk",
-                LambdaTypeName.get(
-                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-                    returnType = typeTInvariant,
-                ),
-            )
-            .addParameter(
-                "decodeErr",
-                LambdaTypeName.get(
-                    parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-                    returnType = typeEInvariant,
-                ),
-            )
-            .returns(witResultClass.parameterizedBy(typeTInvariant, typeEInvariant))
-            .addCode(
-                CodeBlock.builder()
-                    .beginControlFlow("return if (%T.isResultOk(elem))", ffmCodecClass)
-                    .addStatement("Ok(decodeOk(%T.resultOkValue(elem)))", ffmCodecClass)
-                    .nextControlFlow("else")
-                    .addStatement("Err(decodeErr(%T.resultErrValue(elem)))", ffmCodecClass)
-                    .endControlFlow()
-                    .build(),
-            )
-            .build()
 
         return TypeSpec.interfaceBuilder("WitResult")
             .addModifiers(KModifier.SEALED)
             .addTypeVariable(typeT)
             .addTypeVariable(typeE)
-            .addSuperinterface(witJsonSerializableClass)
             .addType(okClass)
             .addType(errClass)
-            .addType(
-                TypeSpec.companionObjectBuilder()
-                    .addFunction(fromWitJsonFn)
-                    .build(),
-            )
             .build()
     }
 
@@ -2589,12 +2448,10 @@ class WitToKotlinPoetConverter(
     /** WIT `char`: a Unicode scalar value, which Kotlin's 16-bit `Char` cannot always hold (ADR-0006). */
     private fun buildCodePointTypeSpec(): TypeSpec {
         val self = ClassName(targetPackage, "CodePoint")
-        val jsonPrimitive = ClassName("kotlinx.serialization.json", "JsonPrimitive")
         return TypeSpec.classBuilder("CodePoint")
             .addKdoc("A WIT `char`: one Unicode scalar value (U+0000..U+10FFFF, excluding surrogates).\n")
             .addAnnotation(ClassName("kotlin.jvm", "JvmInline"))
             .addModifiers(KModifier.VALUE)
-            .addSuperinterface(witJsonSerializableClass)
             .primaryConstructor(FunSpec.constructorBuilder().addParameter("value", INT).build())
             .addProperty(PropertySpec.builder("value", INT).initializer("value").build())
             .addInitializerBlock(
@@ -2603,10 +2460,6 @@ class WitToKotlinPoetConverter(
                         "require(value in 0..0x10FFFF && value !in 0xD800..0xDFFF) { %P }",
                         "Not a Unicode scalar value: U+\${value.toString(16).uppercase()}",
                     ).build(),
-            )
-            .addFunction(
-                FunSpec.builder("toWitJson").addModifiers(KModifier.OVERRIDE).returns(jsonElementClass)
-                    .addStatement("return %T(toString())", jsonPrimitive).build(),
             )
             .addFunction(
                 FunSpec.builder("toString").addModifiers(KModifier.OVERRIDE).returns(STRING)
@@ -2630,7 +2483,6 @@ class WitToKotlinPoetConverter(
 
     private fun buildTupleTypeSpec(arity: Int): TypeSpec {
         val builder = TypeSpec.classBuilder("Tuple$arity")
-            .addSuperinterface(witJsonSerializableClass)
         if (arity > 0) {
             builder.addModifiers(KModifier.DATA)
         }
@@ -2650,16 +2502,21 @@ class WitToKotlinPoetConverter(
             )
         }
         builder.primaryConstructor(ctorBuilder.build())
-        val tupleArgs = fieldNames.joinToString(", ")
-        builder.addFunction(
-            FunSpec.builder("toWitJson")
-                .addModifiers(KModifier.OVERRIDE)
-                .returns(jsonElementClass)
-                .addStatement("return %T.encodeTuple($tupleArgs)", ffmCodecClass)
-                .build(),
-        )
         return builder.build()
     }
+
+    private val encodeLambdaType: LambdaTypeName
+        get() = LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witWriterClass)), returnType = UNIT)
+
+    /** `fun <R> [name](functionName: String, args: Array<out Any?>, encode: (WitWriter) -> Unit, decode: (WitReader) -> R): R` */
+    private fun callFunctionSpec(name: String, typeR: TypeVariableName, anyNullable: TypeName): FunSpec.Builder =
+        FunSpec.builder(name)
+            .addTypeVariable(typeR)
+            .addParameter("functionName", STRING)
+            .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+            .addParameter("encode", encodeLambdaType)
+            .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
+            .returns(typeR)
 
     private fun buildWasmtimeSessionTypeSpec(): TypeSpec {
         val autoCloseableClass = ClassName("java.lang", "AutoCloseable")
@@ -2670,28 +2527,25 @@ class WitToKotlinPoetConverter(
         val jniSessionClass = ClassName(targetPackage, "JniWasmtimeSession")
         val typeR = TypeVariableName("R")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
-        val decoderType = LambdaTypeName.get(
-            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-            returnType = typeR,
-        )
 
         return TypeSpec.interfaceBuilder("WasmtimeSession")
+            .addKdoc(
+                "One instance of a component. Generated bindings pass every call three ways: the arguments as Kotlin " +
+                    "values ([InMemoryWasmtimeSession] uses them), [encode] writing them in the binary format, and " +
+                    "[decode] reading the results (ADR-0015).\n",
+            )
             .addSuperinterface(autoCloseableClass)
             .addFunction(
-                FunSpec.builder("invoke")
+                callFunctionSpec("invoke", typeR, anyNullable)
                     .addModifiers(KModifier.ABSTRACT)
-                    .addTypeVariable(typeR)
-                    .addParameter("functionName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
                     .build(),
             )
             .addFunction(
                 FunSpec.builder("newResource")
                     .addModifiers(KModifier.ABSTRACT)
                     .addParameter("constructorName", STRING)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
                     .returns(INT)
                     .build(),
             )
@@ -2701,8 +2555,9 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
+                    .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
                     .returns(typeR)
                     .build(),
             )
@@ -2872,23 +2727,64 @@ class WitToKotlinPoetConverter(
             .build()
     }
 
+    /**
+     * `invoke`, `newResource`, `invokeMethod` and `dropResource` of a session backed by a native bridge
+     * ([bridge] is the bridge expression, `%T` standing for [bridgeClass]). Function names are
+     * resolved once per session (ADR-0015).
+     */
+    private fun nativeSessionCallFunctions(bridge: String, bridgeClass: ClassName?, sessionName: String): List<FunSpec> {
+        val typeR = TypeVariableName("R")
+        val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
+        val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
+        val bridgeArgs = listOfNotNull(bridgeClass).toTypedArray<Any>()
+        val invoke = callFunctionSpec("invoke", typeR, anyNullable)
+            .addAnnotation(synchronizedAnnotation)
+            .addModifiers(KModifier.OVERRIDE)
+            .addStatement("check(!isClosed) { %S }", "$sessionName is already closed")
+            .addStatement("val writer = %T()", witWriterClass)
+            .addStatement("encode(writer)")
+            .addStatement("val index = functionIndices.getOrPut(functionName) { $bridge.resolve(sessionPtr, functionName) }", *bridgeArgs)
+            .addStatement("return decode($bridge.invoke(sessionPtr, index, writer))", *bridgeArgs)
+            .build()
+        val newResource = FunSpec.builder("newResource")
+            .addModifiers(KModifier.OVERRIDE)
+            .addParameter("constructorName", STRING)
+            .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+            .addParameter("encode", encodeLambdaType)
+            .returns(INT)
+            .addStatement("return invoke(constructorName, args, encode) { it.int() }")
+            .build()
+        val invokeMethod = FunSpec.builder("invokeMethod")
+            .addModifiers(KModifier.OVERRIDE)
+            .addTypeVariable(typeR)
+            .addParameter("handle", INT)
+            .addParameter("methodName", STRING)
+            .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+            .addParameter("encode", encodeLambdaType)
+            .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
+            .returns(typeR)
+            .addKdoc("[encode] writes the handle first, as the method's `self`.\n")
+            .addStatement("return invoke(methodName, args, encode, decode)")
+            .build()
+        val dropResource = FunSpec.builder("dropResource")
+            .addAnnotation(synchronizedAnnotation)
+            .addModifiers(KModifier.OVERRIDE)
+            .addParameter("handle", INT)
+            .addStatement("check(!isClosed) { %S }", "$sessionName is already closed")
+            .addStatement("$bridge.dropResource(sessionPtr, handle)", *bridgeArgs)
+            .build()
+        return listOf(invoke, newResource, invokeMethod, dropResource)
+    }
+
     private fun buildFfmWasmtimeSessionTypeSpec(): TypeSpec {
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val ffmSessionClass = ClassName(targetPackage, "FfmWasmtimeSession")
         val ffmBridgeClass = ClassName("wasm2kt.runtime", "FfmWasmtimeBridge")
         val pathClass = ClassName("java.nio.file", "Path")
         val byteArrayClass = ClassName("kotlin", "ByteArray")
-        val jsonClass = ClassName("kotlinx.serialization.json", "Json")
-        val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
-        val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
-        val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
         val typeR = TypeVariableName("R")
-        val decoderType = LambdaTypeName.get(
-            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-            returnType = typeR,
-        )
 
         // NOTE: This generated class intentionally does not reference `java.lang.foreign.*` directly.
         // All FFM types (Arena / MemorySegment) are encapsulated inside FfmWasmtimeBridge so the generated
@@ -2919,69 +2815,12 @@ class WitToKotlinPoetConverter(
                     .initializer("false")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("invoke")
-                    .addAnnotation(synchronizedAnnotation)
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addTypeVariable(typeR)
-                    .addParameter("functionName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
-                    .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
-                    .addStatement(
-                        "val argsJson = %T.encodeToString(%T.serializer(), %T(args.map { %T.toJsonElement(it) }))",
-                        jsonClass,
-                        jsonElementClass,
-                        jsonArrayClass,
-                        ffmCodecClass,
-                    )
-                    .addStatement("val respStr = bridge.sessionInvoke(sessionPtr, functionName, argsJson)")
-                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
-                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
-                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Unknown Wasmtime error")
-                    .addStatement("throw IllegalStateException(errMsg)")
-                    .endControlFlow()
-                    .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
-                    .addStatement("return decoder(valElem)")
+            .addProperty(
+                PropertySpec.builder("functionIndices", ClassName("kotlin.collections", "HashMap").parameterizedBy(STRING, INT), KModifier.PRIVATE)
+                    .initializer("HashMap()")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("newResource")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addParameter("constructorName", STRING)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(INT)
-                    .addStatement("return invoke(constructorName, { %T.decodeInt(it) }, *args)", ffmCodecClass)
-                    .build(),
-            )
-            .addFunction(
-                FunSpec.builder("invokeMethod")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addTypeVariable(typeR)
-                    .addParameter("handle", INT)
-                    .addParameter("methodName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
-                    .addStatement("val allArgs = arrayOf<Any?>(handle, *args)")
-                    .addStatement("return invoke(methodName, decoder, *allArgs)")
-                    .build(),
-            )
-            .addFunction(
-                FunSpec.builder("dropResource")
-                    .addAnnotation(synchronizedAnnotation)
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addParameter("handle", INT)
-                    .addStatement("check(!isClosed) { %S }", "FfmWasmtimeSession is already closed")
-                    .addStatement("val respStr = bridge.sessionDropResource(sessionPtr, handle)")
-                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
-                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
-                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Failed to drop resource")
-                    .addStatement("throw IllegalStateException(errMsg)")
-                    .endControlFlow()
-                    .build(),
-            )
+            .addFunctions(nativeSessionCallFunctions("bridge", null, "FfmWasmtimeSession"))
             .addFunction(
                 FunSpec.builder("close")
                     .addAnnotation(synchronizedAnnotation)
@@ -3051,16 +2890,8 @@ class WitToKotlinPoetConverter(
         val jniBridgeClass = ClassName("wasm2kt.runtime", "JniWasmtimeBridge")
         val pathClass = ClassName("java.nio.file", "Path")
         val byteArrayClass = ClassName("kotlin", "ByteArray")
-        val jsonClass = ClassName("kotlinx.serialization.json", "Json")
-        val jsonObjectMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonObject")
-        val jsonPrimitiveMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "jsonPrimitive")
-        val booleanMember = com.squareup.kotlinpoet.MemberName("kotlinx.serialization.json", "boolean")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val typeR = TypeVariableName("R")
-        val decoderType = LambdaTypeName.get(
-            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-            returnType = typeR,
-        )
 
         return TypeSpec.classBuilder("JniWasmtimeSession")
             .addSuperinterface(runtimeSessionClass)
@@ -3082,69 +2913,12 @@ class WitToKotlinPoetConverter(
                     .initializer("false")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("invoke")
-                    .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addTypeVariable(typeR)
-                    .addParameter("functionName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
-                    .addStatement("check(!isClosed) { %S }", "JniWasmtimeSession is already closed")
-                    .addStatement(
-                        "val argsJson = %T.encodeToString(%T.serializer(), %T(args.map { %T.toJsonElement(it) }))",
-                        jsonClass,
-                        jsonElementClass,
-                        jsonArrayClass,
-                        ffmCodecClass,
-                    )
-                    .addStatement("val respStr = %T.nativeSessionInvoke(sessionPtr, functionName, argsJson)", jniBridgeClass)
-                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
-                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
-                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Unknown Wasmtime error")
-                    .addStatement("throw IllegalStateException(errMsg)")
-                    .endControlFlow()
-                    .addStatement("val valElem = respObj[%S] ?: %T", "value", jsonNullClass)
-                    .addStatement("return decoder(valElem)")
+            .addProperty(
+                PropertySpec.builder("functionIndices", ClassName("kotlin.collections", "HashMap").parameterizedBy(STRING, INT), KModifier.PRIVATE)
+                    .initializer("HashMap()")
                     .build(),
             )
-            .addFunction(
-                FunSpec.builder("newResource")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addParameter("constructorName", STRING)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(INT)
-                    .addStatement("return invoke(constructorName, { %T.decodeInt(it) }, *args)", ffmCodecClass)
-                    .build(),
-            )
-            .addFunction(
-                FunSpec.builder("invokeMethod")
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addTypeVariable(typeR)
-                    .addParameter("handle", INT)
-                    .addParameter("methodName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
-                    .addStatement("val allArgs = arrayOf<Any?>(handle, *args)")
-                    .addStatement("return invoke(methodName, decoder, *allArgs)")
-                    .build(),
-            )
-            .addFunction(
-                FunSpec.builder("dropResource")
-                    .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
-                    .addModifiers(KModifier.OVERRIDE)
-                    .addParameter("handle", INT)
-                    .addStatement("check(!isClosed) { %S }", "JniWasmtimeSession is already closed")
-                    .addStatement("val respStr = %T.nativeSessionDropResource(sessionPtr, handle)", jniBridgeClass)
-                    .addStatement("val respObj = %T.parseToJsonElement(respStr).%M", jsonClass, jsonObjectMember)
-                    .beginControlFlow("if (!respObj.getValue(%S).%M.%M)", "ok", jsonPrimitiveMember, booleanMember)
-                    .addStatement("val errMsg = respObj[%S]?.%M?.content ?: %S", "error", jsonPrimitiveMember, "Failed to drop resource")
-                    .addStatement("throw IllegalStateException(errMsg)")
-                    .endControlFlow()
-                    .build(),
-            )
+            .addFunctions(nativeSessionCallFunctions("%T", jniBridgeClass, "JniWasmtimeSession"))
             .addFunction(
                 FunSpec.builder("close")
                     .addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
@@ -3206,10 +2980,6 @@ class WitToKotlinPoetConverter(
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
         val typeR = TypeVariableName("R")
-        val decoderType = LambdaTypeName.get(
-            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-            returnType = typeR,
-        )
         val closedMessage = "WasmtimeSession is already closed"
         return TypeSpec.classBuilder("BackendWasmtimeSession")
             .addSuperinterface(runtimeSessionClass)
@@ -3222,30 +2992,30 @@ class WitToKotlinPoetConverter(
                     .initializer("false")
                     .build(),
             )
+            .addProperty(
+                PropertySpec.builder("functionIndices", ClassName("kotlin.collections", "HashMap").parameterizedBy(STRING, INT), KModifier.PRIVATE)
+                    .initializer("HashMap()")
+                    .build(),
+            )
             .addFunction(
-                FunSpec.builder("invoke")
+                callFunctionSpec("invoke", typeR, anyNullable)
                     .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
-                    .addTypeVariable(typeR)
-                    .addParameter("functionName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
-                    .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", closedMessage)
-                    .addStatement(
-                        "return decoder(backend.invoke(functionName, %T(args.map { %T.toJsonElement(it) })))",
-                        jsonArrayClass,
-                        ffmCodecClass,
-                    )
+                    .addStatement("val writer = %T()", witWriterClass)
+                    .addStatement("encode(writer)")
+                    .addStatement("val index = functionIndices.getOrPut(functionName) { backend.resolve(functionName) }")
+                    .addStatement("return decode(backend.invoke(index, writer.toReader()))")
                     .build(),
             )
             .addFunction(
                 FunSpec.builder("newResource")
                     .addModifiers(KModifier.OVERRIDE)
                     .addParameter("constructorName", STRING)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
                     .returns(INT)
-                    .addStatement("return invoke(constructorName, { %T.decodeInt(it) }, *args)", ffmCodecClass)
+                    .addStatement("return invoke(constructorName, args, encode) { it.int() }")
                     .build(),
             )
             .addFunction(
@@ -3254,10 +3024,11 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
+                    .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
                     .returns(typeR)
-                    .addStatement("return invoke(methodName, decoder, handle, *args)")
+                    .addStatement("return invoke(methodName, args, encode, decode)")
                     .build(),
             )
             .addFunction(
@@ -3287,10 +3058,6 @@ class WitToKotlinPoetConverter(
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val argsListType = LIST.parameterizedBy(anyNullable)
         val typeR = TypeVariableName("R")
-        val decoderType = LambdaTypeName.get(
-            parameters = listOf(ParameterSpec.unnamed(jsonElementClass)),
-            returnType = typeR,
-        )
         val fnHandlerType = LambdaTypeName.get(
             parameters = listOf(ParameterSpec.builder("args", argsListType).build()),
             returnType = anyNullable,
@@ -3423,8 +3190,9 @@ class WitToKotlinPoetConverter(
                     )
                     .addTypeVariable(typeR)
                     .addParameter("functionName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
+                    .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")
                     .addStatement(
@@ -3438,7 +3206,8 @@ class WitToKotlinPoetConverter(
                 FunSpec.builder("newResource")
                     .addModifiers(KModifier.OVERRIDE)
                     .addParameter("constructorName", STRING)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
                     .returns(INT)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")
                     .addStatement("val handle = nextHandle++")
@@ -3459,8 +3228,9 @@ class WitToKotlinPoetConverter(
                     .addTypeVariable(typeR)
                     .addParameter("handle", INT)
                     .addParameter("methodName", STRING)
-                    .addParameter("decoder", decoderType)
-                    .addParameter("args", anyNullable, KModifier.VARARG)
+                    .addParameter("args", ARRAY.parameterizedBy(WildcardTypeName.producerOf(anyNullable)))
+                    .addParameter("encode", encodeLambdaType)
+                    .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = typeR))
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", "WasmtimeSession is already closed")
                     .addStatement("check(handle in activeResources) { %P }", "Resource handle \$handle is not active")

@@ -1,32 +1,28 @@
 package wasm2kt.runtime
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.jsonArray
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * Callback wrapper passed into JNI so Wasmtime can invoke host `Imports` methods
- * on Android ART and standard JVMs without `java.lang.foreign` (FFM) or reflection.
+ * Runs host imports for the JNI bridge (ADR-0015): the bridge passes the import's index and key and
+ * the arguments, and receives the results. An exception is reported to the bridge as the call's error.
+ * Host functions are looked up by key once per index.
  */
-class JniHostCallback(
-    private val importsInstance: Any?,
-) {
-    fun onHostCall(importName: String, argsJson: String): String {
-        if (importsInstance == null) return ""
-        val dispatcher = importsInstance as? WitHostImportDispatcher
-            ?: error("Host imports object ${importsInstance::class.qualifiedName} does not implement WitHostImportDispatcher")
-        val argsArray = Json.parseToJsonElement(argsJson).jsonArray
-        val jsonElem = dispatcher.dispatchHostImport(importName, argsArray)
-        return if (jsonElem is JsonNull) {
-            ""
-        } else {
-            Json.encodeToString(JsonElement.serializer(), jsonElem)
+class JniHostCallback(private val imports: WitHostImportDispatcher) {
+    private val functions = ArrayList<HostFunction?>()
+
+    fun onHostCall(importIndex: Int, importKey: String, args: ByteArray): ByteArray {
+        val function = functions.getOrNull(importIndex) ?: run {
+            val found = imports.hostFunction(importKey) ?: throw IllegalStateException("Unknown host import: $importKey")
+            while (functions.size <= importIndex) functions.add(null)
+            functions[importIndex] = found
+            found
         }
+        val results = WitWriter()
+        function.call(WitReader(args), results)
+        return results.toByteArray()
     }
 }
 
@@ -92,8 +88,12 @@ object JniWasmtimeBridge {
 
     private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean): Long {
         ensureLoaded()
-        val callback = if (imports != null) JniHostCallback(imports) else null
-        val ptr = nativeSessionOpen(wasmPath.toAbsolutePath().toString(), "[]", callback, precompiled)
+        val callback = when (imports) {
+            null -> null
+            is WitHostImportDispatcher -> JniHostCallback(imports)
+            else -> throw IllegalArgumentException("Host imports ${imports::class.qualifiedName} do not implement WitHostImportDispatcher")
+        }
+        val ptr = nativeSessionOpen(wasmPath.toAbsolutePath().toString(), callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from $wasmPath" }
         return ptr
     }
@@ -107,8 +107,12 @@ object JniWasmtimeBridge {
 
     private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean): Long {
         ensureLoaded()
-        val callback = if (imports != null) JniHostCallback(imports) else null
-        val ptr = nativeSessionOpenBytes(wasmBytes, "[]", callback, precompiled)
+        val callback = when (imports) {
+            null -> null
+            is WitHostImportDispatcher -> JniHostCallback(imports)
+            else -> throw IllegalArgumentException("Host imports ${imports::class.qualifiedName} do not implement WitHostImportDispatcher")
+        }
+        val ptr = nativeSessionOpenBytes(wasmBytes, callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from ByteArray" }
         return ptr
     }
@@ -127,10 +131,19 @@ object JniWasmtimeBridge {
         return outputCwasmPath
     }
 
+    /** The index of an exported function (ADR-0011 names), to pass to [invoke]. */
+    fun resolve(sessionPtr: Long, functionName: String): Int = nativeSessionResolve(sessionPtr, functionName)
+
+    /** Calls the export [function] with the arguments in [args] (ADR-0015) and returns its results. */
+    fun invoke(sessionPtr: Long, function: Int, args: WitWriter): WitReader =
+        WitReader(nativeSessionInvoke(sessionPtr, function, args.buffer, args.size))
+
+    /** Drops a guest resource handle the host holds, running its destructor. */
+    fun dropResource(sessionPtr: Long, handle: Int) = nativeSessionDropResource(sessionPtr, handle)
+
     @JvmStatic
     external fun nativeSessionOpen(
         wasmPath: String,
-        importsJson: String,
         hostCallback: JniHostCallback?,
         precompiled: Boolean,
     ): Long
@@ -138,23 +151,20 @@ object JniWasmtimeBridge {
     @JvmStatic
     external fun nativeSessionOpenBytes(
         wasmBytes: ByteArray,
-        importsJson: String,
         hostCallback: JniHostCallback?,
         precompiled: Boolean,
     ): Long
 
+    /** Throws [IllegalArgumentException] if no export matches or the name is ambiguous. */
     @JvmStatic
-    external fun nativeSessionInvoke(
-        sessionPtr: Long,
-        funcSpec: String,
-        argsJson: String,
-    ): String
+    external fun nativeSessionResolve(sessionPtr: Long, functionName: String): Int
+
+    /** Throws [IllegalStateException] with the bridge's message if the call fails or traps. */
+    @JvmStatic
+    external fun nativeSessionInvoke(sessionPtr: Long, function: Int, args: ByteArray, argsLength: Int): ByteArray
 
     @JvmStatic
-    external fun nativeSessionDropResource(
-        sessionPtr: Long,
-        handle: Int,
-    ): String
+    external fun nativeSessionDropResource(sessionPtr: Long, handle: Int)
 
     @JvmStatic
     external fun nativeSessionClose(sessionPtr: Long)

@@ -144,7 +144,7 @@ class PlanModuleImport(val module: String, val name: String, val kind: String)
 
 class PlanImport(val name: String, val path: List<String>) {
     /**
-     * Key passed to [wasm2kt.runtime.WitHostImportDispatcher.dispatchHostImport], matching the
+     * Key passed to [wasm2kt.runtime.WitHostImportDispatcher.hostFunction], matching the
      * Wasmtime bridge (ADR-0011): `name` for root functions, `<interface>#<function>` for interface
      * members, where `<interface>` is the import name as written in the component: fully qualified
      * (`pkg:ns/iface@1.0`) for package interfaces, the bare name for inline interfaces.

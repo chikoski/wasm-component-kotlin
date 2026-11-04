@@ -7,8 +7,6 @@ plugins {
 }
 
 dependencies {
-    api(libs.kotlinx.serialization.json)
-
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
