@@ -1,34 +1,20 @@
 package wasm2kt.runtime
 
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.double
-import kotlinx.serialization.json.float
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
-
 /**
- * Implemented by generated WIT composite types (`Record`, `Variant`, `Enum`, `Flags`, `Resource`,
- * `WitOption`, `WitResult`, `TupleN`) to serialize directly to JSON without reflection.
+ * The host implementation of one imported function: reads the arguments from [args] and writes the
+ * results to [results], in the format of [WitWriter] (ADR-0015).
  */
-interface WitJsonSerializable {
-    fun toWitJson(): JsonElement
+fun interface HostFunction {
+    fun call(args: WitReader, results: WitWriter)
 }
 
 /**
- * Implemented by generated `<World>.Imports` interfaces to dispatch host import calls from Wasmtime
- * to Kotlin methods without reflection.
+ * Looks up host imports by key (ADR-0011). Backends look each key up once, when the component first
+ * calls the import, and call the [HostFunction] directly afterwards.
  */
 interface WitHostImportDispatcher {
-    fun dispatchHostImport(importSpec: String, args: JsonArray): JsonElement =
-        error("Unknown host import: $importSpec")
+    /** The implementation of [key], or null when the host does not provide it. */
+    fun hostFunction(key: String): HostFunction?
 }
 
 /** Thrown by the generated `WitResult.getOrThrow()` for an `err`; [error] is the WIT error value. */

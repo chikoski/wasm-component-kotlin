@@ -171,8 +171,6 @@ class WitToKotlinPoetConverterTest {
             import com.example.wasm.example.calc.types.Point
             import com.example.wasm.example.calc.types.Status
             import com.example.wasm.exports.example.calc.counters.Counter
-            import kotlinx.serialization.json.JsonArray
-            import kotlinx.serialization.json.JsonPrimitive
             import wasm2kt.runtime.Linker
 
             fun runEndToEndScenario(): String {
@@ -186,7 +184,7 @@ class WitToKotlinPoetConverterTest {
                         registerFunction("add") { args ->
                             val a = args[0] as Int
                             val b = args[1] as Int
-                            hostImports.dispatchHostImport("log", JsonArray(listOf(JsonPrimitive("add(${'$'}a, ${'$'}b)"))))
+                            hostImports.call("log", wasm2kt.runtime.WitWriter().apply { string("add(${'$'}a, ${'$'}b)") })
                             a + b
                         }
                         registerFunction("compute") { args ->
@@ -219,7 +217,7 @@ class WitToKotlinPoetConverterTest {
                             val valB = getResourceState(handleB) as Int
                             // own<counter> transfers ownership to guest, which drops handleB after merging
                             dropResource(handleB)
-                            newResource("example:calc/counters@0.1.0#[constructor]counter", (valA + valB).toUInt())
+                            newResource("example:calc/counters@0.1.0#[constructor]counter", arrayOf((valA + valB).toUInt())) { }
                         }
                     }
                 }
@@ -1488,23 +1486,16 @@ class WitToKotlinPoetConverterTest {
 
         // 1. Verify JNI host callback exception preserves the Kotlin exception message
         val failingImports = object : wasm2kt.runtime.WitHostImportDispatcher {
-            override fun dispatchHostImport(
-                importSpec: String,
-                args: kotlinx.serialization.json.JsonArray,
-            ): kotlinx.serialization.json.JsonElement {
-                throw IllegalArgumentException("custom-host-failure-for-$importSpec")
+            override fun hostFunction(key: String) = wasm2kt.runtime.HostFunction { _, _ ->
+                throw IllegalArgumentException("custom-host-failure-for-$key")
             }
         }
         val jniSessionPtr = wasm2kt.runtime.JniWasmtimeBridge.openSession(roundtripWasmPath, failingImports)
         try {
-            val respJson = wasm2kt.runtime.JniWasmtimeBridge.nativeSessionInvoke(
-                jniSessionPtr,
-                "describe-code",
-                """["WARN", 500]""",
-            )
+            val response = jniDescribe(jniSessionPtr, "WARN", 500)
             assertTrue(
-                respJson.contains("custom-host-failure-for-example:roundtrip/env-provider@0.1.0#format-tag"),
-                "JNI host callback failure must preserve Kotlin exception details, got: $respJson",
+                response.contains("custom-host-failure-for-example:roundtrip/env-provider@0.1.0#format-tag"),
+                "JNI host callback failure must preserve Kotlin exception details, got: $response",
             )
         } finally {
             wasm2kt.runtime.JniWasmtimeBridge.nativeSessionClose(jniSessionPtr)
@@ -1512,15 +1503,23 @@ class WitToKotlinPoetConverterTest {
 
         // 2. FFM responses of any size (no fixed buffer, #35) are tested in runtime-wasmtime's HostCallbackDispatcherTest
         //    and end to end in ChicoryDifferentialTest.
-
-        // 3. Verify FfmJsonCodec.decodeChar validates single BMP code point
-        assertEquals('A', wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive("A")))
-        val emptyCharErr = runCatching {
-            wasm2kt.runtime.FfmJsonCodec.decodeChar(kotlinx.serialization.json.JsonPrimitive(""))
-        }.exceptionOrNull()
-        assertTrue(emptyCharErr is IllegalArgumentException, "Empty string must fail decodeChar")
     }
 
+    /** Arguments of roundtrip's `describe-code: func(prefix: string, code: u32) -> string` (ADR-0015). */
+    private fun describeArgs(prefix: String, code: Int) = wasm2kt.runtime.WitWriter().apply {
+        string(prefix)
+        int(code)
+    }
+
+    /** `describe-code` through the JNI bridge: the result, or `error: <message>`. */
+    private fun jniDescribe(sessionPtr: Long, prefix: String, code: Int): String = runCatching {
+        val jni = wasm2kt.runtime.JniWasmtimeBridge
+        jni.invoke(sessionPtr, jni.resolve(sessionPtr, "describe-code"), describeArgs(prefix, code)).string()
+    }.getOrElse { "error: ${it.message}" }
+
+    /** `describe-code` through the FFM bridge; failures throw. */
+    private fun ffmDescribe(bridge: wasm2kt.runtime.FfmWasmtimeBridge, handle: Long, prefix: String, code: Int): String =
+        bridge.invoke(handle, bridge.resolve(handle, "describe-code"), describeArgs(prefix, code)).string()
 
     private fun compileGenerated(classesOutDir: Path, outputDir: Path): org.jetbrains.kotlin.cli.common.ExitCode {
         Files.createDirectories(classesOutDir)
@@ -1539,21 +1538,13 @@ class WitToKotlinPoetConverterTest {
     }
 
     private fun tagEchoImports(onFormatTag: (String, Long) -> String): wasm2kt.runtime.WitHostImportDispatcher =
-        object : wasm2kt.runtime.WitHostImportDispatcher {
-            override fun dispatchHostImport(
-                importSpec: String,
-                args: kotlinx.serialization.json.JsonArray,
-            ): kotlinx.serialization.json.JsonElement {
-                return when (importSpec) {
-                    "example:roundtrip/env-provider@0.1.0#format-tag" -> {
-                        val prefix = wasm2kt.runtime.FfmJsonCodec.decodeString(args[0])
-                        val code = wasm2kt.runtime.FfmJsonCodec.decodeLong(args[1])
-                        kotlinx.serialization.json.JsonPrimitive(onFormatTag(prefix, code))
-                    }
-                    "example:roundtrip/env-provider@0.1.0#get-multiplier" -> kotlinx.serialization.json.JsonPrimitive(1)
-                    else -> error("Unexpected import: $importSpec")
-                }
+        wasm2kt.runtime.Linker().apply {
+            define("example:roundtrip/env-provider@0.1.0#format-tag") { args, results ->
+                val prefix = args.string()
+                val code = args.int().toLong() and 0xFFFF_FFFFL
+                results.string(onFormatTag(prefix, code))
             }
+            define("example:roundtrip/env-provider@0.1.0#get-multiplier") { _, results -> results.int(1) }
         }
 
     @Test
@@ -1566,7 +1557,7 @@ class WitToKotlinPoetConverterTest {
 
         assertTrue(!support.contains("import java.lang.foreign"), "WitSupport.kt must not import java.lang.foreign (Android SDK lacks FFM)")
         assertTrue(!Regex("""\bArena\b|\bMemorySegment\b""").containsMatchIn(support), "WitSupport.kt must not reference Arena/MemorySegment")
-        assertTrue(support.contains("bridge.sessionInvoke(sessionPtr, functionName, argsJson)"), "FfmWasmtimeSession must delegate to FfmWasmtimeBridge")
+        assertTrue(support.contains("bridge.invoke(sessionPtr, index, writer)"), "FfmWasmtimeSession must delegate to FfmWasmtimeBridge")
         val ffmSection = support.substringAfter("class FfmWasmtimeSession").substringBefore("class JniWasmtimeSession")
         val jniSection = support.substringAfter("class JniWasmtimeSession").substringBefore("class InMemoryWasmtimeSession")
         assertEquals(3, Regex("@Synchronized").findAll(ffmSection).count(), "FfmWasmtimeSession invoke/dropResource/close must be @Synchronized")
@@ -1577,7 +1568,7 @@ class WitToKotlinPoetConverterTest {
             "META-INF/proguard/wasm2kt.pro must be on the runtime classpath"
         }.readText()
         assertTrue(proguard.contains("-keep class wasm2kt.runtime.JniHostCallback"), "JniHostCallback must be kept")
-        assertTrue(proguard.contains("onHostCall(java.lang.String, java.lang.String)"), "JniHostCallback.onHostCall signature must be kept")
+        assertTrue(proguard.contains("byte[] onHostCall(int, java.lang.String, byte[])"), "JniHostCallback.onHostCall signature must be kept")
         assertTrue(proguard.contains("wasm2kt.runtime.HostCallbackDispatcher"), "HostCallbackDispatcher must be kept")
     }
 
@@ -1622,10 +1613,7 @@ class WitToKotlinPoetConverterTest {
             """
             package com.example.hostres
 
-            import kotlinx.serialization.json.JsonArray
-            import kotlinx.serialization.json.JsonObject
-            import kotlinx.serialization.json.JsonPrimitive
-            import kotlinx.serialization.json.jsonPrimitive
+            import wasm2kt.runtime.WitWriter
 
             class HostCounter(private val v: Int) : Counter {
                 var closed = false
@@ -1652,25 +1640,19 @@ class WitToKotlinPoetConverterTest {
                 val linker = imports.newLinker()
                 val table = wasm2kt.runtime.HostResourceTable()
                 return table.bind {
-                    fun new(v: Int) = linker.dispatchHostImport("[constructor]counter", JsonArray(listOf(JsonPrimitive(v)))).jsonPrimitive.content.toInt()
+                    // As a backend would call them: arguments and results in the binary format (ADR-0015).
+                    fun new(v: Int) = linker.call("[constructor]counter", WitWriter().apply { int(v) }).int()
                     val seven = new(7)
                     val nine = new(9)
                     val three = new(3)
-                    val pair = linker.dispatchHostImport(
-                        "inspect-pair",
-                        JsonArray(listOf(JsonObject(mapOf("primary" to JsonPrimitive(seven), "label" to JsonPrimitive("lbl"))))),
-                    ).jsonPrimitive.content
-                    val created = linker.dispatchHostImport(
-                        "inspect-outcome",
-                        JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("created"), "value" to JsonPrimitive(nine))))),
-                    ).jsonPrimitive.content
-                    val empty = linker.dispatchHostImport(
-                        "inspect-outcome",
-                        JsonArray(listOf(JsonObject(mapOf("case" to JsonPrimitive("empty"))))),
-                    ).jsonPrimitive.content
-                    val borrowed = linker.dispatchHostImport("inspect-counter", JsonArray(listOf(JsonPrimitive(three)))).jsonPrimitive.content
+                    // counter-pair { primary: own<counter>, label: string }
+                    val pair = linker.call("inspect-pair", WitWriter().apply { int(seven); string("lbl") }).string()
+                    // counter-outcome: created(own<counter>) = 0, empty = 1
+                    val created = linker.call("inspect-outcome", WitWriter().apply { byte(0); int(nine) }).int()
+                    val empty = linker.call("inspect-outcome", WitWriter().apply { byte(1) }).int()
+                    val borrowed = linker.call("inspect-counter", WitWriter().apply { int(three) }).int()
                     val left = table.size
-                    linker.dispatchHostImport("[resource-drop]counter", JsonArray(listOf(JsonPrimitive(three))))
+                    linker.call("[resource-drop]counter", WitWriter().apply { int(three) })
                     "${'$'}pair|${'$'}created|${'$'}empty|${'$'}borrowed|${'$'}left|${'$'}{table.size}|${'$'}{made.map { it.closed }}"
                 }
             }
@@ -1753,8 +1735,8 @@ class WitToKotlinPoetConverterTest {
         val sessionPtr = jni.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix#$code" })
         try {
             repeat(3000) { i ->
-                val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["T", $i]""")
-                assertTrue(resp.contains("\"ok\":true") && resp.contains("T#$i"), "Iteration $i failed: $resp")
+                val resp = jniDescribe(sessionPtr, "T", i)
+                assertTrue(resp.contains("T#$i"), "Iteration $i failed: $resp")
             }
 
             // 2. Concurrent invocations on the same session are serialized safely
@@ -1764,7 +1746,7 @@ class WitToKotlinPoetConverterTest {
                     pool.submit<Int> {
                         var ok = 0
                         repeat(100) { i ->
-                            val resp = jni.nativeSessionInvoke(sessionPtr, "describe-code", """["C", ${t * 1000 + i}]""")
+                            val resp = jniDescribe(sessionPtr, "C", t * 1000 + i)
                             if (resp.contains("C#${t * 1000 + i}")) ok++
                         }
                         ok
@@ -1784,12 +1766,12 @@ class WitToKotlinPoetConverterTest {
         reentrantPtr = jni.openSession(
             roundtripWasmPath,
             tagEchoImports { _, _ ->
-                innerResponse = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["X", 1]""")
+                innerResponse = jniDescribe(reentrantPtr, "X", 1)
                 "outer"
             },
         )
         try {
-            val outer = jni.nativeSessionInvoke(reentrantPtr, "describe-code", """["O", 1]""")
+            val outer = jniDescribe(reentrantPtr, "O", 1)
             assertTrue(outer.contains("outer"), "Outer call should still complete, got: $outer")
             assertTrue(innerResponse.contains("Reentrant"), "Reentrant invoke must be rejected, got: $innerResponse")
         } finally {
@@ -1805,10 +1787,10 @@ class WitToKotlinPoetConverterTest {
                 "closed-inside"
             },
         )
-        val closedResp = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 1]""")
-        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
-        val afterClose = jni.nativeSessionInvoke(closingPtr, "describe-code", """["Z", 2]""")
-        assertTrue(afterClose.contains("\"ok\":false"), "Invoke after close must fail, got: $afterClose")
+        val closedResp = jniDescribe(closingPtr, "Z", 1)
+        assertTrue(closedResp.startsWith("error:") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val afterClose = jniDescribe(closingPtr, "Z", 2)
+        assertTrue(afterClose.startsWith("error:"), "Invoke after close must fail, got: $afterClose")
         jni.nativeSessionClose(closingPtr) // double close is a no-op
     }
 
@@ -1821,15 +1803,15 @@ class WitToKotlinPoetConverterTest {
         val handle = bridge.openSession(roundtripWasmPath, tagEchoImports { prefix, code -> "$prefix@$code" })
         try {
             repeat(500) { i ->
-                val resp = bridge.sessionInvoke(handle, "describe-code", """["F", $i]""")
+                val resp = ffmDescribe(bridge, handle, "F", i)
                 assertTrue(resp.contains("F@$i"), "Iteration $i failed: $resp")
             }
         } finally {
             bridge.sessionClose(handle)
             bridge.sessionClose(handle) // idempotent
         }
-        val afterClose = runCatching { bridge.sessionInvoke(handle, "describe-code", """["F", 0]""") }.exceptionOrNull()
-        assertTrue(afterClose is IllegalStateException, "sessionInvoke after close must throw IllegalStateException")
+        val afterClose = runCatching { ffmDescribe(bridge, handle, "F", 0) }.exceptionOrNull()
+        assertTrue(afterClose is IllegalStateException, "a call after close must throw IllegalStateException")
 
         // 2. Reentrant invoke is rejected by the native bridge
         var reentrantHandle = 0L
@@ -1837,12 +1819,12 @@ class WitToKotlinPoetConverterTest {
         reentrantHandle = bridge.openSession(
             roundtripWasmPath,
             tagEchoImports { _, _ ->
-                inner = bridge.sessionInvoke(reentrantHandle, "describe-code", """["X", 1]""")
+                inner = runCatching { ffmDescribe(bridge, reentrantHandle, "X", 1) }.getOrElse { "error: ${it.message}" }
                 "outer"
             },
         )
         try {
-            val outer = bridge.sessionInvoke(reentrantHandle, "describe-code", """["O", 1]""")
+            val outer = ffmDescribe(bridge, reentrantHandle, "O", 1)
             assertTrue(outer.contains("outer"), "Outer call should complete, got: $outer")
             assertTrue(inner.contains("Reentrant"), "Reentrant invoke must be rejected, got: $inner")
         } finally {
@@ -1858,9 +1840,9 @@ class WitToKotlinPoetConverterTest {
                 "closed-inside"
             },
         )
-        val closedResp = bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 1]""")
-        assertTrue(closedResp.contains("\"ok\":false") && closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
-        val reuse = runCatching { bridge.sessionInvoke(closingHandle, "describe-code", """["Z", 2]""") }.exceptionOrNull()
+        val closedResp = runCatching { ffmDescribe(bridge, closingHandle, "Z", 1) }.exceptionOrNull()?.message.orEmpty()
+        assertTrue(closedResp.contains("closed"), "Expected closed-during-callback error, got: $closedResp")
+        val reuse = runCatching { ffmDescribe(bridge, closingHandle, "Z", 2) }.exceptionOrNull()
         assertTrue(reuse is IllegalStateException, "Invoke after reentrant close must throw IllegalStateException")
     }
 }

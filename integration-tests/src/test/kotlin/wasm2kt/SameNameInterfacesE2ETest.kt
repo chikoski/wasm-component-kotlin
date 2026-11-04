@@ -1,16 +1,13 @@
 package wasm2kt
 
 import com.github.ajalt.clikt.core.parse
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import wasm2kt.cli.Wasm2KtCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.Linker
+import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.lang.reflect.InvocationTargetException
 import java.nio.file.Files
@@ -38,6 +35,7 @@ class SameNameInterfacesE2ETest {
         import java.nio.file.Path
         import wasm2kt.runtime.ComponentBackendFactory
         import wasm2kt.runtime.Linker
+import wasm2kt.runtime.WitWriter
         import $pkg.example.fs.types.ErrorCode as FsErrorCode
         import $pkg.example.fs.types.Types as FsTypes
         import $pkg.example.http.types.ErrorCode as HttpErrorCode
@@ -146,19 +144,22 @@ class SameNameInterfacesE2ETest {
     fun `ambiguous short names are rejected by both backends`() {
         val wasm = Paths.get(requireNotNull(javaClass.getResource("/fixtures/same-name.wasm")).toURI())
         val linker = Linker().apply {
-            define("example:http/types@0.1.0#describe") { JsonPrimitive("h") }
-            define("example:fs/types@0.1.0#describe") { JsonPrimitive("f") }
-            define("example:http/types@0.1.0#[constructor]tally") { JsonPrimitive(1) }
-            define("example:http/types@0.1.0#[method]tally.get") { JsonPrimitive(0) }
-            define("example:http/types@0.1.0#[resource-drop]tally") { kotlinx.serialization.json.JsonNull }
+            define("example:http/types@0.1.0#describe") { _, results -> results.string("h") }
+            define("example:fs/types@0.1.0#describe") { _, results -> results.string("f") }
+            define("example:http/types@0.1.0#[constructor]tally") { _, results -> results.int(1) }
+            define("example:http/types@0.1.0#[method]tally.get") { _, results -> results.int(0) }
+            define("example:http/types@0.1.0#[resource-drop]tally") { _, _ -> }
         }
-        val httpError = JsonArray(listOf(JsonObject(mapOf("code" to JsonPrimitive(1)))))
+        // describe(error-code { code: 1 })
+        fun httpError() = WitWriter().apply { int(1) }
 
-        chicoryComponent().instantiate(linker).use { c ->
-            assertEquals("guest-http:1", c.invoke("example:http/types@0.1.0#describe", httpError).jsonPrimitive.content)
-            assertEquals("guest-http:1", c.invoke("example:http/types#describe", httpError).jsonPrimitive.content)
+        val chicory = chicoryComponent().instantiate(linker)
+        chicory.use { c ->
+            for (spec in listOf("example:http/types@0.1.0#describe", "example:http/types#describe")) {
+                assertEquals("guest-http:1", c.invoke(c.resolve(spec), httpError().toReader()).string())
+            }
             for (spec in listOf("types#describe", "describe")) {
-                val e = assertThrows<IllegalArgumentException> { c.invoke(spec, httpError) }
+                val e = assertThrows<IllegalArgumentException> { c.resolve(spec) }
                 assertTrue("ambiguous" in e.message.orEmpty(), e.message)
             }
         }
@@ -166,11 +167,11 @@ class SameNameInterfacesE2ETest {
         val bridge = wasm2kt.runtime.FfmWasmtimeBridge.getDefault()
         val session = bridge.openSession(wasm, linker)
         try {
-            val ok = bridge.sessionInvoke(session, "example:http/types@0.1.0#describe", httpError.toString())
-            assertTrue("guest-http:1" in ok, ok)
+            val index = bridge.resolve(session, "example:http/types@0.1.0#describe")
+            assertEquals("guest-http:1", bridge.invoke(session, index, httpError()).string())
             for (spec in listOf("types#describe", "describe")) {
-                val response = bridge.sessionInvoke(session, spec, httpError.toString())
-                assertTrue("ambiguous" in response, response)
+                val e = assertThrows<IllegalArgumentException> { bridge.resolve(session, spec) }
+                assertTrue("ambiguous" in e.message.orEmpty(), e.message)
             }
         } finally {
             bridge.sessionClose(session)

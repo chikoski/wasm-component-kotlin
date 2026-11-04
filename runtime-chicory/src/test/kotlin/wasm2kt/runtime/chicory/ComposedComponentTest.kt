@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import wasm2kt.runtime.ComponentBackend
+import wasm2kt.testing.JsonBackend
 import wasm2kt.runtime.ComponentTrapException
 import java.nio.file.Paths
 import kotlin.test.assertEquals
@@ -20,12 +20,9 @@ import kotlin.test.assertTrue
  * Uses the generated `composed-str` fixture; ChicoryDifferentialTest compares it with Wasmtime.
  */
 class ComposedComponentTest {
-    private fun open(): ComponentBackend =
-        ChicoryComponent.fromDirectory(
-            Paths.get(requireNotNull(javaClass.getResource("/components/composed-str/plan.json")).toURI()).parent,
-        ).instantiate(null)
+    private fun open(): JsonBackend = TestComponent("composed-str").open()
 
-    private fun ComponentBackend.call(name: String, vararg args: JsonElement): JsonElement = invoke(name, JsonArray(args.toList()))
+    private fun JsonBackend.call(name: String, vararg args: JsonElement): JsonElement = invoke(name, JsonArray(args.toList()))
 
     private val encodings = listOf("utf8", "utf16", "compact")
 

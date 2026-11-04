@@ -15,12 +15,13 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 * `generator`: KotlinPoet によるバインディング生成（`wasm2kt.generator`）。JVM 21
 * `cli`: `wasm2kt` コマンド（`wasm2kt.cli`）。`./gradlew run --args=...` はリポジトリルート基準
 * `runtime-wasmtime`: Wasmtime ブリッジの Kotlin 側（FFM / JNI、`wasm2kt.runtime`）。JVM 21 + preview
-* `runtime-api`: `ComponentBackend`、`WitHostImportDispatcher`、`FfmJsonCodec`。JVM 11 を維持（Android で使うため）
+* `runtime-api`: `ComponentBackend`、`WitHostImportDispatcher`、値のバイナリ形式（`WitWriter` / `WitReader`、ADR-0015）。JVM 11 を維持（Android で使うため）
 * `runtime-chicory`: Chicory バックエンド。JVM 11 を維持
 * `tooling`: 分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`）、生成（`ComponentCodegen`）、一括実行（`ComponentBuild`）
 * `gradle-plugin`: `io.github.wasm2kt`
 * `decomposer/`: Rust（ツールチェーンは `rust-toolchain.toml` で固定）。`dist/wasm2kt-decompose.wasm` は tooling のリソースとして同梱
 * `rust-bridge/`: Rust。Wasmtime ブリッジ
+* `test-support`: テスト専用。plan.json の型に沿って JSON とバイナリ形式を変換し、テストを JSON で書けるようにする
 * `integration-tests`: CLI で生成 → コンパイル → Wasmtime / Chicory で実行する E2E テストと差分テスト（テストの作業ディレクトリはリポジトリルート）
 * `fixtures/`: テスト用のコンポーネント（`.wasm` / `.wit`）。integration-tests、tooling、gradle-plugin、decomposer で共有
 * `samples/android`: composite build。ルートの wrapper で `./gradlew -p samples/android ...`
@@ -55,9 +56,9 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
 * `plan.json` の形式を変えるときは、`decomposer/src/main.rs` の `PLAN_VERSION` と `ComponentPlan.SUPPORTED_VERSION` を同時に上げる。
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない
-* 値の JSON 形式、関数名の解決、ホスト import のキーは Wasmtime ブリッジに揃える（ADR-0003）。Chicory 側の挙動を変えたら差分テストを通す
+* 値のバイナリ形式、関数名の解決、ホスト import のキーは両バックエンドで揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら差分テストを通す
 * `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）
-* ホスト定義 resource（world 直下か、import した interface の resource）は、JSON 境界では rep（整数）で受け渡す。オブジェクトとの対応は生成セッションが束縛する `HostResourceTable` が持ち、drop は `[resource-drop]<name>` の dispatch で伝える。両バックエンドで揃える（ADR-0008）
+* ホスト定義 resource（world 直下か、import した interface の resource）は、値の境界では rep（整数）で受け渡す。オブジェクトとの対応は生成セッションが束縛する `HostResourceTable` が持ち、drop は `[resource-drop]<name>` の dispatch で伝える。両バックエンドで揃える（ADR-0008）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する。Wasmtime バックエンドは同期の機能の参照実装として維持する（ADR-0005）
 * 生成コードの公開 API（ワールド DSL）を変えるときは、Wasmtime 側と Chicory 側の両方の E2E テストを確認する
 * commit メッセージは Conventional Commits 形式（`feat(scope): ...`、`fix: ...`）。本文に理由を書く

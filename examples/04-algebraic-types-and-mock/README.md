@@ -62,8 +62,7 @@ package com.example.wasm
 import com.example.wasm.example.calc.types.Permissions
 import com.example.wasm.example.calc.types.Point
 import com.example.wasm.example.calc.types.Status
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
+import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.Linker
 import java.nio.file.Paths
 
@@ -77,7 +76,7 @@ fun main() {
             registerFunction("add") { args ->
                 val a = args[0] as Int
                 val b = args[1] as Int
-                hostImports.dispatchHostImport("log", JsonArray(listOf(JsonPrimitive("add($a, $b)"))))
+                hostImports.call("log", WitWriter().apply { string("add($a, $b)") })
                 a + b
             }
             registerFunction("compute") { args ->

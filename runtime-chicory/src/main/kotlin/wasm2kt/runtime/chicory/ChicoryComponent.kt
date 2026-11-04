@@ -20,17 +20,12 @@ import com.dylibso.chicory.wasm.types.FunctionImport
 import com.dylibso.chicory.wasm.types.FunctionType
 import com.dylibso.chicory.wasm.types.MutabilityType
 import com.dylibso.chicory.wasm.types.Value
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.HostFunction as WitHostFunction
+import wasm2kt.runtime.WitReader
+import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.WitHostImportDispatcher
 import java.nio.file.Files
 import java.nio.file.Path
@@ -147,30 +142,42 @@ internal class ChicoryComponentInstance(
         }
     }
 
-    override fun invoke(functionName: String, args: JsonArray): JsonElement {
+    /** Exports resolved so far; [invoke] takes their index. */
+    private val resolved = ArrayList<PlanExport>()
+    private val resolvedIndices = HashMap<String, Int>()
+
+    override fun resolve(functionName: String): Int {
         checkUsable()
-        if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        resolvedIndices[functionName]?.let { return it }
         val export = resolveExport(functionName)
+        val index = resolved.indexOf(export).takeIf { it >= 0 } ?: resolved.size.also { resolved += export }
+        resolvedIndices[functionName] = index
+        return index
+    }
+
+    override fun invoke(function: Int, args: WitReader): WitReader {
+        checkUsable()
+        val export = resolved.getOrNull(function) ?: throw IllegalArgumentException("Unknown function index $function")
+        val functionName = export.instance?.let { "$it#${export.name}" } ?: export.name
+        if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
         val type = export.type
-        require(args.size == type.params.size) {
-            "Function '$functionName' expected ${type.params.size} arguments, got ${args.size}"
-        }
         val opts = plan.options.getValue(export.options)
         val cx = Context(opts, Direction.HOST_TO_GUEST)
         entered = true
         try {
             // Lowering the host's arguments: errors in the values are the host's (not traps), but
             // cabi_realloc runs guest code, so a misbehaving realloc does trap (see Context.realloc).
-            val lowerer = Lowerer(cx)
+            val lowerer = Lowerer(cx, args)
             val paramTypes = type.params.map { it.second }
             val flatParams = CanonicalAbi.flattenAll(paramTypes)
             val coreArgs = mutableListOf<Long>()
             try {
                 if (flatParams.size > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    coreArgs += lowerer.storeTuple(args, paramTypes).toLong()
+                    coreArgs += lowerer.storeTuple(paramTypes).toLong()
                 } else {
-                    args.forEachIndexed { i, a -> lowerer.lowerFlat(a, paramTypes[i], coreArgs) }
+                    paramTypes.forEach { lowerer.lowerFlat(it, coreArgs) }
                 }
+                if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
             } catch (e: Throwable) {
                 // A bad host argument must not leave handles behind in the component's tables.
                 cx.rollbackLowering()
@@ -181,22 +188,18 @@ internal class ChicoryComponentInstance(
             val coreResults = guest { coreFunction(export.func).apply(*coreArgs.toLongArray()) ?: LongArray(0) }
             cx.checkBorrowsDropped()
 
-            val results: List<JsonElement> = guest {
-                val lifter = Lifter(cx)
+            val results = WitWriter()
+            guest {
+                val lifter = Lifter(cx, results)
                 if (CanonicalAbi.flattenAll(type.results).size > CanonicalAbi.MAX_FLAT_RESULTS) {
                     lifter.loadTuple(coreResults[0].toInt(), type.results)
                 } else {
                     val reader = Lifter.FlatReader(coreResults)
-                    type.results.map { lifter.liftFlat(it, reader) }
+                    type.results.forEach { lifter.liftFlat(it, reader) }
                 }
             }
             opts.postReturn?.let { pr -> guest { withoutLeaving { postReturns.getValue(pr).apply(*coreResults) } } }
-
-            return when (results.size) {
-                0 -> JsonNull
-                1 -> results[0]
-                else -> JsonArray(results)
-            }
+            return results.toReader()
         } finally {
             cx.releaseLends()
             entered = false
@@ -366,44 +369,51 @@ internal class ChicoryComponentInstance(
             }
         }
 
-    /** A guest calling a host import: lift the guest's arguments, dispatch, lower the result. */
+    /** Host functions by key, looked up once (ADR-0015). */
+    private val hostFunctions = HashMap<String, WitHostFunction>()
+
+    private fun hostFunction(key: String): WitHostFunction = hostFunctions.getOrPut(key) {
+        val dispatcher = imports ?: throw IllegalStateException("Component imports '$key' but no host imports were provided")
+        dispatcher.hostFunction(key) ?: throw IllegalStateException("Unknown host import: $key")
+    }
+
+    /** A guest calling a host import: lift the guest's arguments, call the host, lower the results. */
     private fun callHost(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray? {
         val import = plan.imports.getValue(t.import)
         val opts = plan.options.getValue(t.options)
         val cx = Context(opts, Direction.GUEST_TO_HOST)
-        val lifter = Lifter(cx)
+        val args = WitWriter()
+        val lifter = Lifter(cx, args)
         val paramTypes = t.type.params.map { it.second }
         val flatParams = CanonicalAbi.flattenAll(paramTypes)
         val flatResults = CanonicalAbi.flattenAll(t.type.results)
 
-        val args: List<JsonElement> = if (flatParams.size > CanonicalAbi.MAX_FLAT_PARAMS) {
+        if (flatParams.size > CanonicalAbi.MAX_FLAT_PARAMS) {
             lifter.loadTuple(coreArgs[0].toInt(), paramTypes)
         } else {
             val reader = Lifter.FlatReader(coreArgs)
-            paramTypes.map { lifter.liftFlat(it, reader) }
+            paramTypes.forEach { lifter.liftFlat(it, reader) }
         }
 
-        val dispatcher = imports ?: throw IllegalStateException("Component imports '${import.dispatchKey}' but no host imports were provided")
-        val response = dispatcher.dispatchHostImport(import.dispatchKey, JsonArray(args))
-        val results: List<JsonElement> = when (t.type.results.size) {
-            0 -> emptyList()
-            1 -> listOf(response)
-            else -> response.jsonArray
-        }
+        val results = WitWriter()
+        hostFunction(import.dispatchKey).call(args.toReader(), results)
+        val reader = results.toReader()
 
-        val lowerer = Lowerer(cx)
-        return if (flatResults.size > CanonicalAbi.MAX_FLAT_RESULTS) {
+        val lowerer = Lowerer(cx, reader)
+        val lowered = if (flatResults.size > CanonicalAbi.MAX_FLAT_RESULTS) {
             // The caller passed a return pointer as the last core argument.
             val retPtr = coreArgs[coreArgs.size - 1].toInt()
-            lowerer.storeTupleAt(results, t.type.results, retPtr)
+            lowerer.storeTupleAt(t.type.results, retPtr)
             null
-        } else if (results.isEmpty()) {
+        } else if (t.type.results.isEmpty()) {
             null
         } else {
             val out = mutableListOf<Long>()
-            lowerer.lowerFlat(results[0], t.type.results[0], out)
+            lowerer.lowerFlat(t.type.results[0], out)
             out.toLongArray()
         }
+        if (reader.remaining != 0) throw IllegalStateException("${reader.remaining} unread bytes after the results of host import '${import.dispatchKey}'")
+        return lowered
     }
 
     // ---------------------------------------------------------------- resources
@@ -422,8 +432,7 @@ internal class ChicoryComponentInstance(
         if (info.imported) {
             // The host defined this resource: tell it the component dropped its owning handle.
             val import = info.import?.let { plan.imports[it] } ?: return
-            val dispatcher = imports ?: throw IllegalStateException("Component drops host resource '${import.dispatchKey}' but no host imports were provided")
-            dispatcher.dispatchHostImport(import.resourceDropKey, JsonArray(listOf(JsonPrimitive(rep))))
+            hostFunction(import.resourceDropKey).call(WitWriter(4).apply { int(rep) }.toReader(), WitWriter(0))
         } else {
             info.resource?.let { resourceDtors[it] }?.apply(rep.toLong())
         }
@@ -492,11 +501,10 @@ internal class ChicoryComponentInstance(
             lent.clear()
         }
 
-        override fun lowerOwn(table: Int, value: JsonElement): Int {
+        override fun lowerOwn(table: Int, id: Int): Int {
             // A host resource moves into the component as its rep.
-            if (isImported(table)) return insert(table, handleOf(value), own = true)
+            if (isImported(table)) return insert(table, id, own = true)
             requireDefinedResource(table)
-            val id = handleOf(value)
             val h = hostHandle(id, table)
             // The spec's lift_own: trap_if(h.num_lends != 0). The handle and the lend are the host's,
             // so this is a host error (ADR-0007): the call does not start and the instance stays
@@ -507,15 +515,14 @@ internal class ChicoryComponentInstance(
             return insert(table, h.rep, own = true)
         }
 
-        override fun lowerBorrow(table: Int, value: JsonElement): Int {
+        override fun lowerBorrow(table: Int, id: Int): Int {
             if (isImported(table)) {
                 check(direction == Direction.HOST_TO_GUEST) { "Host imports cannot return borrow<T>" }
-                val handle = insert(table, handleOf(value), own = false)
+                val handle = insert(table, id, own = false)
                 borrowsIn += Triple(table, handle, checkNotNull(table(table).slotOrNull(handle)))
                 return handle
             }
             requireDefinedResource(table)
-            val id = handleOf(value)
             val h = hostHandle(id, table)
             h.lends++
             lent += h
@@ -530,12 +537,12 @@ internal class ChicoryComponentInstance(
             return h
         }
 
-        override fun liftOwn(table: Int, handle: Int): JsonElement {
+        override fun liftOwn(table: Int, handle: Int): Int {
             if (isImported(table)) {
                 // The component hands a host resource back: the host owns its rep again.
                 val t = table(table)
                 if (t.slotOrNull(handle)?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
-                return JsonPrimitive(t.remove(handle).rep)
+                return t.remove(handle).rep
             }
             requireDefinedResource(table)
             check(direction == Direction.HOST_TO_GUEST) { "Host imports receiving own<T> are not supported yet" }
@@ -546,11 +553,11 @@ internal class ChicoryComponentInstance(
             val rep = t.remove(handle).rep
             val hostHandle = nextHostHandle++
             hostHandles[hostHandle] = HostHandle(table, rep)
-            return JsonPrimitive(hostHandle)
+            return hostHandle
         }
 
-        override fun liftBorrow(table: Int, handle: Int): JsonElement {
-            if (isImported(table)) return JsonPrimitive(table(table).rep(handle))
+        override fun liftBorrow(table: Int, handle: Int): Int {
+            if (isImported(table)) return table(table).rep(handle)
             throw UnsupportedOperationException("Host imports receiving borrow<T> of a component-defined resource are not supported by the Chicory backend yet")
         }
 
@@ -558,11 +565,6 @@ internal class ChicoryComponentInstance(
             if (!isDefinedHere(table)) {
                 throw UnsupportedOperationException("Imported (host-defined) resources are not supported by the Chicory backend yet")
             }
-        }
-
-        private fun handleOf(value: JsonElement): Int = when (value) {
-            is JsonObject -> value.getValue("handle").jsonPrimitive.int
-            else -> value.jsonPrimitive.int
         }
     }
 

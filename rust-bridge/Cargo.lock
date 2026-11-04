@@ -986,8 +986,6 @@ name = "wasm2kt-wasmtime-bridge"
 version = "0.1.0"
 dependencies = [
  "jni",
- "serde",
- "serde_json",
  "wasmtime",
 ]
 

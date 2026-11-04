@@ -3,8 +3,19 @@
 > 計測日: 2026-11-02 / 対象: `main`（f003212）+ この計測用のコード / 再計測: [`.github/workflows/bench.yml`](../.github/workflows/bench.yml)
 >
 > #15（静的な lift / lower 生成）に着手するかどうかを決めるための計測です。結論と提案は [6. 結論](#6-結論と-15-への提案) にあります。
+>
+> **2026-11-04 追記**: [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 1（JSON 境界をバイナリ形式に置き換える。#62）のあとに再計測した結果を [8 節](#8-バイナリ形式に置き換えたあと2026-11-04) に追加しました。
+> 1〜6 節の数値は、JSON 境界のときのもの（ベースライン）です。
 
 ## 要点
+
+* **2026-11-04 追記（8 節）**: 値の受け渡しをバイナリ形式にしたあと、64 KiB の `list<u8>` の往復は次のとおり（JVM の Chicory AOT、Wasmtime FFM、ART）。
+  * Chicory AOT（JVM）: 6.6 ms → 12 µs
+  * Wasmtime FFM: 16.5 ms → 3.5 ms
+  * ART: 52 ms → 0.26〜0.38 ms
+
+  整数だけの呼び出しも速くなった（JVM の生成 DSL で 304 ns → 190 ns 前後）。
+  以下の要点は、ベースライン（JSON 境界）のときのもの
 
 * **呼び出しの固定費は小さい**。引数が整数だけの呼び出しは、JVM で 0.3 µs、ART（エミュレーター）で 3 µs。
   Wasmtime（FFM で 1.8 µs）より速い
@@ -191,3 +202,85 @@ JVM で約 260 ns、ART で約 3.2 µs です。ART では core の呼び出し�
 
 GitHub Actions の `Bench` ワークフロー（手動実行、または `perf/**` ブランチへの push）は、両方を実行し、結果をジョブのログと artifact に出力します。
 `benchmarks` モジュールは `-Pwasm2kt.bench` を付けたときだけビルドに含まれるので、通常の `check` には影響しません。
+
+## 8. バイナリ形式に置き換えたあと（2026-11-04）
+
+[ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 1（#62）のあとの計測です。生成コードとバックエンドの間の値は、JSON の木ではなく、型に沿ったバイナリ形式（`WitWriter` / `WitReader`）で受け渡します。
+Wasmtime は汎用ブリッジ（形式 ⇄ `Val`）だけで、型付きブリッジ（進め方の 2）はまだ入っていません。経路は [docs/call-path.md](call-path.md) にあります。
+
+* 方法は 1 節と同じです（`Bench` ワークフロー、`ubuntu-latest`）。2 回実行しました
+  * JVM は 2 回でほぼ同じ値だったので、1 回目の値を載せます
+  * ART（エミュレーター）は 2 回の差が大きかったので、範囲で示します
+* ランナーの CPU はベースラインと違います。計算だけの `lcg-sum` は、Chicory も Wasmtime も約 1.7 倍速く出ました（Chicory 593 → 333 µs、Wasmtime 513 → 295 µs）。
+  一方で、core の関数の直接呼び出しは 41 → 50 ns と遅く出ています。
+  このため、数倍以内の差はランナーの違いの範囲です。データを渡す呼び出しの差は、それよりずっと大きい（数十〜数百倍）
+* `backend` の層は、組み立て済みの JSON の代わりに、書き終えた形式を `invoke(index, reader)` に渡します。`codec` の行は、JSON の木への変換ではなく、`WitWriter` での書き込みと `WitReader` での読み出しです
+
+### 8.1 引数が整数だけの呼び出し（`add(s32, s32) -> s32`）
+
+| 層 | JVM 前 | JVM 後 | ART 前 | ART 後 |
+| :--- | ---: | ---: | ---: | ---: |
+| core wasm の関数を直接（AOT） | 41 ns | 50 ns | 51 ns | 43〜49 ns |
+| `ComponentBackend.invoke`（AOT） | 213 ns | 153 ns | 2.9 µs | 0.86〜1.9 µs |
+| 生成 DSL（AOT） | 304 ns | **186 ns** | 3.3 µs | **2.3〜5.8 µs** |
+| 生成 DSL（インタプリタ） | 419 ns | 252 ns | 7.7 µs | 2.7〜7.4 µs |
+| Wasmtime FFM / JNI | 1.79 µs / 2.58 µs | **705 ns / 479 ns** | — | — |
+
+* JVM では、コンポーネント層で増える時間（生成 DSL − core）が約 260 ns から約 140 ns になった
+* Wasmtime の整数の呼び出しは 2.5〜5 倍速くなった。JSON の文字列化と解析がなくなり、関数の名前の解決も 1 回だけになったため
+* ART の生成 DSL は、2 回の計測で 2.3 µs と 5.8 µs で、ばらつきが大きい。少なくとも遅くはなっていない
+* 呼び出しごとのバッファの確保（ADR-0015 の C1）は、JVM の生成 DSL と `backend` の差（約 35 ns）に収まっている。セッションごとの使い回し（C2）は、今は要らない
+
+### 8.2 データを渡す呼び出し
+
+| 呼び出し | JVM AOT 前 → 後 | Wasmtime FFM 前 → 後 | ART AOT 前 → 後 |
+| :--- | ---: | ---: | ---: |
+| `echo-name`（5 文字の文字列） | 2.2 µs → 1.5 µs | 2.6 µs → 0.97 µs | 154 µs → 8.3〜29 µs |
+| `echo-bytes`（16 B） | 2.3 µs → 0.76 µs | 5.4 µs → 1.4 µs | 16 µs → 3.9〜4.8 µs |
+| `echo-bytes`（1 KiB） | 87 µs → 0.99 µs | 206 µs → 29 µs | 735 µs → 6.1〜9.2 µs |
+| `echo-bytes`（64 KiB） | 6.6 ms → **12.4 µs** | 16.5 ms → **3.4 ms** | 52 ms → **0.26〜0.38 ms** |
+| `echo-blob`（record、1 KiB を含む） | 95 µs → 4.1 µs | 211 µs → 30 µs | 1.2 ms → 21〜43 µs |
+
+64 KiB の内訳（JVM AOT）:
+
+| 部分 | 前 | 後 |
+| :--- | ---: | ---: |
+| 値の変換（生成コードの部分。前は `FfmJsonCodec`、後は `WitWriter` / `WitReader`） | 2.8 ms | 5.3 µs |
+| `ComponentBackend.invoke`（lower、lift、wasm の実行） | 4.7 ms | 6.9 µs |
+| 合計（生成 DSL） | 6.6 ms | 12.4 µs |
+
+* Chicory では、`list<u8>` と文字列が線形メモリとのあいだでまとめてコピーされるようになった。64 KiB の往復は、JVM で約 530 倍、ART で約 140〜200 倍速くなった。
+  `stream<u8>`（#13）の前提だった「データを渡す呼び出しが遅い」は解消した
+* Wasmtime は約 5 倍にとどまる。64 KiB で 1 バイトあたり約 50 ns かかっている。
+  rust-bridge の中で `list<u8>` を `Val::U8` の `Vec` として要素ごとに変換していて、Wasmtime もそれを要素ごとに lower / lift するため。
+  これを除くのが型付きブリッジ（ADR-0015 の進め方の 2）
+* ART の文字列（`echo-name`）は 154 µs から 8〜29 µs になった。`CharsetEncoder` / `CharsetDecoder` をやめた効果と考えられる（#58）。
+  ただし、まだ 16 B の `list<u8>`（3.9〜4.8 µs）より遅い。残りの原因は調べていない
+
+### 8.3 計算の性能（データを渡すもの）
+
+| 呼び出し | JVM AOT 前 → 後 | Wasmtime FFM 前 → 後 | ART AOT 前 → 後 |
+| :--- | ---: | ---: | ---: |
+| `sort-bytes`（64 KiB） | 13.4 ms → 4.9 ms | 13.9 ms → 2.3 ms | 98 ms → 25〜27 ms |
+| `json-roundtrip`（13 KiB の文字列） | 914 µs → 752 µs | 306 µs → 119 µs | 6.3 ms → 4.2〜4.5 ms |
+
+* `sort-bytes` は、ベースラインでは時間の大半が JSON 境界だった。今は wasm の中のソートが大半を占める
+* `lcg-sum` と `regex-count` は値の受け渡しがほぼないので、差はランナーの違いだけ（Chicory と Wasmtime の比は、`lcg-sum` で約 1.1 倍、`regex-count`（14 KiB）で約 46 倍）
+
+### 8.4 初回のインスタンス化（JVM）
+
+| | 前 | 後 |
+| :--- | ---: | ---: |
+| `arithmetic`: 最初の `openSession`（Chicory AOT） | 205 ms | 147 ms |
+| `heavy`: 最初の `openSession`（Chicory AOT） | 373 ms | 276 ms |
+| `heavy`: 最初の `openSession`（Wasmtime FFM） | 1144 ms | 853 ms |
+
+ランナーの違いを含みます。呼び出しの経路から kotlinx.serialization がなくなりました（plan.json の解析には、今も使っています）。
+
+### 8.5 まとめ
+
+* #15 と 6 節の提案 1 の目的（データを渡す呼び出しを、JSON 境界に支配されないようにする）は、Chicory では達成した
+* Wasmtime の残りは `Val` の要素ごとの変換で、型付きブリッジ（ADR-0015 の進め方の 2）で扱う
+* バッファは呼び出しごとの確保（C1）のままでよい
+* ART の文字列の残りの差は、#58 で引き続き調べる
+

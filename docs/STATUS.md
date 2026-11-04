@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-02 / 対象ブランチ: `main`
+> 最終更新: 2026-11-04 / 対象ブランチ: `main`
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -19,7 +19,7 @@
 component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decomposer を Chicory で実行）
                                         ├─▶ core モジュールの AOT コンパイル（jar）
                                         └─▶ Kotlin バインディング + XxxComponent 生成
-アプリ ──▶ 生成 DSL ──▶ ComponentBackend（JSON 境界）──▶ runtime-chicory ──▶ Chicory
+アプリ ──▶ 生成 DSL ──▶ バイナリ形式（ADR-0015）──▶ runtime-chicory ──▶ Chicory
                                                     └─▶ Wasmtime ブリッジ（FFM / JNI）
 ```
 
@@ -52,11 +52,11 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * ホスト定義 resource: Wasmtime（FFM / JNI）と Chicory で同じハーネスのイベント列が一致（own / borrow / 入れ子の option・result / static / world 直下の resource / drop 時の `close()`、貸し出し中のハンドルの drop の拒否）
 * 参照実装の Wasmtime は 48 LTS（decomposer の wasmtime-environ と同じ版。[ADR-0010](adr/0010-wasmtime-lts.md)）。UTF-16 のアラインメントとホストの整数の範囲検査も、差分テストで一致を確認。Wasmtime と挙動が違う唯一の項目（lift で見つかったトラップの後の poison）と再入は、Chicory 単体のテストで確認（[ADR-0007](adr/0007-canonical-abi-validation.md)）
 * コンポーネント定義の resource の所有権: own で返したハンドルはコンポーネントの表から取り除かれ、戻すと新しいハンドルになる（仕様の `lift_own` / `lower_own`）。手書きの WAT フィクスチャ `res-edge` で、返したハンドルの再利用などを Chicory 単体のテストで確認（#31）
-* JSON 境界: スカラーの JSON 型の検査と、option のタグの判定規則を両バックエンドで揃えた（[ADR-0009](adr/0009-json-boundary-option-tag-and-scalar-types.md)、#36）
+* 値の境界: 生成コードとバックエンドの間は、型に沿ったバイナリ形式（`WitWriter` / `WitReader`）で受け渡す。JSON の経路はない（[ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 1、#62。ADR-0003 / ADR-0009 を置き換え）。差分テストは、テスト専用の `test-support` で JSON の値を形式に変換して比べる
 * Wasmtime の FFM ブリッジ: ホスト import の戻り値とエラーメッセージに大きさの上限がない（#35）。事前コンパイル済みの `.cwasm` は `openPrecompiledSession` / `withPrecompiledSession` からだけ読み込む（#33）
 * decomposer の出力は決定的（exports と canonical options の順序）。各フィクスチャを繰り返し分解して同じ plan になることを `cargo test` で確認
 * Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
-* 性能とサイズ（[docs/performance.md](performance.md)、#19）: 整数だけの呼び出しは JVM 0.3 µs / ART 3 µs、`list<u8>` は JSON 境界のため 1 バイトあたり JVM 100 ns / ART 800 ns、小さな関数の計算は Wasmtime と同等、大きな wasm 関数を含むコード（regex）は HotSpot の JIT の上限とインタプリタへのフォールバックのため最大 53 倍遅い。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
+* 性能とサイズ（[docs/performance.md](performance.md)、#19。バイナリ形式のあとは 8 節）: 64 KiB の `list<u8>` の往復は JVM（Chicory AOT）12 µs / Wasmtime FFM 3.5 ms / ART 0.3 ms（JSON 境界のときは 6.6 ms / 16.5 ms / 52 ms）。整数だけの呼び出しは JVM 0.19 µs / ART 2〜6 µs。小さな関数の計算は Wasmtime と同等、大きな wasm 関数を含むコード（regex）は HotSpot の JIT の上限とインタプリタへのフォールバックのため最大 53 倍遅い。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
 * Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
 
 ### 未検証・既知の制約
@@ -102,9 +102,10 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
-| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成。#19 の結果から、まず `ByteArray` / `String` の直接コピーの経路を #13 の stream より前に入れることを提案（[performance.md](performance.md) の 6 章） |
+| [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) | A-12 | 静的な lift / lower 生成（[ADR-0015](adr/0015-binary-value-boundary.md)）。進め方の 1（バイナリ形式への置き換え）は #62。残りは Wasmtime の型付きブリッジ（`bindgen!`、`wasm2kt bridge`。進め方の 2） |
 | [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
-| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い（文字コードの変換器を毎回作っている。#19 で発見） |
+| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い |
+| [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) | — | Gradle プラグインの分解タスクがまれに `Stream closed` で失敗する |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（#16 の受け入れ基準にも使う） |

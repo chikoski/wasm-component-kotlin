@@ -1,23 +1,14 @@
 package wasm2kt.runtime.chicory
 
 import com.dylibso.chicory.runtime.Memory
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import wasm2kt.runtime.ComponentTrapException
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.Charset
-import java.nio.charset.CodingErrorAction
+import wasm2kt.runtime.WitReader
+import wasm2kt.runtime.WitWriter
 
 /**
- * The Component Model canonical ABI (32-bit linear memory), operating on the JSON value shape
- * shared with the Wasmtime bridge. Spec: component-model/design/mvp/CanonicalABI.md.
+ * The Component Model canonical ABI (32-bit linear memory), between linear memory and the binary
+ * value format shared with the generated bindings and the Wasmtime bridge (ADR-0015).
+ * Spec: component-model/design/mvp/CanonicalABI.md.
  *
  * Validation follows the spec's `trap_if`s (definitions.py): values coming from the guest that
  * break an ABI rule raise [ComponentTrapException]; values coming from the host that do not fit
@@ -118,6 +109,12 @@ internal object CanonicalAbi {
         else -> 4 * ((n + 31) / 32)
     }
 
+    /** Integer types whose values have the same bytes in linear memory and in the binary format. */
+    fun isRawInteger(t: WitType): Boolean = when (t) {
+        WitType.S8, WitType.U8, WitType.S16, WitType.U16, WitType.S32, WitType.U32, WitType.S64, WitType.U64 -> true
+        else -> false
+    }
+
     internal fun unsupported(t: WitType.Unsupported): Nothing =
         throw UnsupportedOperationException("WIT type is not supported by the Chicory backend yet: ${t.detail}")
 }
@@ -127,99 +124,81 @@ internal interface AbiContext {
     val memory: Memory
     val encoding: StringEncoding
     fun realloc(align: Int, size: Int): Int
-    fun lowerOwn(table: Int, value: JsonElement): Int
-    fun lowerBorrow(table: Int, value: JsonElement): Int
-    fun liftOwn(table: Int, handle: Int): JsonElement
-    fun liftBorrow(table: Int, handle: Int): JsonElement
+    fun lowerOwn(table: Int, id: Int): Int
+    fun lowerBorrow(table: Int, id: Int): Int
+    fun liftOwn(table: Int, handle: Int): Int
+    fun liftBorrow(table: Int, handle: Int): Int
 }
 
-/** Converts JSON values into core wasm values / linear memory. */
-internal class Lowerer(private val cx: AbiContext) {
-    fun lowerFlat(v: JsonElement, t: WitType, out: MutableList<Long>) {
+/**
+ * Reads host values from [r] (the binary format) into core wasm values / linear memory. Values that
+ * do not fit the WIT type are host errors ([IllegalArgumentException]).
+ */
+internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
+    fun lowerFlat(t: WitType, out: MutableList<Long>) {
         when (t) {
-            WitType.Bool -> out += if (bool(v)) 1L else 0L
-            WitType.S8, WitType.U8, WitType.S16, WitType.U16, WitType.S32 -> out += integer(v, t)
-            WitType.U32 -> out += integer(v, t)
-            WitType.S64 -> out += long(v)
-            WitType.U64 -> out += ulong(v)
-            WitType.F32 -> out += f32Bits(v).toLong()
-            WitType.F64 -> out += f64Bits(v)
-            WitType.Char -> out += char(v).toLong()
+            WitType.Bool -> out += bool().toLong()
+            WitType.S8 -> out += r.byte().toLong()
+            WitType.U8 -> out += (r.byte().toLong() and 0xFF)
+            WitType.S16 -> out += r.short().toLong()
+            WitType.U16 -> out += (r.short().toLong() and 0xFFFF)
+            WitType.S32, WitType.U32 -> out += r.int().toLong()
+            WitType.S64, WitType.U64 -> out += r.long()
+            WitType.F32 -> out += f32Bits().toLong()
+            WitType.F64 -> out += f64Bits()
+            WitType.Char -> out += char().toLong()
             WitType.Str -> {
-                val (ptr, len) = storeString(string(v))
+                val (ptr, len) = storeString()
                 out += ptr.toLong(); out += len.toLong()
             }
             is WitType.ListOf -> {
-                val (ptr, len) = storeList(v.jsonArray, t.element)
+                val (ptr, len) = storeList(t.element)
                 out += ptr.toLong(); out += len.toLong()
             }
-            is WitType.Record -> {
-                val o = v.jsonObject
-                for ((name, ft) in t.fields) lowerFlat(o[name] ?: missingField(name), ft, out)
-            }
-            is WitType.Tuple -> {
-                val a = tupleArray(v, t)
-                t.types.forEachIndexed { i, et -> lowerFlat(a[i], et, out) }
-            }
-            is WitType.Flags -> flagWords(v, t).forEach { out += it.toLong() }
+            is WitType.Record -> for ((_, ft) in t.fields) lowerFlat(ft, out)
+            is WitType.Tuple -> for (et in t.types) lowerFlat(et, out)
+            is WitType.Flags -> flagWords(t).forEach { out += it.toLong() }
             is WitType.Variant -> {
-                val (index, payload) = variantCase(v, t)
+                val index = discriminant(t)
                 out += index.toLong()
                 val joined = CanonicalAbi.flatten(t).drop(1)
                 val caseType = t.cases[index].second
                 val flat = mutableListOf<Long>()
-                caseType?.let { lowerFlat(payload ?: JsonNull, it, flat) }
+                caseType?.let { lowerFlat(it, flat) }
                 val caseFlat = caseType?.let { CanonicalAbi.flatten(it) } ?: emptyList()
                 joined.forEachIndexed { i, jt ->
                     out += if (i < flat.size) coerce(flat[i], caseFlat[i], jt) else 0L
                 }
             }
-            is WitType.Own -> out += cx.lowerOwn(t.table, v).toLong()
-            is WitType.Borrow -> out += cx.lowerBorrow(t.table, v).toLong()
+            is WitType.Own -> out += cx.lowerOwn(t.table, r.int()).toLong()
+            is WitType.Borrow -> out += cx.lowerBorrow(t.table, r.int()).toLong()
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
 
-    fun store(v: JsonElement, t: WitType, ptr: Int) {
+    fun store(t: WitType, ptr: Int) {
         val m = cx.memory
         when (t) {
-            WitType.Bool -> m.writeByte(ptr, if (bool(v)) 1 else 0)
-            WitType.S8, WitType.U8 -> m.writeByte(ptr, integer(v, t).toByte())
-            WitType.S16, WitType.U16 -> m.writeShort(ptr, integer(v, t).toShort())
-            WitType.S32, WitType.U32 -> m.writeI32(ptr, integer(v, t).toInt())
-            WitType.S64 -> m.writeLong(ptr, long(v))
-            WitType.U64 -> m.writeLong(ptr, ulong(v))
-            WitType.F32 -> m.writeI32(ptr, f32Bits(v))
-            WitType.F64 -> m.writeLong(ptr, f64Bits(v))
-            WitType.Char -> m.writeI32(ptr, char(v))
+            WitType.Bool -> m.writeByte(ptr, bool().toByte())
+            WitType.S8, WitType.U8 -> m.writeByte(ptr, r.byte())
+            WitType.S16, WitType.U16 -> m.writeShort(ptr, r.short())
+            WitType.S32, WitType.U32 -> m.writeI32(ptr, r.int())
+            WitType.S64, WitType.U64 -> m.writeLong(ptr, r.long())
+            WitType.F32 -> m.writeI32(ptr, f32Bits())
+            WitType.F64 -> m.writeLong(ptr, f64Bits())
+            WitType.Char -> m.writeI32(ptr, char())
             WitType.Str -> {
-                val (p, len) = storeString(string(v))
+                val (p, len) = storeString()
                 m.writeI32(ptr, p); m.writeI32(ptr + 4, len)
             }
             is WitType.ListOf -> {
-                val (p, len) = storeList(v.jsonArray, t.element)
+                val (p, len) = storeList(t.element)
                 m.writeI32(ptr, p); m.writeI32(ptr + 4, len)
             }
-            is WitType.Record -> {
-                val o = v.jsonObject
-                var off = 0
-                for ((name, ft) in t.fields) {
-                    off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
-                    store(o[name] ?: missingField(name), ft, ptr + off)
-                    off += CanonicalAbi.sizeOf(ft)
-                }
-            }
-            is WitType.Tuple -> {
-                val a = tupleArray(v, t)
-                var off = 0
-                t.types.forEachIndexed { i, et ->
-                    off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(et))
-                    store(a[i], et, ptr + off)
-                    off += CanonicalAbi.sizeOf(et)
-                }
-            }
+            is WitType.Record -> storeFields(t.fields.map { it.second }, ptr)
+            is WitType.Tuple -> storeFields(t.types, ptr)
             is WitType.Flags -> {
-                val words = flagWords(v, t)
+                val words = flagWords(t)
                 when (CanonicalAbi.sizeOf(t)) {
                     0 -> Unit
                     1 -> m.writeByte(ptr, words[0].toByte())
@@ -228,7 +207,7 @@ internal class Lowerer(private val cx: AbiContext) {
                 }
             }
             is WitType.Variant -> {
-                val (index, payload) = variantCase(v, t)
+                val index = discriminant(t)
                 val discSize = CanonicalAbi.discriminantSize(t.cases.size)
                 when (discSize) {
                     1 -> m.writeByte(ptr, index.toByte())
@@ -237,28 +216,37 @@ internal class Lowerer(private val cx: AbiContext) {
                 }
                 t.cases[index].second?.let { caseType ->
                     val maxAlign = t.cases.maxOfOrNull { c -> c.second?.let { CanonicalAbi.alignOf(it) } ?: 1 } ?: 1
-                    store(payload ?: JsonNull, caseType, ptr + CanonicalAbi.alignTo(discSize, maxAlign))
+                    store(caseType, ptr + CanonicalAbi.alignTo(discSize, maxAlign))
                 }
             }
-            is WitType.Own -> m.writeI32(ptr, cx.lowerOwn(t.table, v))
-            is WitType.Borrow -> m.writeI32(ptr, cx.lowerBorrow(t.table, v))
+            is WitType.Own -> m.writeI32(ptr, cx.lowerOwn(t.table, r.int()))
+            is WitType.Borrow -> m.writeI32(ptr, cx.lowerBorrow(t.table, r.int()))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
 
-    /** Stores [values] as a tuple in freshly allocated memory and returns its address. */
-    fun storeTuple(values: List<JsonElement>, types: List<WitType>): Int {
+    private fun storeFields(types: List<WitType>, ptr: Int) {
+        var off = 0
+        for (ft in types) {
+            off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
+            store(ft, ptr + off)
+            off += CanonicalAbi.sizeOf(ft)
+        }
+    }
+
+    /** Stores the next values as a tuple in freshly allocated memory and returns its address. */
+    fun storeTuple(types: List<WitType>): Int {
         val tuple = WitType.Tuple(types)
         val ptr = alloc(CanonicalAbi.alignOf(tuple), CanonicalAbi.sizeOf(tuple).toLong())
-        store(JsonArray(values), tuple, ptr)
+        store(tuple, ptr)
         return ptr
     }
 
-    /** Stores [values] as a tuple at a guest-provided return pointer, which must be aligned and in bounds. */
-    fun storeTupleAt(values: List<JsonElement>, types: List<WitType>, ptr: Int) {
+    /** Stores the next values as a tuple at a guest-provided return pointer, which must be aligned and in bounds. */
+    fun storeTupleAt(types: List<WitType>, ptr: Int) {
         val tuple = WitType.Tuple(types)
         checkRange(cx.memory, ptr, CanonicalAbi.sizeOf(tuple).toLong(), CanonicalAbi.alignOf(tuple), "return pointer")
-        store(JsonArray(values), tuple, ptr)
+        store(tuple, ptr)
     }
 
     /** Calls `cabi_realloc`; the guest must return an aligned, in-bounds pointer. */
@@ -268,91 +256,102 @@ internal class Lowerer(private val cx: AbiContext) {
         return ptr
     }
 
-    private fun storeString(s: String): Pair<Int, Int> {
-        // JSON strings are UTF-16 and may hold lone surrogates, which no WIT string can carry.
-        val utf8 = encodeStrict(s, Charsets.UTF_8)
-        require(utf8.size <= CanonicalAbi.MAX_STRING_BYTE_LENGTH) { "String of ${utf8.size} bytes exceeds the Canonical ABI limit" }
-        val (align, bytes, length) = when (cx.encoding) {
-            StringEncoding.UTF8 -> Triple(1, utf8, utf8.size)
-            StringEncoding.UTF16 -> Triple(2, s.toByteArray(Charsets.UTF_16LE), s.length)
-            StringEncoding.LATIN1_UTF16 ->
-                if (s.all { it.code <= 0xFF }) Triple(2, s.toByteArray(Charsets.ISO_8859_1), s.length)
-                else Triple(2, s.toByteArray(Charsets.UTF_16LE), s.length or UTF16_TAG)
+    /** The binary format carries UTF-8: copied as is for a UTF-8 guest, transcoded otherwise. */
+    private fun storeString(): Pair<Int, Int> {
+        val n = r.length()
+        require(n <= CanonicalAbi.MAX_STRING_BYTE_LENGTH) { "String of $n bytes exceeds the Canonical ABI limit" }
+        return r.region(n) { a, off ->
+            require(Utf8.isValid(a, off, n)) { "String is not valid UTF-8" }
+            when (cx.encoding) {
+                StringEncoding.UTF8 -> {
+                    val ptr = alloc(1, n.toLong())
+                    if (n > 0) cx.memory.write(ptr, a, off, n)
+                    ptr to n
+                }
+                StringEncoding.UTF16 -> {
+                    val s = String(a, off, n, Charsets.UTF_8)
+                    val ptr = alloc(2, 2L * s.length)
+                    cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
+                    ptr to s.length
+                }
+                StringEncoding.LATIN1_UTF16 -> {
+                    val s = String(a, off, n, Charsets.UTF_8)
+                    if (s.all { it.code <= 0xFF }) {
+                        val ptr = alloc(2, s.length.toLong())
+                        cx.memory.write(ptr, s.toByteArray(Charsets.ISO_8859_1))
+                        ptr to s.length
+                    } else {
+                        val ptr = alloc(2, 2L * s.length)
+                        cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
+                        ptr to (s.length or UTF16_TAG)
+                    }
+                }
+            }
         }
-        val ptr = alloc(align, bytes.size.toLong())
-        cx.memory.write(ptr, bytes)
-        return ptr to length
     }
 
-    private fun storeList(items: JsonArray, element: WitType): Pair<Int, Int> {
+    /** Lists of integers are copied as is; other elements are stored one by one. */
+    private fun storeList(element: WitType): Pair<Int, Int> {
+        val n = r.length()
         val size = CanonicalAbi.sizeOf(element)
-        val byteLength = size.toLong() * items.size
+        val byteLength = size.toLong() * n
         require(byteLength <= CanonicalAbi.MAX_LIST_BYTE_LENGTH) { "List of $byteLength bytes exceeds the Canonical ABI limit" }
         val ptr = alloc(CanonicalAbi.alignOf(element), byteLength)
-        items.forEachIndexed { i, item -> store(item, element, ptr + i * size) }
-        return ptr to items.size
+        if (CanonicalAbi.isRawInteger(element)) {
+            if (byteLength > 0) r.region(byteLength.toInt()) { a, off -> cx.memory.write(ptr, a, off, byteLength.toInt()) }
+        } else {
+            for (i in 0 until n) store(element, ptr + i * size)
+        }
+        return ptr to n
     }
 
-    private fun flagWords(v: JsonElement, t: WitType.Flags): IntArray {
-        val words = IntArray((t.names.size + 31) / 32)
-        if (v is JsonArray) {
-            for (name in v) {
-                val i = t.names.indexOf(string(name))
-                require(i >= 0) { "Unknown flag '${name.jsonPrimitive.content}'" }
-                words[i / 32] = words[i / 32] or (1 shl (i % 32))
-            }
-        } else {
-            val bits = v.jsonPrimitive.content.toULongOrNull() ?: throw IllegalArgumentException("Expected flags, got $v")
-            require(t.names.size >= 64 || bits shr t.names.size == 0uL) { "Flags value $bits sets bits beyond the ${t.names.size} declared flags" }
-            for (i in t.names.indices) if (i < 64 && (bits shr i) and 1uL == 1uL) words[i / 32] = words[i / 32] or (1 shl (i % 32))
+    private fun bool(): Int = when (val b = r.byte().toInt()) {
+        0, 1 -> b
+        else -> throw IllegalArgumentException("Invalid bool $b")
+    }
+
+    private fun char(): Int {
+        val cp = r.int()
+        require(cp in 0..0x10FFFF && cp !in 0xD800..0xDFFF) { "U+${Integer.toHexString(cp).uppercase()} is not a Unicode scalar value" }
+        return cp
+    }
+
+    /** NaNs are canonicalized when lowered (the spec's deterministic profile). */
+    private fun f32Bits(): Int {
+        val bits = r.int()
+        return if (java.lang.Float.intBitsToFloat(bits).isNaN()) CanonicalAbi.CANONICAL_FLOAT32_NAN else bits
+    }
+
+    private fun f64Bits(): Long {
+        val bits = r.long()
+        return if (java.lang.Double.longBitsToDouble(bits).isNaN()) CanonicalAbi.CANONICAL_FLOAT64_NAN else bits
+    }
+
+    private fun discriminant(t: WitType.Variant): Int {
+        val index = when (CanonicalAbi.discriminantSize(t.cases.size)) {
+            1 -> r.byte().toInt() and 0xFF
+            2 -> r.short().toInt() and 0xFFFF
+            else -> r.int()
+        }
+        require(index in t.cases.indices) { "Discriminant ${unsigned(index)} out of range for ${t.cases.size} cases" }
+        return index
+    }
+
+    /** Flags arrive as the Canonical ABI's words; bits past the declared flags are a host error. */
+    private fun flagWords(t: WitType.Flags): IntArray {
+        val n = t.names.size
+        val words = when {
+            n == 0 -> IntArray(0)
+            n <= 8 -> intArrayOf(r.byte().toInt() and 0xFF)
+            n <= 16 -> intArrayOf(r.short().toInt() and 0xFFFF)
+            else -> IntArray((n + 31) / 32) { r.int() }
+        }
+        val rest = n % 32
+        if (rest != 0 && words.isNotEmpty()) {
+            require(words.last() ushr rest == 0) { "Flags value sets bits beyond the $n declared flags" }
         }
         return words
     }
-
-    /** Resolves the case index and payload, accepting every shape the Wasmtime bridge accepts. */
-    private fun variantCase(v: JsonElement, t: WitType.Variant): Pair<Int, JsonElement?> = when (t.kind) {
-        WitType.VariantKind.ENUM -> caseIndex(t, string(v)) to null
-        WitType.VariantKind.VARIANT -> {
-            val o = v as? JsonObject ?: throw IllegalArgumentException("Expected a variant object, got $v")
-            caseIndex(t, string(o["case"] ?: throw IllegalArgumentException("Missing 'case' in variant $v"))) to o["value"]
-        }
-        WitType.VariantKind.OPTION -> when {
-            v is JsonNull -> 0 to null
-            isTaggedOption(v, t.cases[1].second) -> when (val tag = (v as JsonObject).getValue("option").jsonPrimitive.content) {
-                "none" -> 0 to null
-                "some" -> 1 to (v["value"] ?: JsonNull)
-                else -> throw IllegalArgumentException("Invalid option tag '$tag'")
-            }
-            else -> 1 to v
-        }
-        WitType.VariantKind.RESULT -> {
-            val o = v.jsonObject
-            when (val tag = o.getValue("result").jsonPrimitive.content) {
-                "ok" -> 0 to o["value"]
-                "err" -> 1 to o["error"]
-                else -> throw IllegalArgumentException("Invalid result tag '$tag'")
-            }
-        }
-    }
-
-    /**
-     * Whether [v] is the tagged form of an option (`{"option": "none"}` / `{"option": "some", "value": ...}`)
-     * rather than a bare `some` payload. Generated code sends `some` bare (ADR-0006), so a payload that
-     * is itself a record with an `option` field must not be mistaken for a tag (#36): an object is a
-     * tag only if its keys are exactly those of the tagged form, and never when every field of the
-     * payload record would fit in it. Must match the Wasmtime bridge (`is_tagged_option`).
-     */
-    private fun isTaggedOption(v: JsonElement, payload: WitType?): Boolean {
-        if (v !is JsonObject) return false
-        val tag = v["option"] as? JsonPrimitive ?: return false
-        if (!tag.isString || (tag.content != "some" && tag.content != "none")) return false
-        if (!TAGGED_OPTION_KEYS.containsAll(v.keys)) return false
-        val fields = (payload as? WitType.Record)?.fields?.map { it.first } ?: return true
-        return !TAGGED_OPTION_KEYS.containsAll(fields)
-    }
-
-    private fun caseIndex(t: WitType.Variant, name: String): Int =
-        t.cases.indexOfFirst { it.first == name }.also { require(it >= 0) { "Unknown case '$name'" } }
 
     private fun coerce(value: Long, from: CanonicalAbi.CoreType, to: CanonicalAbi.CoreType): Long = when {
         from == to -> value
@@ -362,97 +361,66 @@ internal class Lowerer(private val cx: AbiContext) {
             else -> value
         }
     }
-
-    private fun missingField(name: String): Nothing = throw IllegalArgumentException("Missing record field '$name'")
-
-    private fun tupleArray(v: JsonElement, t: WitType.Tuple): JsonArray {
-        val a = v as? JsonArray ?: throw IllegalArgumentException("Expected a tuple of ${t.types.size}, got $v")
-        require(a.size == t.types.size) { "Expected a tuple of ${t.types.size}, got ${a.size} elements" }
-        return a
-    }
 }
 
-/** Keys of the tagged option form. */
-private val TAGGED_OPTION_KEYS = setOf("option", "value")
-
-/** Converts core wasm values / linear memory into JSON values. */
-internal class Lifter(private val cx: AbiContext) {
+/**
+ * Reads guest values from core wasm values / linear memory and writes them to [w] in the binary
+ * format. Values that break an ABI rule trap ([ComponentTrapException]).
+ */
+internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     class FlatReader(private val values: LongArray) {
         private var i = 0
         fun next(): Long = values[i++]
     }
 
-    fun liftFlat(t: WitType, r: FlatReader): JsonElement = when (t) {
-        WitType.Bool -> JsonPrimitive(r.next().toInt() != 0)
-        WitType.S8 -> JsonPrimitive(r.next().toInt().toByte())
-        WitType.U8 -> JsonPrimitive(r.next().toInt() and 0xFF)
-        WitType.S16 -> JsonPrimitive(r.next().toInt().toShort())
-        WitType.U16 -> JsonPrimitive(r.next().toInt() and 0xFFFF)
-        WitType.S32 -> JsonPrimitive(r.next().toInt())
-        WitType.U32 -> JsonPrimitive(r.next().toInt().toLong() and 0xFFFF_FFFFL)
-        WitType.S64 -> JsonPrimitive(r.next())
-        WitType.U64 -> u64(r.next())
-        WitType.F32 -> f32(r.next().toInt())
-        WitType.F64 -> f64(r.next())
-        WitType.Char -> charJson(r.next().toInt())
-        WitType.Str -> loadString(r.next().toInt(), r.next().toInt())
-        is WitType.ListOf -> loadList(r.next().toInt(), r.next().toInt(), t.element)
-        is WitType.Record -> JsonObject(t.fields.associate { (name, ft) -> name to liftFlat(ft, r) })
-        is WitType.Tuple -> JsonArray(t.types.map { liftFlat(it, r) })
-        is WitType.Flags -> flagsJson(IntArray((t.names.size + 31) / 32) { r.next().toInt() }, t)
-        is WitType.Variant -> {
-            val index = r.next().toInt()
-            checkDiscriminant(index, t)
-            val joined = CanonicalAbi.flatten(t).drop(1)
-            val raw = LongArray(joined.size) { r.next() }
-            val caseType = t.cases[index].second
-            val payload = caseType?.let { ct ->
-                val caseFlat = CanonicalAbi.flatten(ct)
-                liftFlat(ct, FlatReader(LongArray(caseFlat.size) { i -> uncoerce(raw[i], joined[i], caseFlat[i]) }))
+    fun liftFlat(t: WitType, r: FlatReader) {
+        when (t) {
+            WitType.Bool -> w.bool(r.next().toInt() != 0)
+            WitType.S8, WitType.U8 -> w.byte(r.next().toInt())
+            WitType.S16, WitType.U16 -> w.short(r.next().toInt())
+            WitType.S32, WitType.U32 -> w.int(r.next().toInt())
+            WitType.S64, WitType.U64 -> w.long(r.next())
+            WitType.F32 -> f32(r.next().toInt())
+            WitType.F64 -> f64(r.next())
+            WitType.Char -> char(r.next().toInt())
+            WitType.Str -> loadString(r.next().toInt(), r.next().toInt())
+            is WitType.ListOf -> loadList(r.next().toInt(), r.next().toInt(), t.element)
+            is WitType.Record -> for ((_, ft) in t.fields) liftFlat(ft, r)
+            is WitType.Tuple -> for (et in t.types) liftFlat(et, r)
+            is WitType.Flags -> flags(IntArray((t.names.size + 31) / 32) { r.next().toInt() }, t)
+            is WitType.Variant -> {
+                val index = r.next().toInt()
+                checkDiscriminant(index, t)
+                val joined = CanonicalAbi.flatten(t).drop(1)
+                val raw = LongArray(joined.size) { r.next() }
+                discriminant(t, index)
+                t.cases[index].second?.let { ct ->
+                    val caseFlat = CanonicalAbi.flatten(ct)
+                    liftFlat(ct, FlatReader(LongArray(caseFlat.size) { i -> uncoerce(raw[i], joined[i], caseFlat[i]) }))
+                }
             }
-            variantJson(t, index, payload)
+            is WitType.Own -> w.int(cx.liftOwn(t.table, r.next().toInt()))
+            is WitType.Borrow -> w.int(cx.liftBorrow(t.table, r.next().toInt()))
+            is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
-        is WitType.Own -> cx.liftOwn(t.table, r.next().toInt())
-        is WitType.Borrow -> cx.liftBorrow(t.table, r.next().toInt())
-        is WitType.Unsupported -> CanonicalAbi.unsupported(t)
     }
 
-    fun load(t: WitType, ptr: Int): JsonElement {
+    fun load(t: WitType, ptr: Int) {
         val m = cx.memory
-        return when (t) {
-            WitType.Bool -> JsonPrimitive(m.read(ptr).toInt() != 0)
-            WitType.S8 -> JsonPrimitive(m.read(ptr))
-            WitType.U8 -> JsonPrimitive(m.read(ptr).toInt() and 0xFF)
-            WitType.S16 -> JsonPrimitive(m.readShort(ptr))
-            WitType.U16 -> JsonPrimitive(m.readShort(ptr).toInt() and 0xFFFF)
-            WitType.S32 -> JsonPrimitive(m.readInt(ptr))
-            WitType.U32 -> JsonPrimitive(m.readInt(ptr).toLong() and 0xFFFF_FFFFL)
-            WitType.S64 -> JsonPrimitive(m.readLong(ptr))
-            WitType.U64 -> u64(m.readLong(ptr))
+        when (t) {
+            WitType.Bool -> w.bool(m.read(ptr).toInt() != 0)
+            WitType.S8, WitType.U8 -> w.byte(m.read(ptr).toInt())
+            WitType.S16, WitType.U16 -> w.short(m.readShort(ptr).toInt())
+            WitType.S32, WitType.U32 -> w.int(m.readInt(ptr))
+            WitType.S64, WitType.U64 -> w.long(m.readLong(ptr))
             WitType.F32 -> f32(m.readInt(ptr))
             WitType.F64 -> f64(m.readLong(ptr))
-            WitType.Char -> charJson(m.readInt(ptr))
+            WitType.Char -> char(m.readInt(ptr))
             WitType.Str -> loadString(m.readInt(ptr), m.readInt(ptr + 4))
             is WitType.ListOf -> loadList(m.readInt(ptr), m.readInt(ptr + 4), t.element)
-            is WitType.Record -> {
-                var off = 0
-                JsonObject(t.fields.associate { (name, ft) ->
-                    off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
-                    val value = load(ft, ptr + off)
-                    off += CanonicalAbi.sizeOf(ft)
-                    name to value
-                })
-            }
-            is WitType.Tuple -> {
-                var off = 0
-                JsonArray(t.types.map { et ->
-                    off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(et))
-                    val value = load(et, ptr + off)
-                    off += CanonicalAbi.sizeOf(et)
-                    value
-                })
-            }
-            is WitType.Flags -> flagsJson(
+            is WitType.Record -> loadFields(t.fields.map { it.second }, ptr)
+            is WitType.Tuple -> loadFields(t.types, ptr)
+            is WitType.Flags -> flags(
                 when (CanonicalAbi.sizeOf(t)) {
                     0 -> IntArray(0)
                     1 -> intArrayOf(m.read(ptr).toInt() and 0xFF)
@@ -469,77 +437,105 @@ internal class Lifter(private val cx: AbiContext) {
                     else -> m.readInt(ptr)
                 }
                 checkDiscriminant(index, t)
+                discriminant(t, index)
                 val maxAlign = t.cases.maxOfOrNull { c -> c.second?.let { CanonicalAbi.alignOf(it) } ?: 1 } ?: 1
-                val payload = t.cases[index].second?.let { load(it, ptr + CanonicalAbi.alignTo(discSize, maxAlign)) }
-                variantJson(t, index, payload)
+                t.cases[index].second?.let { load(it, ptr + CanonicalAbi.alignTo(discSize, maxAlign)) }
             }
-            is WitType.Own -> cx.liftOwn(t.table, m.readInt(ptr))
-            is WitType.Borrow -> cx.liftBorrow(t.table, m.readInt(ptr))
+            is WitType.Own -> w.int(cx.liftOwn(t.table, m.readInt(ptr)))
+            is WitType.Borrow -> w.int(cx.liftBorrow(t.table, m.readInt(ptr)))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
 
-    /** Loads a tuple from a guest-provided pointer (spilled params or results), which must be aligned and in bounds. */
-    fun loadTuple(ptr: Int, types: List<WitType>): List<JsonElement> {
-        val tuple = WitType.Tuple(types)
-        checkRange(cx.memory, ptr, CanonicalAbi.sizeOf(tuple).toLong(), CanonicalAbi.alignOf(tuple), "tuple pointer")
-        return load(tuple, ptr).jsonArray
+    private fun loadFields(types: List<WitType>, ptr: Int) {
+        var off = 0
+        for (ft in types) {
+            off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
+            load(ft, ptr + off)
+            off += CanonicalAbi.sizeOf(ft)
+        }
     }
 
-    private fun loadString(ptr: Int, taggedLen: Int): JsonPrimitive {
+    /** Loads a tuple from a guest-provided pointer (spilled params or results), which must be aligned and in bounds. */
+    fun loadTuple(ptr: Int, types: List<WitType>) {
+        val tuple = WitType.Tuple(types)
+        checkRange(cx.memory, ptr, CanonicalAbi.sizeOf(tuple).toLong(), CanonicalAbi.alignOf(tuple), "tuple pointer")
+        load(tuple, ptr)
+    }
+
+    /** A UTF-8 guest string is validated and copied as is; other encodings are transcoded to UTF-8. */
+    private fun loadString(ptr: Int, taggedLen: Int) {
         val m = cx.memory
         val tagged = taggedLen.toLong() and 0xFFFF_FFFFL
         val utf16Tag = UTF16_TAG.toLong() and 0xFFFF_FFFFL
-        val (align, byteLength, charset) = when (cx.encoding) {
-            StringEncoding.UTF8 -> Triple(1, tagged, Charsets.UTF_8)
-            StringEncoding.UTF16 -> Triple(2, 2 * tagged, Charsets.UTF_16LE)
+        val (align, byteLength, kind) = when (cx.encoding) {
+            StringEncoding.UTF8 -> Triple(1, tagged, StringEncoding.UTF8)
+            StringEncoding.UTF16 -> Triple(2, 2 * tagged, StringEncoding.UTF16)
             StringEncoding.LATIN1_UTF16 ->
-                if (tagged and utf16Tag != 0L) Triple(2, 2 * (tagged xor utf16Tag), Charsets.UTF_16LE)
-                else Triple(2, tagged, Charsets.ISO_8859_1)
+                if (tagged and utf16Tag != 0L) Triple(2, 2 * (tagged xor utf16Tag), StringEncoding.UTF16)
+                else Triple(2, tagged, StringEncoding.LATIN1_UTF16)
         }
         if (byteLength > CanonicalAbi.MAX_STRING_BYTE_LENGTH) trap("String byte length $byteLength exceeds the maximum")
         checkRange(m, ptr, byteLength, align, "string")
-        if (byteLength == 0L) return JsonPrimitive("")
+        if (byteLength == 0L) {
+            w.int(0)
+            return
+        }
         val bytes = m.readBytes(ptr, byteLength.toInt())
-        return try {
-            JsonPrimitive(decoder(charset).decode(ByteBuffer.wrap(bytes)).toString())
-        } catch (e: CharacterCodingException) {
-            throw ComponentTrapException("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}", e)
+        when (kind) {
+            StringEncoding.UTF8 -> {
+                if (!Utf8.isValid(bytes, 0, bytes.size)) trap("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}")
+                w.int(bytes.size)
+                w.raw(bytes, 0, bytes.size)
+            }
+            StringEncoding.UTF16 -> {
+                val chars = CharArray(bytes.size / 2) { i -> ((bytes[2 * i].toInt() and 0xFF) or ((bytes[2 * i + 1].toInt() and 0xFF) shl 8)).toChar() }
+                if (!Utf8.isValidUtf16(chars)) trap("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}")
+                w.string(String(chars))
+            }
+            StringEncoding.LATIN1_UTF16 -> w.string(String(bytes, Charsets.ISO_8859_1))
         }
     }
 
-    private fun loadList(ptr: Int, len: Int, element: WitType): JsonArray {
+    /** Lists of integers are copied as is; other elements are loaded one by one. */
+    private fun loadList(ptr: Int, len: Int, element: WitType) {
         val size = CanonicalAbi.sizeOf(element)
         val length = len.toLong() and 0xFFFF_FFFFL
         val byteLength = length * size
         if (byteLength > CanonicalAbi.MAX_LIST_BYTE_LENGTH) trap("List byte length $byteLength exceeds the maximum")
         checkRange(cx.memory, ptr, byteLength, CanonicalAbi.alignOf(element), "list")
-        return JsonArray(List(length.toInt()) { i -> load(element, ptr + i * size) })
+        w.length(length.toInt())
+        if (CanonicalAbi.isRawInteger(element)) {
+            if (byteLength > 0) w.raw(cx.memory.readBytes(ptr, byteLength.toInt()), 0, byteLength.toInt())
+        } else {
+            for (i in 0 until length.toInt()) load(element, ptr + i * size)
+        }
     }
 
     private fun checkDiscriminant(index: Int, t: WitType.Variant) {
         if (index !in t.cases.indices) trap("Discriminant ${unsigned(index)} out of range for ${t.cases.size} cases")
     }
 
-    /** Bits past the declared flags are ignored, as in the spec's `unpack_flags_from_int`. */
-    private fun flagsJson(raw: IntArray, t: WitType.Flags): JsonPrimitive {
-        val words = raw.copyOf()
-        val rest = t.names.size % 32
-        if (rest != 0 && words.isNotEmpty()) words[words.size - 1] = words[words.size - 1] and ((1 shl rest) - 1)
-        var bits = 0uL
-        words.forEachIndexed { i, w -> if (i < 2) bits = bits or ((w.toULong() and 0xFFFF_FFFFuL) shl (32 * i)) }
-        return if (bits <= Long.MAX_VALUE.toULong()) JsonPrimitive(bits.toLong()) else JsonPrimitive(bits.toString())
+    private fun discriminant(t: WitType.Variant, index: Int) {
+        when (CanonicalAbi.discriminantSize(t.cases.size)) {
+            1 -> w.byte(index)
+            2 -> w.short(index)
+            else -> w.int(index)
+        }
     }
 
-    private fun variantJson(t: WitType.Variant, index: Int, payload: JsonElement?): JsonElement = when (t.kind) {
-        WitType.VariantKind.ENUM -> JsonPrimitive(t.cases[index].first)
-        WitType.VariantKind.VARIANT -> JsonObject(mapOf("case" to JsonPrimitive(t.cases[index].first), "value" to (payload ?: JsonNull)))
-        WitType.VariantKind.OPTION ->
-            if (index == 0) JsonObject(mapOf("option" to JsonPrimitive("none")))
-            else JsonObject(mapOf("option" to JsonPrimitive("some"), "value" to (payload ?: JsonNull)))
-        WitType.VariantKind.RESULT ->
-            if (index == 0) JsonObject(mapOf("result" to JsonPrimitive("ok"), "value" to (payload ?: JsonNull)))
-            else JsonObject(mapOf("result" to JsonPrimitive("err"), "error" to (payload ?: JsonNull)))
+    /** Bits past the declared flags are ignored, as in the spec's `unpack_flags_from_int`. */
+    private fun flags(raw: IntArray, t: WitType.Flags) {
+        val n = t.names.size
+        val words = raw.copyOf()
+        val rest = n % 32
+        if (rest != 0 && words.isNotEmpty()) words[words.size - 1] = words[words.size - 1] and ((1 shl rest) - 1)
+        when {
+            n == 0 -> Unit
+            n <= 8 -> w.byte(words[0])
+            n <= 16 -> w.short(words[0])
+            else -> words.forEach { w.int(it) }
+        }
     }
 
     private fun uncoerce(value: Long, from: CanonicalAbi.CoreType, to: CanonicalAbi.CoreType): Long = when {
@@ -549,23 +545,19 @@ internal class Lifter(private val cx: AbiContext) {
         else -> value
     }
 
-    private fun charJson(codePoint: Int): JsonPrimitive {
+    private fun char(codePoint: Int) {
         if (codePoint !in 0..0x10FFFF || codePoint in 0xD800..0xDFFF) trap("Invalid char code point ${unsigned(codePoint)}")
-        return JsonPrimitive(String(Character.toChars(codePoint)))
+        w.int(codePoint)
     }
 
     /** NaNs are canonicalized when lifted (spec `decode_i32_as_float` / `decode_i64_as_float`). */
-    private fun f32(bits: Int): JsonPrimitive {
-        val f = java.lang.Float.intBitsToFloat(bits)
-        return JsonPrimitive(if (f.isNaN()) java.lang.Float.intBitsToFloat(CanonicalAbi.CANONICAL_FLOAT32_NAN) else f)
+    private fun f32(bits: Int) {
+        w.int(if (java.lang.Float.intBitsToFloat(bits).isNaN()) CanonicalAbi.CANONICAL_FLOAT32_NAN else bits)
     }
 
-    private fun f64(bits: Long): JsonPrimitive {
-        val d = java.lang.Double.longBitsToDouble(bits)
-        return JsonPrimitive(if (d.isNaN()) java.lang.Double.longBitsToDouble(CanonicalAbi.CANONICAL_FLOAT64_NAN) else d)
+    private fun f64(bits: Long) {
+        w.long(if (java.lang.Double.longBitsToDouble(bits).isNaN()) CanonicalAbi.CANONICAL_FLOAT64_NAN else bits)
     }
-
-    private fun u64(v: Long): JsonPrimitive = if (v >= 0) JsonPrimitive(v) else JsonPrimitive(v.toULong().toString())
 }
 
 private const val UTF16_TAG = 1 shl 31
@@ -582,78 +574,55 @@ internal fun checkRange(memory: Memory, ptr: Int, byteLength: Long, align: Int, 
     if (p + byteLength > size) trap("Out-of-bounds $what: [$p, ${p + byteLength}) exceeds linear memory of $size bytes")
 }
 
-private fun decoder(charset: Charset) = charset.newDecoder()
-    .onMalformedInput(CodingErrorAction.REPORT)
-    .onUnmappableCharacter(CodingErrorAction.REPORT)
-
-private fun encodeStrict(s: String, charset: Charset): ByteArray {
-    val buf = try {
-        charset.newEncoder()
-            .onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT)
-            .encode(java.nio.CharBuffer.wrap(s))
-    } catch (e: CharacterCodingException) {
-        throw IllegalArgumentException("String is not valid Unicode (lone surrogate?)", e)
-    }
-    return ByteArray(buf.remaining()).also { buf.get(it) }
-}
-
 /**
- * The JSON primitive of a host value for a WIT scalar. Like the Wasmtime bridge, JSON types must
- * match: `null` is not a value of any scalar, numbers and booleans are not strings and vice versa
- * (#36). Only u64 also accepts a decimal string, for values beyond what JSON numbers carry exactly.
+ * Encoding checks without `CharsetDecoder`, which is costly to create on Android (#58).
  */
-private fun primitive(v: JsonElement, type: String, string: Boolean = false): JsonPrimitive {
-    val p = v as? JsonPrimitive
-    if (p == null || p is JsonNull || p.isString != string) throw IllegalArgumentException("Expected $type, got $v")
-    return p
-}
-
-private fun string(v: JsonElement): String = primitive(v, "string", string = true).content
-
-private fun bool(v: JsonElement): Boolean =
-    primitive(v, "bool").content.toBooleanStrictOrNull() ?: throw IllegalArgumentException("Expected bool, got $v")
-
-/** Integers up to 32 bits, range-checked against the WIT type (no silent truncation). */
-private fun integer(v: JsonElement, t: WitType): Long {
-    val (name, range) = when (t) {
-        WitType.S8 -> "s8" to (-128L..127L)
-        WitType.U8 -> "u8" to (0L..0xFFL)
-        WitType.S16 -> "s16" to (-32768L..32767L)
-        WitType.U16 -> "u16" to (0L..0xFFFFL)
-        WitType.S32 -> "s32" to (Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong())
-        WitType.U32 -> "u32" to (0L..0xFFFF_FFFFL)
-        else -> error("not a small integer type: $t")
+internal object Utf8 {
+    /** Well-formed UTF-8 (no overlong forms, surrogates or code points past U+10FFFF). */
+    fun isValid(a: ByteArray, offset: Int, length: Int): Boolean {
+        var i = offset
+        val end = offset + length
+        while (i < end) {
+            val b0 = a[i].toInt() and 0xFF
+            if (b0 < 0x80) {
+                i++
+                continue
+            }
+            val n = when {
+                b0 in 0xC2..0xDF -> 1
+                b0 in 0xE0..0xEF -> 2
+                b0 in 0xF0..0xF4 -> 3
+                else -> return false
+            }
+            if (i + n >= end) return false
+            val b1 = a[i + 1].toInt() and 0xFF
+            when (b0) {
+                0xE0 -> if (b1 !in 0xA0..0xBF) return false
+                0xED -> if (b1 !in 0x80..0x9F) return false
+                0xF0 -> if (b1 !in 0x90..0xBF) return false
+                0xF4 -> if (b1 !in 0x80..0x8F) return false
+                else -> if (b1 !in 0x80..0xBF) return false
+            }
+            for (k in 2..n) if ((a[i + k].toInt() and 0xC0) != 0x80) return false
+            i += n + 1
+        }
+        return true
     }
-    val n = primitive(v, name).content.toLongOrNull() ?: throw IllegalArgumentException("Expected $name, got $v")
-    require(n in range) { "Value $n is out of range for $name" }
-    return n
-}
 
-private fun long(v: JsonElement): Long =
-    primitive(v, "s64").content.toLongOrNull() ?: throw IllegalArgumentException("Expected s64, got $v")
-
-private fun ulong(v: JsonElement): Long {
-    val p = v as? JsonPrimitive
-    if (p == null || p is JsonNull) throw IllegalArgumentException("Expected u64, got $v")
-    return (p.content.toULongOrNull() ?: throw IllegalArgumentException("Expected u64, got $v")).toLong()
-}
-
-private fun char(v: JsonElement): Int {
-    val s = primitive(v, "char", string = true).content
-    require(s.isNotEmpty() && s.codePointCount(0, s.length) == 1) { "Expected a single char, got \"$s\"" }
-    val cp = s.codePointAt(0)
-    require(cp !in 0xD800..0xDFFF) { "char cannot be a surrogate code point" }
-    return cp
-}
-
-/** NaNs are canonicalized when lowered (the spec's deterministic profile). */
-private fun f32Bits(v: JsonElement): Int {
-    val f = primitive(v, "f32").content.toFloatOrNull() ?: throw IllegalArgumentException("Expected f32, got $v")
-    return if (f.isNaN()) CanonicalAbi.CANONICAL_FLOAT32_NAN else java.lang.Float.floatToRawIntBits(f)
-}
-
-private fun f64Bits(v: JsonElement): Long {
-    val d = primitive(v, "f64").content.toDoubleOrNull() ?: throw IllegalArgumentException("Expected f64, got $v")
-    return if (d.isNaN()) CanonicalAbi.CANONICAL_FLOAT64_NAN else java.lang.Double.doubleToRawLongBits(d)
+    /** Every surrogate is part of a pair. */
+    fun isValidUtf16(chars: CharArray): Boolean {
+        var i = 0
+        while (i < chars.size) {
+            val c = chars[i]
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 >= chars.size || !Character.isLowSurrogate(chars[i + 1])) return false
+                i += 2
+            } else if (Character.isLowSurrogate(c)) {
+                return false
+            } else {
+                i++
+            }
+        }
+        return true
+    }
 }
