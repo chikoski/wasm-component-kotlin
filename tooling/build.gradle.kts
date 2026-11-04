@@ -44,3 +44,30 @@ tasks.test {
     useJUnitPlatform()
     systemProperty("wasm2kt.fixtures", rootProject.file("fixtures").absolutePath)
 }
+
+// The typed bridges carry the generic bridge's core crate and lock file (ADR-0016).
+val bridgeCore = rootProject.file("rust-bridge")
+val bridgeCoreFiles = tasks.register("bridgeCoreFileList") {
+    val out = layout.buildDirectory.file("generated/bridge-core/wasm2kt/bridge-core/files.txt")
+    inputs.dir(bridgeCore.resolve("core/src"))
+    inputs.file(bridgeCore.resolve("core/Cargo.toml"))
+    outputs.file(out)
+    doLast {
+        val root = bridgeCore.resolve("core")
+        val names = listOf("Cargo.toml") + root.resolve("src").walkTopDown().filter { it.isFile }
+            .map { it.relativeTo(root).invariantSeparatorsPath }.sorted()
+        out.get().asFile.apply { parentFile.mkdirs() }.writeText(names.joinToString("\n", postfix = "\n"))
+    }
+}
+tasks.processResources {
+    dependsOn(bridgeCoreFiles)
+    from(layout.buildDirectory.dir("generated/bridge-core"))
+    from(bridgeCore.resolve("core")) {
+        include("Cargo.toml", "src/**")
+        into("wasm2kt/bridge-core/core")
+    }
+    from(bridgeCore) {
+        include("Cargo.toml", "Cargo.lock")
+        into("wasm2kt/bridge-core")
+    }
+}

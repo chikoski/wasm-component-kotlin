@@ -3,7 +3,7 @@ package wasm2kt
 import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.nio.file.Files
@@ -16,7 +16,10 @@ import kotlin.test.assertEquals
  * `char` -> `CodePoint`, world naming), exercised end to end on both backends with one harness.
  * The fixture is built from fixtures/src/types.
  */
-class TypeMappingE2ETest {
+open class TypeMappingE2ETest {
+    /** The Wasmtime sessions open as this typed bridge component (ADR-0016); see [TypedTypeMappingE2ETest]. */
+    protected open val bridgeId: String? = null
+
     private val wasmToolsBin: String = System.getenv("WASM_TOOLS_BIN")?.takeIf { it.isNotBlank() }
         ?: Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools").takeIf { Files.isExecutable(it) }?.toString()
         ?: "wasm-tools"
@@ -87,7 +90,8 @@ class TypeMappingE2ETest {
 
     private fun compile(tempDir: Path): ClassLoader {
         val wit = Paths.get(requireNotNull(javaClass.getResource("/fixtures/types.wit")).toURI())
-        Wasm2KtCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, wit.toString()))
+        val bridge = bridgeId?.let { listOf("--bridge-id", it) }.orEmpty()
+        GenerateCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg) + bridge + wit.toString())
         val pkgDir = tempDir.resolve(pkg.replace('.', '/'))
         Files.writeString(pkgDir.resolve("Harness.kt"), harness)
         val classes = tempDir.resolve("classes")

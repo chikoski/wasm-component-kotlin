@@ -1,7 +1,6 @@
 # Kotlin から wasm の関数を呼び出す経路
 
-> [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 1（JSON 境界をバイナリ形式に置き換える）のあとの経路を説明します（2026-11-04）。
-> 進め方の 2（Wasmtime の型付きブリッジ）は、まだ入っていません。3.3 節にその予定の形を書きます。
+> [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 1（JSON 境界をバイナリ形式に置き換える）と 2（Wasmtime の型付きブリッジ、[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）のあとの経路を説明します（2026-11-04）。
 > 時間の数値は [docs/performance.md](performance.md) のものです。
 
 ## 1. 登場するもの
@@ -15,7 +14,8 @@
 | `WitWriter` / `WitReader` | `runtime-api` | 値のバイナリ形式（ADR-0015）の読み書き |
 | `ChicoryComponent` | `runtime-chicory` | 関数名の解決、Canonical ABI の lower / lift、core 関数の呼び出し |
 | `FfmWasmtimeBridge` / `JniWasmtimeBridge` | `runtime-wasmtime` | ネイティブ関数の呼び出し（ダウンコール）と、ホスト import のコールバック（アップコール） |
-| rust-bridge | `rust-bridge/src/wire.rs`、`lib.rs` | バイナリ形式と `Val` の変換、Wasmtime の `Func::call` |
+| rust-bridge | `rust-bridge/core`（共通部）、`rust-bridge/src`（汎用ブリッジ） | セッション、C ABI / JNI。汎用の経路は、バイナリ形式と `Val` の変換と `Func::call` |
+| 型付きブリッジ | tooling が生成するクレート（`TypedBridge`、ADR-0016） | コンポーネントごとの Rust の型と、`Func::typed` / `func_wrap` による型付きの呼び出し |
 | `Linker` | `runtime-api` | ホスト import のキーから、生成した `HostFunction` を引く（ADR-0011） |
 
 ## 2. 共通: 名前の解決
@@ -78,16 +78,38 @@ sequenceDiagram
 * JNI では、`MemorySegment` の代わりに `byte[]` で受け渡す
 * バッファは呼び出しごとに確保する（4 節の C1）
 
-### 3.3 エクスポートの呼び出し: Wasmtime（型付きブリッジ、ADR-0015 の進め方の 2。未実装）
+### 3.3 エクスポートの呼び出し: Wasmtime（型付きブリッジ）
 
-`bindgen!` で生成した型付きの関数を呼びます。形式 → Rust の型（`Vec<u8>` / `String` はまとめてコピー）→ 型付きの関数 → 形式、の順で、`Val` を通りません。
-Kotlin 側の形式と生成コードは変わりません。
+セッションをコンポーネントの ID 付きで開いたとき（`wasm2kt generate --bridge-id`）の経路です。
+
+```mermaid
+sequenceDiagram
+    participant G as 生成した関数
+    participant F as FfmWasmtimeBridge
+    participant R as 型付きブリッジ（生成した Rust）
+    participant W as Wasmtime
+    Note over G: ① encode → WitWriter
+    G->>F: invoke(session, index, writer)
+    F->>R: wasm2kt_session_invoke(session, index, ptr, len, &out, &outlen)
+    Note over R: ② 形式 → Rust の型<br/>（Vec<u8> / String はまとめてコピー。record は derive した struct）
+    R->>W: TypedFunc::call
+    Note over W: Rust の型を lower / lift（list<u8> はまとめてコピー）
+    Note over R: ③ Rust の型 → 形式
+    R-->>F: 戻り値のバッファ
+    F-->>G: WitReader
+    Note over G: ④ decode
+```
+
+* `Val` を通らない。`list<u8>` と文字列は、どの段階でもまとめてコピーされる
+* 関数名の解決（2 節）は汎用の経路と同じ処理で、見つけた関数の正規の名前で、型付きの呼び出しを引く
+* 型付きの呼び出しを生成できなかった関数は、汎用の経路（3.2 節）で呼ぶ
+* Kotlin 側の形式と生成コードは変わらない。違うのは、セッションを開くときに ID を渡すことだけ
 
 ### 3.4 ホスト import
 
 Chicory も Wasmtime も、同じ順序です。
 
-1. バックエンドが、引数を形式に書く（Chicory は Lifter、Wasmtime は `wire::write_val`）
+1. バックエンドが、引数を形式に書く（Chicory は Lifter、Wasmtime は `wire::write_val`、型付きブリッジは `func_wrap` に登録した生成コード）
 2. import のインデックスでコールバックする（Wasmtime はアップコール `cb(index, key, args, len, &out, &outlen)`）
 3. 生成した `HostFunction` が `WitReader` から静的にデコードし、実装を呼び、戻り値を `WitWriter` に書く
 4. バックエンドが、戻り値を lower する（Wasmtime は Kotlin が `wasm2kt_alloc_bytes` の領域にコピーし、Rust が `wire::read_val` で読む）

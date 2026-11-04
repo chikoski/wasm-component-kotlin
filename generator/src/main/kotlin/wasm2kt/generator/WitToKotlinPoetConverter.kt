@@ -121,8 +121,16 @@ class WitToKotlinPoetConverter(
      * (see [manifest]), for a library other bindings map their imports to (ADR-0014).
      */
     private val interfacesOnly: Boolean = false,
+    /**
+     * The component's ID in a typed Wasmtime bridge (ADR-0016): the Wasmtime sessions open with it, so
+     * the bridge library must be a typed bridge that contains it. `null` uses the generic path.
+     */
+    private val bridgeId: String? = null,
 ) {
     private val generatedTupleArities = mutableSetOf<Int>()
+
+    /** `, "<bridgeId>"` for the bridges' `open*` calls, or nothing. */
+    private val bridgeIdArg: CodeBlock = bridgeId?.let { CodeBlock.of(", %S", it) } ?: CodeBlock.of("")
 
     /** Imported interfaces mapped to existing packages, by interface id (ADR-0014). */
     private var mappedPackages: Map<Int, String> = emptyMap()
@@ -2843,7 +2851,7 @@ class WitToKotlinPoetConverter(
                                     .build(),
                             )
                             .returns(ffmSessionClass)
-                            .addStatement("return %T(bridge, bridge.openSession(wasmPath, imports))", ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openSession(wasmPath, imports%L))", ffmSessionClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2856,7 +2864,7 @@ class WitToKotlinPoetConverter(
                                     .build(),
                             )
                             .returns(ffmSessionClass)
-                            .addStatement("return %T(bridge, bridge.openSessionBytes(wasmBytes, imports))", ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openSessionBytes(wasmBytes, imports%L))", ffmSessionClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2866,7 +2874,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("imports", anyNullable)
                             .addParameter(ParameterSpec.builder("bridge", ffmBridgeClass).defaultValue("%T.getDefault()", ffmBridgeClass).build())
                             .returns(ffmSessionClass)
-                            .addStatement("return %T(bridge, bridge.openPrecompiledSession(cwasmPath, imports))", ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openPrecompiledSession(cwasmPath, imports%L))", ffmSessionClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2876,7 +2884,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("imports", anyNullable)
                             .addParameter(ParameterSpec.builder("bridge", ffmBridgeClass).defaultValue("%T.getDefault()", ffmBridgeClass).build())
                             .returns(ffmSessionClass)
-                            .addStatement("return %T(bridge, bridge.openPrecompiledSessionBytes(cwasmBytes, imports))", ffmSessionClass)
+                            .addStatement("return %T(bridge, bridge.openPrecompiledSessionBytes(cwasmBytes, imports%L))", ffmSessionClass, bridgeIdArg)
                             .build(),
                     )
                     .build(),
@@ -2936,7 +2944,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("wasmPath", pathClass)
                             .addParameter("imports", anyNullable)
                             .returns(jniSessionClass)
-                            .addStatement("return %T(%T.openSession(wasmPath, imports))", jniSessionClass, jniBridgeClass)
+                            .addStatement("return %T(%T.openSession(wasmPath, imports%L))", jniSessionClass, jniBridgeClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2944,7 +2952,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("wasmBytes", byteArrayClass)
                             .addParameter("imports", anyNullable)
                             .returns(jniSessionClass)
-                            .addStatement("return %T(%T.openSessionBytes(wasmBytes, imports))", jniSessionClass, jniBridgeClass)
+                            .addStatement("return %T(%T.openSessionBytes(wasmBytes, imports%L))", jniSessionClass, jniBridgeClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2953,7 +2961,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("cwasmPath", pathClass)
                             .addParameter("imports", anyNullable)
                             .returns(jniSessionClass)
-                            .addStatement("return %T(%T.openPrecompiledSession(cwasmPath, imports))", jniSessionClass, jniBridgeClass)
+                            .addStatement("return %T(%T.openPrecompiledSession(cwasmPath, imports%L))", jniSessionClass, jniBridgeClass, bridgeIdArg)
                             .build(),
                     )
                     .addFunction(
@@ -2962,7 +2970,7 @@ class WitToKotlinPoetConverter(
                             .addParameter("cwasmBytes", byteArrayClass)
                             .addParameter("imports", anyNullable)
                             .returns(jniSessionClass)
-                            .addStatement("return %T(%T.openPrecompiledSessionBytes(cwasmBytes, imports))", jniSessionClass, jniBridgeClass)
+                            .addStatement("return %T(%T.openPrecompiledSessionBytes(cwasmBytes, imports%L))", jniSessionClass, jniBridgeClass, bridgeIdArg)
                             .build(),
                     )
                     .build(),

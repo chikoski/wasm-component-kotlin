@@ -8,6 +8,7 @@ plugins {
 
 dependencies {
     implementation(project(":generator"))
+    implementation(project(":tooling"))
     implementation(libs.clikt)
 }
 

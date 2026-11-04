@@ -3,7 +3,7 @@ package wasm2kt
 import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.nio.file.Files
@@ -26,7 +26,7 @@ class ChicoryGeneratedBindingsTest {
     /** Generates bindings for [wit] into [pkg], compiles them with [harness], and runs `run(component)`. */
     private fun generateCompileRun(tempDir: Path, wit: String, pkg: String, worldFile: String, harness: String, component: ComponentBackendFactory): String {
         val witPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$wit.wit")).toURI())
-        Wasm2KtCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, witPath.toString()))
+        GenerateCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, witPath.toString()))
 
         val pkgDir = tempDir.resolve(pkg.replace('.', '/'))
         val harnessPath = pkgDir.resolve("Harness.kt")

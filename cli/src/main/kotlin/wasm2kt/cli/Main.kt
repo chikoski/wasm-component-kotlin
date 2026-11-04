@@ -3,6 +3,7 @@ package wasm2kt.cli
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.main
+import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.optional
 import com.github.ajalt.clikt.parameters.options.default
@@ -15,11 +16,35 @@ import com.github.ajalt.clikt.parameters.types.path
 import wasm2kt.ast.WitResolve
 import wasm2kt.generator.InterfaceManifest
 import wasm2kt.generator.WitToKotlinPoetConverter
+import wasm2kt.tooling.TypedBridge
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 
+/** `wasm2kt`: one subcommand per build step, so each fits a task runner (make, just, ...). */
 class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
+    init {
+        subcommands(GenerateCommand(), BridgeCommand())
+    }
+
+    override fun help(context: Context): String =
+        "Build steps for WebAssembly components in Kotlin: generate bindings, build a typed Wasmtime bridge."
+
+    override fun run() = Unit
+
+    companion object {
+        private val SUBCOMMANDS = setOf("generate", "bridge")
+
+        /** `wasm2kt <input> -o ... -p ...` (without a subcommand) is `wasm2kt generate ...`. */
+        fun withDefaultSubcommand(args: List<String>): List<String> {
+            val first = args.firstOrNull() ?: return args
+            return if (first in SUBCOMMANDS || first == "-h" || first == "--help") args else listOf("generate") + args
+        }
+    }
+}
+
+/** `wasm2kt generate`: Kotlin bindings for a world. */
+class GenerateCommand : CliktCommand(name = "generate") {
     override fun help(context: Context): String =
         "Generate type-safe Kotlin host bindings from WebAssembly Components / WIT definitions."
 
@@ -94,6 +119,12 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
         help = "Override for the wasm-tools binary path",
     ).default("wasm-tools")
 
+    private val bridgeId: String? by option(
+        "--bridge-id",
+        help = "Open the Wasmtime sessions as this component of a typed bridge (see `wasm2kt bridge`); " +
+            "the bridge library must then be a typed bridge that contains it (ADR-0016)",
+    )
+
     override fun run() {
         val jsonAst = if (fromJson) {
             val path = inputPath
@@ -120,6 +151,7 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
             },
             libraryManifests = if (noLibraryInterfaces) emptyList() else InterfaceManifest.readAll(libraries),
             interfacesOnly = interfacesOnly,
+            bridgeId = bridgeId,
         )
 
         val fileSpecs = converter.generate()
@@ -131,6 +163,10 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
     }
 
     companion object {
+        /** The WIT JSON of [path]: a `.json` file as is, otherwise from `wasm-tools component wit --json`. */
+        fun witJson(wasmToolsExecutable: String, path: Path): String =
+            if (path.toString().endsWith(".json")) Files.readString(path) else extractWitJsonViaWasmTools(wasmToolsExecutable, path)
+
         fun extractWitJsonViaWasmTools(wasmToolsExecutable: String, targetPath: Path): String {
             val process = ProcessBuilder(
                 wasmToolsExecutable,
@@ -158,4 +194,62 @@ class Wasm2KtCommand : CliktCommand(name = "wasm2kt") {
     }
 }
 
-fun main(args: Array<String>) = Wasm2KtCommand().main(args)
+/**
+ * `wasm2kt bridge`: the typed Wasmtime bridge (ADR-0016) of a project's components, as one Cargo crate
+ * and one native library. Each component's ID must match its bindings' `wasm2kt generate --bridge-id`.
+ */
+class BridgeCommand : CliktCommand(name = "bridge") {
+    override fun help(context: Context): String =
+        "Generate the typed Wasmtime bridge crate for components (and build it with --build)."
+
+    private val outputDir: Path by option("-o", "--output", help = "Directory of the generated Cargo crate").path().required()
+
+    private val components: List<Pair<String, Path>> by option(
+        "--component",
+        metavar = "ID=PATH",
+        help = "A component of the bridge: its ID (the bindings' --bridge-id) and its .wasm, .wit or WIT JSON. Repeatable",
+    ).convert { value ->
+        val id = value.substringBefore('=', "")
+        val path = value.substringAfter('=', "")
+        if (id.isEmpty() || path.isEmpty()) fail("expected ID=PATH, got '$value'")
+        id to Path.of(path)
+    }.multiple(required = true)
+
+    private val worlds: List<Pair<String, String>> by option(
+        "--world",
+        metavar = "ID=WORLD",
+        help = "The world of a component whose WIT defines several. Repeatable",
+    ).convert { value ->
+        val id = value.substringBefore('=', "")
+        val world = value.substringAfter('=', "")
+        if (id.isEmpty() || world.isEmpty()) fail("expected ID=WORLD, got '$value'")
+        id to world
+    }.multiple()
+
+    private val build: Boolean by option("--build", help = "Also run cargo build --release; prints the library's path").flag(default = false)
+
+    private val target: String? by option("--target", help = "Rust target triple to build for (default: the host)")
+
+    private val targetDir: Path? by option("--target-dir", help = "Cargo's target directory (share it between builds to compile Wasmtime once)").path()
+
+    private val cargo: String by option("--cargo", help = "Override for the cargo binary path").default("cargo")
+
+    private val wasmToolsPath: String by option("--wasm-tools-path", help = "Override for the wasm-tools binary path").default("wasm-tools")
+
+    override fun run() {
+        val worldOf = worlds.toMap()
+        val unknown = worldOf.keys - components.map { it.first }.toSet()
+        require(unknown.isEmpty()) { "--world names unknown components: ${unknown.joinToString()}" }
+        TypedBridge.generateCrate(
+            components.map { (id, path) ->
+                TypedBridge.Component(id, WitResolve.parse(GenerateCommand.witJson(wasmToolsPath, path)), worldOf[id])
+            },
+            outputDir,
+        )
+        if (build) {
+            echo(TypedBridge.cargoBuild(outputDir, targetDir, target, cargo).toAbsolutePath())
+        }
+    }
+}
+
+fun main(args: Array<String>) = Wasm2KtCommand().main(Wasm2KtCommand.withDefaultSubcommand(args.toList()))

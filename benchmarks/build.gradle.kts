@@ -5,6 +5,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 //
 //   ./gradlew -Pwasm2kt.bench :benchmarks:bench        # steady-state per-call costs
 //   ./gradlew -Pwasm2kt.bench :benchmarks:coldStart    # first instantiation, in fresh JVMs
+//   ./gradlew -Pwasm2kt.bench :benchmarks:benchTyped   # Wasmtime's typed bridge (needs cargo)
 plugins {
     id("org.jetbrains.kotlin.jvm")
 }
@@ -38,6 +39,7 @@ kotlin.sourceSets.named("main") { kotlin.srcDir(benchGen.map { it.dir("kotlin") 
 val generatedClasses = files(benchGen.map { it.dir("classes") }, benchGen.map { it.dir("resources") }).builtBy(prepareBench)
 
 dependencies {
+    implementation(project(":tooling"))
     implementation(project(":runtime-chicory"))
     implementation(project(":runtime-wasmtime"))
     implementation(generatedClasses)
@@ -72,6 +74,12 @@ fun JavaExec.benchJvm() {
 tasks.register<JavaExec>("bench") {
     description = "Measures steady-state per-call costs on every backend."
     mainClass.set("wasm2kt.bench.CallBenchKt")
+    benchJvm()
+}
+
+tasks.register<JavaExec>("benchTyped") {
+    description = "Measures the Wasmtime typed bridge (ADR-0016) against the generic path; builds it with cargo."
+    mainClass.set("wasm2kt.bench.TypedBenchKt")
     benchJvm()
 }
 

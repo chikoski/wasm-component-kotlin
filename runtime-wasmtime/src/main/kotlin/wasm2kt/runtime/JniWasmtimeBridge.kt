@@ -78,41 +78,44 @@ object JniWasmtimeBridge {
     }
 
     /** Opens a session on a `.wasm` component; a precompiled `.cwasm` is rejected (see [openPrecompiledSession]). */
-    fun openSession(wasmPath: Path, imports: Any?): Long = openSession(wasmPath, imports, precompiled = false)
+    fun openSession(wasmPath: Path, imports: Any?, componentId: String? = null): Long =
+        openSession(wasmPath, imports, precompiled = false, componentId)
 
     /**
      * Opens a session on a `.cwasm` written by [precompileComponent] with this bridge's Wasmtime build.
      * Its native code runs without validation: pass only files from a trusted source.
      */
-    fun openPrecompiledSession(cwasmPath: Path, imports: Any?): Long = openSession(cwasmPath, imports, precompiled = true)
+    fun openPrecompiledSession(cwasmPath: Path, imports: Any?, componentId: String? = null): Long =
+        openSession(cwasmPath, imports, precompiled = true, componentId)
 
-    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean): Long {
+    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean, componentId: String?): Long {
         ensureLoaded()
         val callback = when (imports) {
             null -> null
             is WitHostImportDispatcher -> JniHostCallback(imports)
             else -> throw IllegalArgumentException("Host imports ${imports::class.qualifiedName} do not implement WitHostImportDispatcher")
         }
-        val ptr = nativeSessionOpen(wasmPath.toAbsolutePath().toString(), callback, precompiled)
+        val ptr = nativeSessionOpen(componentId, wasmPath.toAbsolutePath().toString(), callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from $wasmPath" }
         return ptr
     }
 
     /** Like [openSession] for a `.wasm` component in memory; precompiled bytes are rejected. */
-    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long = openSessionBytes(wasmBytes, imports, precompiled = false)
+    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, componentId: String? = null): Long =
+        openSessionBytes(wasmBytes, imports, precompiled = false, componentId)
 
     /** Like [openPrecompiledSession] for `.cwasm` bytes in memory; the same trust requirement applies. */
-    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?): Long =
-        openSessionBytes(cwasmBytes, imports, precompiled = true)
+    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?, componentId: String? = null): Long =
+        openSessionBytes(cwasmBytes, imports, precompiled = true, componentId)
 
-    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean): Long {
+    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean, componentId: String?): Long {
         ensureLoaded()
         val callback = when (imports) {
             null -> null
             is WitHostImportDispatcher -> JniHostCallback(imports)
             else -> throw IllegalArgumentException("Host imports ${imports::class.qualifiedName} do not implement WitHostImportDispatcher")
         }
-        val ptr = nativeSessionOpenBytes(wasmBytes, callback, precompiled)
+        val ptr = nativeSessionOpenBytes(componentId, wasmBytes, callback, precompiled)
         check(ptr != 0L) { "Failed to open JNI Wasmtime session from ByteArray" }
         return ptr
     }
@@ -143,6 +146,7 @@ object JniWasmtimeBridge {
 
     @JvmStatic
     external fun nativeSessionOpen(
+        componentId: String?,
         wasmPath: String,
         hostCallback: JniHostCallback?,
         precompiled: Boolean,
@@ -150,6 +154,7 @@ object JniWasmtimeBridge {
 
     @JvmStatic
     external fun nativeSessionOpenBytes(
+        componentId: String?,
         wasmBytes: ByteArray,
         hostCallback: JniHostCallback?,
         precompiled: Boolean,

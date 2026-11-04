@@ -3,7 +3,7 @@ package wasm2kt
 import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.nio.file.Files
@@ -134,7 +134,7 @@ class HostResourceE2ETest {
 
     private fun compile(tempDir: Path): ClassLoader {
         val wit = Paths.get(requireNotNull(javaClass.getResource("/fixtures/host-res.wit")).toURI())
-        Wasm2KtCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, wit.toString()))
+        GenerateCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, wit.toString()))
         val pkgDir = tempDir.resolve(pkg.replace('.', '/'))
         Files.writeString(pkgDir.resolve("Harness.kt"), harness)
         val classes = tempDir.resolve("classes")

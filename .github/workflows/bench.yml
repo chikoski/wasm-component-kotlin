@@ -30,6 +30,8 @@ jobs:
           workspaces: rust-bridge
       - run: cargo build --locked --release --manifest-path rust-bridge/Cargo.toml
       - run: ./gradlew -Pwasm2kt.bench :benchmarks:bench :benchmarks:coldStart
+      # Wasmtime's typed bridge (ADR-0016), built with cargo; its own JVM loads only that library.
+      - run: ./gradlew -Pwasm2kt.bench :benchmarks:benchTyped
       # HotSpot does not JIT methods over 8000 bytes of bytecode; large wasm functions compile to such
       # methods. Repeat the compute benchmarks with that limit lifted.
       - run: >-

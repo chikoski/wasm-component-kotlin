@@ -156,6 +156,25 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 wasm-tools component wit --json component.wasm | ./gradlew run --args="--from-json -o build/generated -p com.example.wasm"
 ```
 
+`wasm2kt generate ...` と書いても同じです（サブコマンドを省略すると `generate` になります）。
+
+### 2'. （任意）型付きの Wasmtime ブリッジを作る
+
+汎用ブリッジは、どのコンポーネントも、Wasmtime の `Val` を通して要素ごとに変換して呼びます。
+`wasm2kt bridge` は、プロジェクトのコンポーネントに合わせた Rust のクレートを生成し、`--build` で `cargo build --release` まで行います。
+`list<u8>` や文字列は、まとめてコピーされます（64 KiB の `list<u8>` の往復で約 50 倍速くなります。[docs/performance.md](docs/performance.md)）。設計は [ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md) にあります。
+
+```bash
+# バインディングは、ブリッジの中のコンポーネントの ID を指定して生成する
+./gradlew run --args="generate fixtures/counter.wasm -o build/generated -p com.example.counter --bridge-id counter"
+
+# 型付きブリッジのクレートを生成してビルドする（ライブラリのパスを出力する）
+./gradlew run --args="bridge -o build/typed-bridge --component counter=fixtures/counter.wasm --build"
+
+# 実行時は、汎用ブリッジの代わりにこのライブラリを読み込む
+java -Dwasm2kt.bridge.lib=build/typed-bridge/target/release/libwasm2kt_wasmtime_bridge.so ...
+```
+
 ### 3. テストの実行（実 `.wasm` コンポーネントの E2E 検証を含む）
 
 ```bash
@@ -166,8 +185,10 @@ wasm-tools component wit --json component.wasm | ./gradlew run --args="--from-js
 
 ## CLI オプション一覧
 
+### `wasm2kt generate`（サブコマンドの省略時も同じ）
+
 ```text
-Usage: wasm2kt [<options>] [<input-path>]
+Usage: wasm2kt generate [<options>] [<input-path>]
 
 Arguments:
   <input-path>               .wit ファイル、WIT パッケージディレクトリ、.wasm コンポーネントバイナリ、
@@ -187,6 +208,7 @@ Options:
   --interfaces-only          world が import する interface と、そのマニフェストだけを生成する（ライブラリ用）
   --resources-output=<path>  --interfaces-only のマニフェストの出力先（省略時は --output）
   --wasm-tools-path=<text>   wasm-tools 実行バイナリのパス（デフォルト: "wasm-tools"）
+  --bridge-id=<text>         Wasmtime のセッションを、型付きブリッジのこの ID のコンポーネントとして開く（ADR-0016）
   -h, --help                 ヘルプを表示
 ```
 

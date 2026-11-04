@@ -4,7 +4,7 @@ import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.Linker
 import wasm2kt.runtime.WitWriter
@@ -90,7 +90,7 @@ import wasm2kt.runtime.WitWriter
 
     private fun compile(tempDir: Path): ClassLoader {
         val wit = Paths.get(requireNotNull(javaClass.getResource("/fixtures/same-name.wit")).toURI())
-        Wasm2KtCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, wit.toString()))
+        GenerateCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", pkg, wit.toString()))
         val pkgDir = tempDir.resolve(pkg.replace('.', '/'))
         // One package per interface and direction (ADR-0011).
         for (file in listOf("example/http/types/Types.kt", "example/fs/types/Types.kt", "exports/example/http/types/Types.kt", "exports/example/fs/types/Types.kt")) {

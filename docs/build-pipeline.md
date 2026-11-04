@@ -3,6 +3,9 @@
 > 2026-11-03 時点の `main` と、[ADR-0015](adr/0015-binary-value-boundary.md)（提案）で加わる型付きブリッジのビルドを説明します。
 > ADR-0015 の未決の点のうち、ビルドに関わるもの（WIT の取り出し、型付きブリッジのビルドとキャッシュ、CLI）を判断するための資料です。
 > いずれも 2026-11-04 に決まりました（4 節、5 節、6 節）。
+>
+> **2026-11-04 追記**: 型付きブリッジは、`bindgen!` ではなく、tooling が wit.json から Rust の型と呼び出しを生成する方式にしました（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）。
+> WIT を取り出す段階（4 節）は要らなくなりました。CLI（6 節）は実装済みです。Gradle プラグインのタスク（3.2 節、5 節）は、まだありません。
 
 ## 1. 成果物と、それを使う時期
 
@@ -14,11 +17,10 @@
 | 生成した Kotlin | 生成器 | ビルド時（コンパイル） | Kotlin コンパイラー |
 | `.wasm`（コンポーネント） | 利用者 | 実行時 | Wasmtime（汎用ブリッジ） |
 | rust-bridge（cdylib） | 利用者の `cargo build` | 実行時 | Wasmtime バックエンド |
-| WIT（新規、ADR-0015） | decomposer（`wit-component`） | ビルド時だけ | 型付きブリッジの `bindgen!` |
+| 型付きブリッジのクレート（新規） | tooling の `TypedBridge`（`wit.json` から。ADR-0016） | ビルド時 | `cargo build` |
 | 型付きブリッジ（cdylib、新規） | 生成した Cargo クレートの `cargo build` | 実行時 | Wasmtime バックエンド |
 
-WIT のテキストは、型付きブリッジの Rust をコンパイルするときに、`bindgen!` マクロが読むだけです。実行時には使いません。
-実行時に Wasmtime が読むのは、今と同じ `.wasm`（または `.cwasm`）です。
+型付きブリッジは、Kotlin の生成と同じ `wit.json` から作ります。実行時に Wasmtime が読むのは、今と同じ `.wasm`（または `.cwasm`）です。
 
 ## 2. 今のビルド
 
@@ -84,10 +86,8 @@ flowchart LR
 flowchart LR
     wasm[".wasm（各コンポーネント）"] --> D["wasm2ktDecompose&lt;C&gt;"]
     D --> dec["decomposed/<br/>plan.json, wit.json, coreN.wasm"]
-    D --> wit["WIT（world.wasm / world.wit）"]
     dec --> G["wasm2ktGenerate&lt;C&gt;<br/>Kotlin"]
-    dec --> R["wasm2ktGenerateBridge（新規）<br/>全コンポーネントで 1 つの Cargo クレート"]
-    wit --> R
+    dec --> R["wasm2ktGenerateBridge（新規）<br/>全コンポーネントで 1 つの Cargo クレート<br/>（wit.json から。ADR-0016）"]
     R --> crate["bridge/<br/>Cargo.toml, src/*.rs"]
     crate --> B["wasm2ktCargoBuild（新規）<br/>cargo build --release --target T"]
     tc["Rust のツールチェーン<br/>（利用者の環境）"] --> B
@@ -115,6 +115,9 @@ flowchart LR
 ## 4. A: WIT をどこで取り出すか
 
 **決定（2026-11-04）:** A1。decomposer が `wit-component` で出力する。
+
+**見直し（2026-11-04、[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）:** `bindgen!` を使わないことにしたので、WIT を取り出す段階は要らなくなりました。
+型付きブリッジの Rust の型は、tooling が wit.json から生成します。以下は判断の記録として残します。
 
 `bindgen!` は、WIT をビルド時に読みます（`path` の指定を wit-parser の `Resolve::push_path` に渡す）。
 
@@ -185,6 +188,20 @@ world の名前: コンポーネントから取り出した WIT は `package roo
 * 開発中は汎用ブリッジで動かし、型付きブリッジはアプリの release のビルドのときだけ作る（cargo のプロファイルは常に release）
 
 ## 6. D: CLI から型付きブリッジを作る
+
+**実装（2026-11-04）:** 次の形で入りました。
+
+```text
+wasm2kt generate <入力> -o <出力> -p <パッケージ> --bridge-id calc     # 型付きブリッジの calc として開く
+wasm2kt bridge -o <クレート> --component calc=calc.wasm --component http=http.wasm \
+    [--world calc=<world>] [--build] [--target <トリプル>] [--target-dir <dir>]
+```
+
+* `--component` の入力は、`.wasm`、`.wit`、WIT の JSON です（`.json` 以外は `wasm-tools component wit --json` で読みます）
+* `--build` は、ビルドしたライブラリのパスを出力します。ライブラリは汎用ブリッジと同じ名前（`libwasm2kt_wasmtime_bridge`）なので、`-Dwasm2kt.bridge.lib` で指定するか、汎用ブリッジの代わりに置きます
+* サブコマンドのない `wasm2kt <入力> -o ... -p ...` は、`generate` と同じに扱います
+
+以下は判断のときの記録です。
 
 今の CLI（`wasm2kt`）は、ビルドの 1 段階として呼ぶコード生成器です。`.wit` / `.wasm` から Kotlin のバインディングを生成するだけで、ビルドそのものは実行しません。
 分解、AOT コンパイル、`<Name>Component` の生成（Chicory 向け）は tooling（`ComponentBuild`）にあり、使っているのは Gradle プラグインだけです。

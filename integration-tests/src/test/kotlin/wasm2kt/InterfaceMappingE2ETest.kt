@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import wasm2kt.ast.WitResolve
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.generator.InterfaceManifest
 import wasm2kt.generator.WitToKotlinPoetConverter
 import wasm2kt.runtime.ComponentBackendFactory
@@ -106,7 +106,7 @@ class InterfaceMappingE2ETest {
     private fun buildLibrary(tempDir: Path): Path {
         val src = tempDir.resolve("lib-src")
         val classes = tempDir.resolve("lib-classes")
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf("--wasm-tools-path", wasmToolsBin, "--interfaces-only", "-o", src.toString(), "--resources-output", classes.toString(), "-p", libPkg, sameNameWit.toString()),
         )
         val libDir = src.resolve(libPkg.replace('.', '/'))
@@ -122,7 +122,7 @@ class InterfaceMappingE2ETest {
 
     private fun buildApp(tempDir: Path, library: Path, extraArgs: List<String>): ClassLoader {
         val src = tempDir.resolve("app-src")
-        Wasm2KtCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", src.toString(), "-p", appPkg) + extraArgs + sameNameWit.toString())
+        GenerateCommand().parse(listOf("--wasm-tools-path", wasmToolsBin, "-o", src.toString(), "-p", appPkg) + extraArgs + sameNameWit.toString())
         val appDir = src.resolve(appPkg.replace('.', '/'))
         assertFalse(Files.exists(appDir.resolve("example")), "mapped interfaces must not be generated again")
         assertTrue(Files.exists(appDir.resolve("exports/example/http/types/Types.kt")), "exports are always generated")
@@ -176,7 +176,7 @@ class InterfaceMappingE2ETest {
     private fun resolve(tempDir: Path, wit: String): WitResolve {
         val witFile = tempDir.resolve("input-${wit.hashCode()}.wit")
         Files.writeString(witFile, wit.trimIndent())
-        return WitResolve.parse(Wasm2KtCommand.extractWitJsonViaWasmTools(wasmToolsBin, witFile))
+        return WitResolve.parse(GenerateCommand.extractWitJsonViaWasmTools(wasmToolsBin, witFile))
     }
 
     /** `b` uses a type of `a`, and has an alias that names the generation's own `WitResult`. */

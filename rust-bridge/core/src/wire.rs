@@ -9,7 +9,7 @@
 //! * `own` / `borrow`: `u32` (the rep of a host resource, or the bridge's handle of a guest resource)
 
 use crate::{host_resource_payload, StoreData};
-use wasmtime::component::{ResourceDynamic, Type, Val};
+use wasmtime::component::{ResourceAny, ResourceDynamic, Type, Val};
 use wasmtime::{bail, format_err as anyhow, Result, StoreContextMut};
 
 /// Reads values written by the Kotlin side.
@@ -23,11 +23,11 @@ impl<'a> Reader<'a> {
         Reader { buf, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub fn remaining(&self) -> usize {
         self.buf.len() - self.pos
     }
 
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if n > self.remaining() {
             bail!("WIT value ends early: need {} bytes, {} left", n, self.remaining());
         }
@@ -36,23 +36,23 @@ impl<'a> Reader<'a> {
         Ok(bytes)
     }
 
-    fn u8(&mut self) -> Result<u8> {
+    pub fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16> {
+    pub fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into()?))
     }
 
-    fn u32(&mut self) -> Result<u32> {
+    pub fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into()?))
     }
 
-    fn u64(&mut self) -> Result<u64> {
+    pub fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into()?))
     }
 
-    fn tag(&mut self, what: &str) -> Result<bool> {
+    pub fn tag(&mut self, what: &str) -> Result<bool> {
         match self.u8()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -69,7 +69,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn discriminant_width(count: usize) -> usize {
+pub fn discriminant_width(count: usize) -> usize {
     if count <= 256 {
         1
     } else if count <= 65536 {
@@ -79,7 +79,7 @@ fn discriminant_width(count: usize) -> usize {
     }
 }
 
-fn read_discriminant(r: &mut Reader<'_>, count: usize) -> Result<usize> {
+pub fn read_discriminant(r: &mut Reader<'_>, count: usize) -> Result<usize> {
     Ok(match discriminant_width(count) {
         1 => r.u8()? as usize,
         2 => r.u16()? as usize,
@@ -87,7 +87,7 @@ fn read_discriminant(r: &mut Reader<'_>, count: usize) -> Result<usize> {
     })
 }
 
-fn write_discriminant(w: &mut Vec<u8>, count: usize, index: usize) {
+pub fn write_discriminant(w: &mut Vec<u8>, count: usize, index: usize) {
     match discriminant_width(count) {
         1 => w.push(index as u8),
         2 => w.extend_from_slice(&(index as u16).to_le_bytes()),
@@ -95,7 +95,7 @@ fn write_discriminant(w: &mut Vec<u8>, count: usize, index: usize) {
     }
 }
 
-fn flag_words(count: usize) -> usize {
+pub fn flag_words(count: usize) -> usize {
     count.div_ceil(32)
 }
 
@@ -215,47 +215,15 @@ pub fn read_val(r: &mut Reader<'_>, ty: &Type, store: &mut StoreContextMut<'_, S
             )
         }
         Type::Own(rt) if host_resource_payload(rt, store).is_some() => {
-            // A host resource, identified by the rep the JVM side assigned (ADR-0008).
             let payload = host_resource_payload(rt, store).unwrap_or_default();
-            let rep = r.u32()?;
-            Val::Resource(ResourceDynamic::new_own(rep, payload).try_into_resource_any(&mut *store)?)
+            Val::Resource(read_own_host(r, payload, store)?)
         }
         Type::Borrow(rt) if host_resource_payload(rt, store).is_some() => {
-            // Wasmtime (still in 48) cannot lower a host-made borrow outside a host call, so lend an
-            // owned handle instead and release it once the call returns (see session_invoke_internal).
             let payload = host_resource_payload(rt, store).unwrap_or_default();
-            let rep = r.u32()?;
-            let any = ResourceDynamic::new_own(rep, payload).try_into_resource_any(&mut *store)?;
-            store.data_mut().lent_host_resources.push(any);
-            Val::Resource(any)
+            Val::Resource(read_borrow_host(r, payload, store)?)
         }
-        Type::Own(_) => {
-            let handle = r.u32()? as i32;
-            // The spec's lift_own: trap_if(h.num_lends != 0). Checked here, before Wasmtime sees the
-            // call: Wasmtime 48 refuses it too, but leaves the handle's lend count raised, so the
-            // host could never drop it afterwards. Same check and message as the Chicory backend.
-            if store.data().borrowed_handles.contains(&handle) {
-                bail!("Cannot move resource handle {} while it is borrowed by the same call", handle);
-            }
-            let res = store
-                .data_mut()
-                .resources
-                .remove(&handle)
-                .ok_or_else(|| anyhow!("Resource handle {} not found or already consumed", handle))?;
-            store.data_mut().moved_handles.push((handle, res));
-            Val::Resource(res)
-        }
-        Type::Borrow(_) => {
-            let handle = r.u32()? as i32;
-            store.data_mut().borrowed_handles.push(handle);
-            let res = store
-                .data()
-                .resources
-                .get(&handle)
-                .copied()
-                .ok_or_else(|| anyhow!("Resource handle {} not found", handle))?;
-            Val::Resource(res)
-        }
+        Type::Own(_) => Val::Resource(read_own_guest(r, store)?),
+        Type::Borrow(_) => Val::Resource(read_borrow_guest(r, store)?),
         // async types (#16) are not supported by the Wasmtime bridge; it stays the reference for the
         // synchronous features (ADR-0005).
         other => bail!("WIT type {:?} is not supported by the Wasmtime bridge", other),
@@ -347,19 +315,68 @@ pub fn write_val(w: &mut Vec<u8>, val: &Val, ty: &Type, store: &mut StoreContext
                 _ => words.iter().for_each(|word| w.extend_from_slice(&word.to_le_bytes())),
             }
         }
-        (Val::Resource(res_any), _) if host_resource_payload(&res_any.ty(), store).is_some() => {
-            // A host resource coming back from the guest: its rep.
-            let rep = ResourceDynamic::try_from_resource_any(*res_any, &mut *store)?.rep();
-            w.extend_from_slice(&rep.to_le_bytes());
-        }
-        (Val::Resource(res_any), _) => {
-            let data = store.data_mut();
-            let handle = data.next_handle;
-            data.next_handle += 1;
-            data.resources.insert(handle, *res_any);
-            w.extend_from_slice(&handle.to_le_bytes());
-        }
+        (Val::Resource(res_any), _) => write_resource(w, *res_any, store)?,
         _ => bail!("Type/Val mismatch when writing a WIT value: {:?}", val),
+    }
+    Ok(())
+}
+
+/// `own<R>` of a host resource (payload `payload`), identified by the rep the JVM side assigned (ADR-0008).
+pub fn read_own_host(r: &mut Reader<'_>, payload: u32, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
+    let rep = r.u32()?;
+    ResourceDynamic::new_own(rep, payload).try_into_resource_any(&mut *store)
+}
+
+/// `borrow<R>` of a host resource. Wasmtime (still in 48) cannot lower a host-made borrow outside a
+/// host call, so this lends an owned handle instead, released once the call returns.
+pub fn read_borrow_host(r: &mut Reader<'_>, payload: u32, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
+    let any = read_own_host(r, payload, store)?;
+    store.data_mut().lent_host_resources.push(any);
+    Ok(any)
+}
+
+/// `own<R>` of a component-defined resource: moves the bridge's handle into the call.
+pub fn read_own_guest(r: &mut Reader<'_>, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
+    let handle = r.u32()? as i32;
+    // The spec's lift_own: trap_if(h.num_lends != 0). Checked here, before Wasmtime sees the
+    // call: Wasmtime 48 refuses it too, but leaves the handle's lend count raised, so the
+    // host could never drop it afterwards. Same check and message as the Chicory backend.
+    if store.data().borrowed_handles.contains(&handle) {
+        bail!("Cannot move resource handle {} while it is borrowed by the same call", handle);
+    }
+    let res = store
+        .data_mut()
+        .resources
+        .remove(&handle)
+        .ok_or_else(|| anyhow!("Resource handle {} not found or already consumed", handle))?;
+    store.data_mut().moved_handles.push((handle, res));
+    Ok(res)
+}
+
+/// `borrow<R>` of a component-defined resource.
+pub fn read_borrow_guest(r: &mut Reader<'_>, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
+    let handle = r.u32()? as i32;
+    store.data_mut().borrowed_handles.push(handle);
+    store
+        .data()
+        .resources
+        .get(&handle)
+        .copied()
+        .ok_or_else(|| anyhow!("Resource handle {} not found", handle))
+}
+
+/// A resource coming out of the component: a host resource's rep, or a new bridge handle for a
+/// component-defined one.
+pub fn write_resource(w: &mut Vec<u8>, res_any: ResourceAny, store: &mut StoreContextMut<'_, StoreData>) -> Result<()> {
+    if host_resource_payload(&res_any.ty(), store).is_some() {
+        let rep = ResourceDynamic::try_from_resource_any(res_any, &mut *store)?.rep();
+        w.extend_from_slice(&rep.to_le_bytes());
+    } else {
+        let data = store.data_mut();
+        let handle = data.next_handle;
+        data.next_handle += 1;
+        data.resources.insert(handle, res_any);
+        w.extend_from_slice(&handle.to_le_bytes());
     }
     Ok(())
 }
