@@ -61,6 +61,19 @@ object BridgeLibrary {
     @Volatile
     private var extracted: Pair<String, Path>? = null
 
+    private fun privateTempDirectory(): Path {
+        val posix = java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
+        return if (posix) {
+            Files.createTempDirectory(
+                "wasm2kt-bridge",
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")),
+            )
+        } else {
+            // On Windows the default temporary directory is already per user.
+            Files.createTempDirectory("wasm2kt-bridge")
+        }
+    }
+
     /** Copies the class path's bridge for this platform to a temporary file, once per JVM. */
     fun fromClassPath(classLoader: ClassLoader?, platform: String = platform()): Path? {
         val resource = resourcePath(platform)
@@ -68,7 +81,8 @@ object BridgeLibrary {
         extracted?.takeIf { it.first == url.toString() && Files.exists(it.second) }?.let { return it.second }
         synchronized(this) {
             extracted?.takeIf { it.first == url.toString() && Files.exists(it.second) }?.let { return it.second }
-            val dir = Files.createTempDirectory("wasm2kt-bridge")
+            // Readable and writable by this user only, so no other user can swap the library before it is loaded.
+            val dir = privateTempDirectory()
             val target = dir.resolve(fileName(platform))
             url.openStream().use { Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING) }
             target.toFile().deleteOnExit()

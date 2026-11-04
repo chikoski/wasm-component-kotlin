@@ -70,6 +70,14 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     testClassesDirs = functionalTest.output.classesDirs
     classpath = functionalTest.runtimeClasspath
     useJUnitPlatform()
+    // A failing TestKit build carries its whole output in the exception message: print it, so a CI
+    // failure can be diagnosed from the job log (the report artifact is not always at hand).
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+        showStackTraces = true
+    }
     dependsOn(
         ":ast:publishAllPublicationsToTestRepository",
         ":generator:publishAllPublicationsToTestRepository",

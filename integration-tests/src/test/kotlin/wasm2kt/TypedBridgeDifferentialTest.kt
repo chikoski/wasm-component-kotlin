@@ -23,8 +23,9 @@ import kotlin.test.assertTrue
  */
 @Tag("typed-bridge")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TypedBridgeDifferentialTest : ChicoryDifferentialTest() {
+open class TypedBridgeDifferentialTest : ChicoryDifferentialTest() {
     override val typedBridge: Boolean = true
+    override val compareWithGenericBridge: Boolean = true
 
     @BeforeAll
     fun buildTypedBridge() = TypedBridgeFixtures.use()
@@ -36,6 +37,13 @@ class TypedBridgeDifferentialTest : ChicoryDifferentialTest() {
             assertTrue("Called through the generic path" !in source, "${module.name}:\n" + source.lines().take(12).joinToString("\n"))
         }
     }
+}
+
+/** The same on the JNI bridge (the typed bridge exports the same JNI functions). */
+@Tag("typed-bridge")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class TypedBridgeJniDifferentialTest : TypedBridgeDifferentialTest() {
+    override val jni: Boolean = true
 }
 
 /** Generated bindings opened on the typed bridge (`--bridge-id types`) pass the same harness. */

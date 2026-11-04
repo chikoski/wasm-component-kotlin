@@ -321,7 +321,7 @@ private class RustComponent(private val component: TypedBridge.Component) {
             appendLine("struct $name(TypedFunc<${tupleType(paramTypes)}, ${tupleType(listOfNotNull(resultType))}>);")
             appendLine()
             appendLine("impl TypedExport for $name {")
-            appendLine("    fn call(&self, store: &mut Store<StoreData>, args: &[u8]) -> Result<Vec<u8>> {")
+            appendLine("    fn call(&self, store: &mut Store<StoreData>, args: &[u8], name: &str) -> Result<Vec<u8>> {")
             appendLine("        let params = {")
             appendLine("            let cx = &mut store.as_context_mut();")
             appendLine("            let r = &mut Reader::new(args);")
@@ -329,7 +329,7 @@ private class RustComponent(private val component: TypedBridge.Component) {
             appendLine("            r.finish().context(\"Invalid arguments for '${esc(key)}'\")?;")
             appendLine("            ${tupleType(params.indices.map { "a$it" })}")
             appendLine("        };")
-            appendLine("        let results = self.0.call(&mut *store, params)?;")
+            appendLine("        let results = self.0.call(&mut *store, params).with_context(|| call_failed(name))?;")
             appendLine("        let mut out = Vec::new();")
             if (result != null) {
                 appendLine("        {")
