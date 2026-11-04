@@ -1,7 +1,8 @@
 # CLAUDE.md
 
-コーディングエージェント（Claude Code など）向けの作業メモです。人間向けの説明は README.md と docs/ にあります。
-現状とやることは [docs/STATUS.md](docs/STATUS.md)、設計判断は [docs/adr/](docs/adr/) を先に読んでください。
+コーディングエージェント（Claude Code など）向けの作業メモです。
+人間向けの説明は [README.md](README.md) と [docs/index.md](docs/index.md)、ビルド・テスト手順と不変条件は [CONTRIBUTING.md](CONTRIBUTING.md) にまとめています。
+作業を始める前に、現状とやることは [docs/STATUS.md](docs/STATUS.md)、設計判断は [docs/adr/](docs/adr/README.md)、開発ルールは [CONTRIBUTING.md](CONTRIBUTING.md) を先に読んでください。
 
 ## プロジェクト
 

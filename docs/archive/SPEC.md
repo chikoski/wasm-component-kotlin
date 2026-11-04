@@ -1,5 +1,7 @@
 # wasm2kt Specification (SPEC.md)
 
+> **過去の記録です。** プロジェクト初期の仕様書であり、現行の実装（world のトップレベル生成、バイナリ境界、Chicory バックエンドなど）とは異なります。最新の仕様と構成は [docs/index.md](../index.md) と [docs/STATUS.md](../STATUS.md) を参照してください。
+
 ## 1. Project Overview
 * **Project Name**: `wasm2kt` (Repository: `wasm-component-kotlin`)
 * **Primary Goal**: Generate type-safe, idiomatic Kotlin **host-side bindings** (worlds, interfaces, functions, records, variants, flags, tuples, resources) from WebAssembly Components / WIT definitions, targeting the **Wasmtime** runtime.
@@ -135,7 +137,7 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
 | `u64` / `s64` | `kotlin.ULong` / `kotlin.Long` | |
 | `f32` (`float32`) | `kotlin.Float` | |
 | `f64` (`float64`) | `kotlin.Double` | |
-| `char` | `CodePoint` (value class over `Int`) | Unicode Scalar Value; `kotlin.Char` cannot hold non-BMP code points ([ADR-0006](docs/adr/0006-type-mapping.md)) |
+| `char` | `CodePoint` (value class over `Int`) | Unicode Scalar Value; `kotlin.Char` cannot hold non-BMP code points ([ADR-0006](../adr/0006-type-mapping.md)) |
 | `string` | `kotlin.String` | UTF-8 encoded in Canonical ABI |
 
 ### 5.3 Composite & Algebraic Types
@@ -188,7 +190,7 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
     ```kotlin
     typealias UserId = ULong
     ```
-* **`option<T>` -> Kotlin nullable `T?`** (superseded by [ADR-0006](docs/adr/0006-type-mapping.md))
+* **`option<T>` -> Kotlin nullable `T?`** (superseded by [ADR-0006](../adr/0006-type-mapping.md))
   * Only when `T` itself can be null (e.g. `option<option<U>>`) is the outer option a `WitOption<T>`, so nested options stay unambiguous.
   * Originally this spec mapped every `option<T>` to `WitOption<out T>`.
     ```kotlin
@@ -205,7 +207,7 @@ fun CalculatorWorld.add(a: Int, b: Int): Int {
         data class Err<out E>(val error: E) : WitResult<Nothing, E>
     }
     ```
-* **`list<T>` -> `kotlin.collections.List<T>`**, except **`list<u8>` -> `ByteArray`** ([ADR-0006](docs/adr/0006-type-mapping.md)).
+* **`list<T>` -> `kotlin.collections.List<T>`**, except **`list<u8>` -> `ByteArray`** ([ADR-0006](../adr/0006-type-mapping.md)).
 
 ### 5.4 Functions & Interfaces
 * **Top-level exported functions**: Generated as extension functions on the world singleton `object` requiring `context(session: <WorldName>.Session)`.

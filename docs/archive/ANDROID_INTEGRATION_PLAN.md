@@ -1,5 +1,7 @@
 # Android アプリへの組み込みに向けた課題と変更点の洗い出し (`ANDROID_INTEGRATION_PLAN.md`)
 
+> **過去の記録です。** Wasmtime を Android で動かす当初の計画です。Android の主路線は Chicory バックエンドに移りました（[ADR-0001](../adr/0001-chicory-backend-for-android.md)）。現行の手順は [Android クイックスタート](../tutorials/android-quickstart.md) を参照してください。
+
 現在の `wasm2kt` が生成する Kotlin ホストバインディングおよび Wasmtime ランタイムブリッジを **Android アプリケーション（ART ランタイム）** に組み込んで動作させるために必要な変更点・技術的課題を、重要度順（ブロッカー → ランタイム制約 → パフォーマンス・利便性）に洗い出しました。
 
 ---

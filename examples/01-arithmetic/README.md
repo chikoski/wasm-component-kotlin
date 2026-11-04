@@ -30,37 +30,31 @@ world arithmetic {
 ```kotlin
 package com.example.arithmetic
 
-import java.lang.AutoCloseable
 import java.nio.file.Path
-import kotlin.Int
-import kotlin.reflect.typeOf
+
+class Session internal constructor(
+    runtimeSession: WasmtimeSession,
+) : WitSession(runtimeSession)
+
+fun openSession(wasmPath: Path, imports: ImportsFactory = ImportsFactory.EMPTY): Session { /* ... */ }
+
+inline fun <R> withSession(
+    wasmPath: Path,
+    imports: ImportsFactory = ImportsFactory.EMPTY,
+    block: context(Session) () -> R,
+): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
 
 context(session: Session)
 fun add(a: Int, b: Int): Int =
-    session.runtimeSession.invoke("add", typeOf<Int>(), a, b)
-
-context(session: Session)
-fun sub(a: Int, b: Int): Int =
-    session.runtimeSession.invoke("sub", typeOf<Int>(), a, b)
-
-context(session: Session)
-fun mul(a: Int, b: Int): Int =
-    session.runtimeSession.invoke("mul", typeOf<Int>(), a, b)
-
-context(session: Session)
-fun div(a: Int, b: Int): Int =
-    session.runtimeSession.invoke("div", typeOf<Int>(), a, b)
-
-object ArithmeticWorld {
-    fun openSession(wasmPath: Path, imports: ImportsFactory = ImportsFactory.EMPTY): Session { /* ... */ }
-
-    inline fun <R> withSession(
-        wasmPath: Path,
-        imports: ImportsFactory = ImportsFactory.EMPTY,
-        block: context(Session) () -> R,
-    ): R = openSession(wasmPath, imports).use { session -> context(session) { block() } }
-    // ...
-}
+    session.runtimeSession.invoke(
+        "add",
+        listOf(a, b),
+        { writer ->
+            writer.int(a)
+            writer.int(b)
+        },
+        { reader -> reader.int() },
+    )
 ```
 
 ---

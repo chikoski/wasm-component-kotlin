@@ -1,5 +1,7 @@
 # `wasm2kt` コードレビュー結果 (`CODE_REVIEW.md`)
 
+> **過去の記録です。** 初期実装時点のコードレビュー記録です。最新の状況は [docs/STATUS.md](../STATUS.md) を参照してください。
+
 現在の `wasm2kt` コードベース全体（Kotlin AST・コード生成器・FFM/JNI ランタイムブリッジ・Rust Wasmtime ネイティブブリッジ・テストスイート）に対するコードレビュー結果をまとめたドキュメントです。
 
 全体として、**Kotlin 2.2 Context Parameters を活用した DSL 設計、`kotlin-reflect` の完全排除と静的 JSON コーデック生成、FFM と JNI のデュアルバックエンド対応、AOT `.cwasm` プリコンパイル対応、さらに K2JVMCompiler を組み込んだ E2E テスト**まで、非常に完成度が高く堅牢な実装になっています。
