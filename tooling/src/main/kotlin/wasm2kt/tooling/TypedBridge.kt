@@ -147,8 +147,7 @@ object TypedBridge {
     private const val RESOURCES = "/wasm2kt/bridge-core/"
 
     private fun resource(name: String): String =
-        requireNotNull(TypedBridge::class.java.getResourceAsStream(RESOURCES + name)) { "Missing tooling resource $RESOURCES$name" }
-            .use { String(it.readBytes(), Charsets.UTF_8) }
+        String(requireNotNull(ToolingResources.read(RESOURCES + name)) { "Missing tooling resource $RESOURCES$name" }, Charsets.UTF_8)
 
     private fun copyCore(dir: Path) {
         for (name in resource("files.txt").lines().filter { it.isNotBlank() }) {

@@ -22,7 +22,7 @@ object Decomposer {
     private const val RESOURCE = "/wasm2kt/tooling/wasm2kt-decompose.wasm"
 
     private val module: WasmModule by lazy {
-        val bytes = Decomposer::class.java.getResourceAsStream(RESOURCE)?.use { it.readBytes() }
+        val bytes = ToolingResources.read(RESOURCE)
             ?: error("Bundled decomposer $RESOURCE is missing from the classpath")
         Parser.parse(bytes)
     }
