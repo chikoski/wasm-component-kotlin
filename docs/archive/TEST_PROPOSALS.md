@@ -1,5 +1,7 @@
 # `wasm2kt` (`wasm-component-kotlin`) 追加テスト提案書
 
+> **過去の記録です。** 初期実装時点のテスト提案書です。最新の状況は [docs/STATUS.md](../STATUS.md) を参照してください。
+
 WebAssembly Component Model の **WIT (Wasm Interface Type) 仕様** および本リポジトリの設計仕様 ([SPEC.md](file:///Users/chikoski/wssm-component-kotin/SPEC.md)) に照らし合わせ、現在のテストスイート ([WitToKotlinPoetConverterTest.kt](file:///Users/chikoski/wssm-component-kotin/integration-tests/src/test/kotlin/wasm2kt/WitToKotlinPoetConverterTest.kt)) でカバーしきれていない機能・境界値・エッジケースを整理しました。
 
 実装の調査を通じて判明した **潜在的な不具合や拡張ポイント** もあわせて記載しています。

@@ -186,12 +186,12 @@ pub extern "C" fn invoke_component_sync(/* ... */) -> *mut c_char {
 
 ## 3. 本プロジェクト（`wasm2kt` / Kotlin ホストバインディング）への示唆
 
-本リポジトリ（[`SPEC.md`](../../SPEC.md) および [`rust-bridge/src/lib.rs`](../../rust-bridge/src/lib.rs)）のアーキテクチャにおいて、将来的に WIT の非同期関数や WASI 0.3 コンポーネントをサポートする場合、以下の設計方針が定石となります。
+本リポジトリ（[`SPEC.md`](../archive/SPEC.md) および [`rust-bridge/src/lib.rs`](../../rust-bridge/src/lib.rs)）のアーキテクチャにおいて、将来的に WIT の非同期関数や WASI 0.3 コンポーネントをサポートする場合、以下の設計方針が定石となります。
 
 1. **`kotlinx.coroutines` を必須にしないデフォルト設計**:
-   * Kotlin 側の生成コード（[`SPEC.md`](../../SPEC.md) の `context(session: <World>.Session) fun ...`）は、非同期ランタイム（`kotlinx.coroutines`）を持たない環境でもそのまま使えるよう、デフォルトでは通常のブロッキング関数として生成できます。
+   * Kotlin 側の生成コード（[`SPEC.md`](../archive/SPEC.md) の `context(session: <World>.Session) fun ...`）は、非同期ランタイム（`kotlinx.coroutines`）を持たない環境でもそのまま使えるよう、デフォルトでは通常のブロッキング関数として生成できます。
    * [`rust-bridge/src/lib.rs`](../../rust-bridge/src/lib.rs) 側で `wasmtime` の非同期実行を `block_on` でラップすれば、FFI / JNI のインターフェース（`wasm2kt_invoke`）を一切非同期化せずに `async func` を呼び出すことが可能です。
 2. **JVM Virtual Threads（Project Loom）との親和性**:
-   * 本プロジェクトは **JVM 21+** をターゲットとしているため（[`SPEC.md`](../../SPEC.md)）、Kotlin コルーチン等の非同期ランタイムを導入しなくても、呼び出しを `Executors.newVirtualThreadPerTaskExecutor()` 上で実行したり、上記のブリッジ内 `block_on` と組み合わせたりすることで、シンプルな同期 API のまま高い並行性を維持できます（※FFI 呼び出し中はキャリアスレッドがピン留めされる点のみ留意）。
+   * 本プロジェクトは **JVM 21+** をターゲットとしているため（[`SPEC.md`](../archive/SPEC.md)）、Kotlin コルーチン等の非同期ランタイムを導入しなくても、呼び出しを `Executors.newVirtualThreadPerTaskExecutor()` 上で実行したり、上記のブリッジ内 `block_on` と組み合わせたりすることで、シンプルな同期 API のまま高い並行性を維持できます（※FFI 呼び出し中はキャリアスレッドがピン留めされる点のみ留意）。
 3. **オプションとしての `suspend fun` 生成**:
    * 将来的にコルーチン環境向けの最適化を行う場合のみ、ジェネレータのフラグ（例：`--async-mode=suspend` vs `--async-mode=blocking`）によって、WIT の `async func` を Kotlin の `suspend fun` にマッピングするか、通常の `fun` にマッピングするかを選択可能にするのが理想的です。

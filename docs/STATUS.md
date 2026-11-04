@@ -23,7 +23,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
                                                     └─▶ Wasmtime ブリッジ（FFM / JNI）
 ```
 
-詳細: [Chicory バックエンドと Gradle プラグイン](chicory-backend.md) / [アーキテクチャ（Wasmtime 側）](architecture.md)
+詳細: [ドキュメント目次](index.md) / [アーキテクチャ](explanation/architecture.md) / [Gradle プラグイン](reference/gradle-plugin.md)
 
 ### モジュール構成
 
@@ -168,13 +168,16 @@ QC レビュー（2026-10-31）で見つかったもの:
 
 ## 4. 既存ドキュメントの位置づけ
 
-| ファイル | 位置づけ |
+全体の目次は [`docs/index.md`](index.md) にあります（#50 で読者別の構成に再編）。
+
+| ファイル / ディレクトリ | 位置づけ |
 | :--- | :--- |
-| `README.md`、`docs/getting-started.md`、`docs/type-mapping-and-dsl.md`、`docs/architecture.md` | 現行（Wasmtime 側の利用者向け） |
-| `docs/chicory-backend.md` | 現行（Chicory バックエンド、プラグイン、Android） |
+| `README.md`、`docs/index.md` | 概要・読者別の入口 |
+| `docs/tutorials/`（`android-quickstart.md`、`jvm-quickstart.md`、`wasmtime-quickstart.md`） | チュートリアル（バックエンド・環境別の導入手順） |
+| `docs/guides/`（`choosing-a-backend.md`、`host-imports.md`、`resources-and-ownership.md`、`errors-and-traps.md`、`testing.md`、`authoring-components.md`、`troubleshooting.md`） | 目的別のハウツーガイド |
+| `docs/reference/`（`type-mapping.md`、`gradle-plugin.md`、`cli.md`、`feature-support.md`、`compatibility.md`） | リファレンス（型対応表、DSL、CLI、対応機能、バージョン要件） |
+| `docs/explanation/`（`architecture.md`、`build-pipeline.md`、`call-path.md`、`performance.md`） | 内部構造・ビルド順序・呼び出し経路・性能とサイズの計測結果 |
+| `CONTRIBUTING.md`、`CHANGELOG.md` | 開発手順・不変条件（人間向け）、および破壊的変更・主要変更の記録 |
 | `docs/adr/` | 設計判断の記録（追記のみ） |
-| `SPEC.md`、`SPEC_REVIEW.md` | 当初の仕様と決定事項 |
-| `ANDROID_INTEGRATION_PLAN.md` | Wasmtime を Android で動かす計画。Android の主路線は Chicory に移った（→ [ADR-0001](adr/0001-chicory-backend-for-android.md)） |
-| `CODE_REVIEW.md`、`TEST_PROPOSALS.md` | 過去のレビュー記録 |
-| [`docs/notes/phase1-implementation-tasks.md`](notes/phase1-implementation-tasks.md) | フェーズ 1 の作業計画。Step 3（モジュール分割の一部、Gradle プラグイン、AGP、キャッシュ、TestKit）は実施済み。Step 1 / 2 / 4 は #16 / #17 などに引き継ぎ |
-| [`docs/notes/wit-async-guide.md`](notes/wit-async-guide.md) | async 対応の調査メモ（#16 の前提資料） |
+| `docs/notes/`（[`phase1-implementation-tasks.md`](notes/phase1-implementation-tasks.md)、[`wit-async-guide.md`](notes/wit-async-guide.md)） | 作業計画・async 調査メモ（#16 の前提資料） |
+| `docs/archive/`（`SPEC.md`、`SPEC_REVIEW.md`、`ANDROID_INTEGRATION_PLAN.md`、`CODE_REVIEW.md`、`TEST_PROPOSALS.md`） | 過去の記録（プロジェクト初期の仕様書・レビュー記録） |

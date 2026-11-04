@@ -2,75 +2,58 @@
 
 [![CI](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml)
 
-**WebAssembly Component Model (WIT) から型安全でイディオマティックな Kotlin ホスト側バインディングを生成するコードジェネレータ**
+WebAssembly コンポーネント（`.wasm` / `.wit`）から、Kotlin のホストバインディングを生成するツールとランタイムです。
+生成される Kotlin の呼び出しコード（ワールド DSL）は共通で、用途に応じて 2 つの実行バックエンドを使い分けられます。
 
-`wasm2kt` は、`.wit` 定義ファイルまたは `.wasm` コンポーネントバイナリを入力として受け取り、**Kotlin 2.2+ の Context Parameters (`context(session: Session)`)** と **Wasmtime (JVM Foreign Function & Memory API)** を活用した Kotlin ホストバインディングを自動生成します。
+| バックエンド | 実行方式 | 主な対象環境 | 入口 |
+| :--- | :--- | :--- | :--- |
+| **Chicory** | Gradle プラグインでビルド時に core モジュールを JVM バイトコードへコンパイルし、純 JVM で実行 | **Android（minSdk 26+）**、ネイティブライブラリを使わない JVM | `withSession(XxxComponent)` |
+| **Wasmtime** | CLI でバインディングを生成し、Rust 製ブリッジ（Java 21 FFM / JNI）でネイティブ実行 | デスクトップ / サーバー JVM（JDK 21+） | `withSession(wasmPath)` |
 
----
-
-## 主な特徴 (Highlights)
-
-* **特異オブジェクト (`object`) + Context Parameters による直感的な DSL**
-  * WIT の各 `world` を Kotlin のシングルトン `object` として生成します。
-  * エクスポート関数は `context(session: <World>.Session)` を持つ拡張関数として生成されるため、`withSession` スコープ内で自然に呼び出せます。
-* **安全なリソース (`resource`) ライフサイクルと所有権管理**
-  * WIT の `resource` は `java.lang.AutoCloseable` を実装した内部クラスとして生成されます。
-  * コンストラクタ（`companion object operator fun invoke`）が暗黙の `Session` をキャプチャするため、Kotlin 標準の `.use { ... }` ブロックで Wasmtime 側のリソース解放（`resource_drop`）を確実に自動化できます。
-  * `borrow<T>`（借用）と `own<T>`（所有権移動・`consumeOwnership()`）を区別し、所有権移動後の誤使用や二重解放を防止します。
-* **代数的データ型とビットフラグの完全な型安全性**
-  * `option<T>` は Kotlin の `T?` になり、`?.` や `?:` がそのまま使えます（`option<option<T>>` のようにネストした場合だけ `WitOption` で外側と内側を区別します）。
-  * `variant` と `result<T, E>`（`WitResult<out T, out E>`）は `sealed interface` で表現し、`when` 式による網羅性チェックをサポートします。`WitResult` には `getOrThrow()` などの補助関数があります。
-  * `list<u8>` は `ByteArray`、`char` は（絵文字なども表せる）`CodePoint` になります。
-  * `flags` は `@JvmInline value class` + ビット演算メソッド（`or`, `and`）としてゼロオーバーヘッドに生成します。
-* **Chicory バックエンドと Gradle プラグイン（Android 対応）**
-  * Gradle プラグイン `io.github.wasm2kt` で、コンポーネントの core モジュールをビルド時に JVM バイトコードへコンパイルし、純 JVM のランタイム [Chicory](https://github.com/dylibso/chicory) 上で実行します。ネイティブライブラリ・JNI・`wasm-tools` は不要で、Android でもそのまま動きます。
-  * ワールド DSL は共通で、`withSession(CalculatorComponent) { ... }` のように渡すものを変えるだけです。詳しくは [Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md) を参照してください。
-* **Wasmtime ネイティブ実行 (JVM FFM API) & インメモリモックの両対応**
-  * デフォルトでは Java 21+ の Foreign Function & Memory (FFM) API (`java.lang.foreign`) 経由で Rust 製の `wasmtime` ブリッジ (`cdylib`) を呼び出し、実際の `.wasm` コンポーネントをネイティブ実行します。
-  * 単体テスト向けに、`.wasm` バイナリやネイティブライブラリなしで動作を検証できる `InMemoryWasmtimeSession` も同梱しています。
+選択の目安は [バックエンドの選び方](docs/guides/choosing-a-backend.md) を参照してください。
 
 ---
 
-## ひと目でわかるコード例 (Quick Examples)
+## クイックスタート
 
-### Example 1: 四則演算コンポーネントの呼び出し (`arithmetic.wit`)
+* **Android アプリから使う**: [Android クイックスタート](docs/tutorials/android-quickstart.md)（実例: [`samples/android`](samples/android/README.md)）
+* **Kotlin/JVM から Gradle プラグインで使う（純 JVM）**: [Kotlin/JVM クイックスタート](docs/tutorials/jvm-quickstart.md)
+* **Wasmtime と CLI で使う（ネイティブ実行）**: [Wasmtime クイックスタート](docs/tutorials/wasmtime-quickstart.md)（実例: [`examples/`](examples/)）
 
-**入力 WIT ([arithmetic.wit](fixtures/arithmetic.wit)):**
+---
+
+## コード例
+
+### 関数の呼び出し (`arithmetic.wit`)
+
 ```wit
 package example:arithmetic@0.1.0;
 
 world arithmetic {
     export add: func(a: s32, b: s32) -> s32;
     export sub: func(a: s32, b: s32) -> s32;
-    export mul: func(a: s32, b: s32) -> s32;
-    export div: func(a: s32, b: s32) -> s32;
 }
 ```
 
-**ホスト側 Kotlin コード:**
+生成されたパッケージのトップレベルに `withSession` とエクスポート関数（`context(session: Session)` を取る関数）が出力されます（[ADR-0012](docs/adr/0012-world-at-package-top-level.md)）。
+
 ```kotlin
 import com.example.arithmetic.*
-import java.nio.file.Paths
 
-fun main() {
-    val wasmPath = Paths.get("arithmetic.wasm")
+// Chicory バックエンド（Gradle プラグインで生成された ArithmeticComponent を渡す）
+withSession(ArithmeticComponent) {
+    val sum = add(20, 7)   // 27
+    val diff = sub(50, 8)  // 42
+}
 
-    // withSession ブロックを抜けると Wasmtime の Store / Instance が自動的に close されます
-    withSession(wasmPath) {
-        val sum = add(20, 7)      // 27
-        val diff = sub(50, 8)     // 42
-        val prod = mul(-6, -7)    // 42
-        val quot = div(84, 2)     // 42
-        println("sum=$sum, diff=$diff, prod=$prod, quot=$quot")
-    }
+// Wasmtime バックエンド（.wasm のパスを渡す）
+withSession(Paths.get("arithmetic.wasm")) {
+    val sum = add(20, 7)
 }
 ```
 
----
+### Resource と `borrow` / `own` (`counter.wit`)
 
-### Example 2: ステートフルな Resource と `borrow` / `own` 所有権 (`counter.wit`)
-
-**入力 WIT ([counter.wit](fixtures/counter.wit)):**
 ```wit
 package example:counter@0.1.0;
 
@@ -78,7 +61,6 @@ interface counter-api {
     resource counter {
         constructor(init: s32);
         increment: func();
-        add: func(delta: s32);
         get-value: func() -> s32;
         merge: static func(a: borrow<counter>, b: own<counter>) -> counter;
     }
@@ -89,32 +71,22 @@ world counter-world {
 }
 ```
 
-**ホスト側 Kotlin コード:**
+エクスポートされた interface の型と関数は `<base>.exports.<namespace>.<package>.<interface>` パッケージに生成されます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)）。`resource` は `AutoCloseable` を実装します。
+
 ```kotlin
 import com.example.counter.*
-// export した interface は package <base>.exports.<namespace>.<package>.<interface> に生成される（ADR-0011）
 import com.example.counter.exports.example.counter.counter_api.Counter
-import java.nio.file.Paths
 
-fun main() {
-    val wasmPath = Paths.get("counter.wasm")
+withSession(CounterComponent) {
+    Counter(10).use { c1 ->
+        c1.increment()
+        val c2 = Counter(31)
 
-    withSession(wasmPath) {
-        // Counter(...) の生成時に Context Parameter から Session を自動キャプチャし、.use で自動解放
-        Counter(10).use { c1 ->
-            c1.increment()
-            c1.add(5)
-            println("c1 = ${c1.getValue()}") // 16
-
-            val c2 = Counter(26)
-
-            // merge(a: borrow<counter>, b: own<counter>) -> counter
-            // c1 は借用(borrow)なので引き続き利用可能、c2 は所有権移動(own)により消費される
-            Counter.merge(c1, c2).use { merged ->
-                println("c1 after merge = ${c1.getValue()}") // 16 (引き続き有効)
-                println("c2 isClosed = ${c2.isClosed}")      // true (所有権が移動済み)
-                println("merged = ${merged.getValue()}")     // 42
-            }
+        // c1 は borrow のため呼び出し後も有効、c2 は own のため呼び出し成功後に closed になる
+        Counter.merge(c1, c2).use { merged ->
+            println(c1.getValue())     // 11
+            println(c2.isClosed)       // true
+            println(merged.getValue()) // 42
         }
     }
 }
@@ -122,127 +94,35 @@ fun main() {
 
 ---
 
+## 要件
+
+要件は使う経路によって異なります。詳細は [互換性とバージョン要件](docs/reference/compatibility.md) にまとめています。
+
+| 項目 | Chicory + Gradle プラグイン | Wasmtime + CLI |
+| :--- | :--- | :--- |
+| ビルド時の JDK | JDK 21 以上（Gradle デーモン） | JDK 21 以上 |
+| 実行時の環境 | JVM 11 以上 / Android `minSdk 26` 以上 | JVM 21 以上（FFM は `--enable-preview --enable-native-access=ALL-UNNAMED`） |
+| Kotlin | 2.2.0 以上（`-Xcontext-parameters`） | 2.2.0 以上（`-Xcontext-parameters`） |
+| Rust / `cargo` | 不要 | 必要（`rust-bridge` または型付きブリッジのビルド） |
+| `wasm-tools` | 不要（分解ツールを wasm として同梱） | 必要（`.wit` / `.wasm` から JSON AST を抽出） |
+
+---
+
 ## 安全性の前提 (Trust model)
 
-**今の wasm2kt は、信頼できるコンポーネントを動かすことを前提にしています。** 外から受け取ったコンポーネント（ユーザーが入れるプラグインなど）を動かす場合は、次の点に注意してください（#77）。
+現在の `wasm2kt` は、**信頼できるコンポーネントを動かすこと**を前提としています。外部から受け取ったコンポーネント（ユーザーが追加するプラグインなど）を実行する場合は、以下の制約に注意してください（[#77](https://github.com/chikoski/wasm-component-kotlin/issues/77)）。
 
-* **実行時間を制限しません。** 無限ループするゲストは、呼び出したスレッドを止めたままにします。別のスレッドからセッションを `close()` しても、呼び出しは止まりません（`close()` は呼び出しが終わるのを待ちます）。Android では ANR の原因になります
-* **メモリを制限しません。** ゲストは、コンポーネントが宣言した最大値まで（宣言がなければ 4 GiB まで）線形メモリを増やせます。JVM や Android のプロセスのメモリが足りなくなることがあります
-* WebAssembly のサンドボックスは保たれます。ゲストが、ホストのメモリやファイルに、import で渡したもの以外の方法で触れることはありません。ただし、`.cwasm`（Wasmtime の事前コンパイル）は検証されない機械語を含むので、自分のビルドで作ったものだけを読み込んでください（[docs/getting-started.md](docs/getting-started.md)）
-
-実行時間とメモリの上限をセッションごとに指定できるようにすることは、#77 で検討しています。
+* **実行時間を制限しません。** 無限ループするゲストは、呼び出したスレッドをブロックし続けます。別スレッドからセッションを `close()` しても実行中の呼び出しは中断されません（`close()` は呼び出しの終了を待ちます）。Android のメインスレッドで起きると ANR になります
+* **メモリを制限しません。** ゲストはコンポーネントが宣言した最大値（未宣言なら最大 4 GiB）まで線形メモリを拡張できるため、JVM や Android プロセスのメモリが枯渇することがあります
+* WebAssembly のサンドボックスは維持され、import で渡したもの以外のホスト資源には触れられません。ただし Wasmtime の事前コンパイル済みファイル（`.cwasm`）は未検証の機械語を含むため、自分のビルドで生成したものだけを読み込んでください（[Wasmtime クイックスタート](docs/tutorials/wasmtime-quickstart.md#6-事前コンパイルcwasm)）
 
 ---
 
-## 必要要件 (Requirements)
+## ドキュメント
 
-* **JDK 21 以上**（Foreign Function & Memory API のため `--enable-preview --enable-native-access=ALL-UNNAMED` を使用）
-* **Kotlin 2.2.0 以上**（Context Parameters のため `-Xcontext-parameters` を使用）
-* **`wasm-tools` CLI**（`1.200.0+`、`.wit` や `.wasm` から JSON AST を抽出するために使用）
-* **Rust ツールチェーン (`cargo`)**（ネイティブ Wasmtime ブリッジ `rust-bridge` をビルドするために使用）
+全体の目次は **[docs/index.md](docs/index.md)** にあります。
 
----
-
-## クイックスタート (Quick Start)
-
-### 1. ネイティブ Wasmtime ブリッジのビルド
-
-最初に Rust 製の共有ライブラリ（macOS: `libwasm2kt_wasmtime_bridge.dylib` / Linux: `.so` / Windows: `.dll`）をビルドします。
-
-```bash
-cargo build --release --manifest-path rust-bridge/Cargo.toml
-```
-
-### 2. `wasm2kt` CLI でバインディングを生成
-
-`.wit` ファイル、WIT ディレクトリ、または `.wasm` コンポーネントバイナリを指定して Kotlin コードを生成します。
-
-```bash
-# .wit ファイルから生成する場合
-./gradlew run --args="fixtures/counter.wit -o build/generated -p com.example.counter"
-
-# .wasm コンポーネントバイナリから直接生成する場合
-./gradlew run --args="fixtures/counter.wasm -o build/generated -p com.example.counter"
-
-# wasm-tools の JSON AST をパイプで渡す場合
-wasm-tools component wit --json component.wasm | ./gradlew run --args="--from-json -o build/generated -p com.example.wasm"
-```
-
-`wasm2kt generate ...` と書いても同じです（サブコマンドを省略すると `generate` になります）。
-
-### 2'. （任意）型付きの Wasmtime ブリッジを作る
-
-汎用ブリッジは、どのコンポーネントも、Wasmtime の `Val` を通して要素ごとに変換して呼びます。
-`wasm2kt bridge` は、プロジェクトのコンポーネントに合わせた Rust のクレートを生成し、`--build` で `cargo build --release` まで行います。
-`list<u8>` や文字列は、まとめてコピーされます（64 KiB の `list<u8>` の往復で約 50 倍速くなります。[docs/performance.md](docs/performance.md)）。設計は [ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md) にあります。
-
-```bash
-# バインディングは、ブリッジの中のコンポーネントの ID を指定して生成する
-./gradlew run --args="generate fixtures/counter.wasm -o build/generated -p com.example.counter --bridge-id counter"
-
-# 型付きブリッジのクレートを生成してビルドし、ライブラリをリソースのディレクトリに置く
-./gradlew run --args="bridge -o build/typed-bridge --component counter=fixtures/counter.wasm --build --resources-output build/typed-bridge-resources"
-```
-
-`--resources-output` のディレクトリ（`META-INF/wasm2kt/native/<platform>/` の下にライブラリが入る）を jar に含めるかクラスパスに加えれば、
-`runtime-wasmtime` が汎用ブリッジの代わりにそれを読み込みます。`-Dwasm2kt.bridge.lib` でライブラリのパスを直接指定することもできます。
-
-### 3. テストの実行（実 `.wasm` コンポーネントの E2E 検証を含む）
-
-```bash
-./gradlew test
-```
-
----
-
-## CLI オプション一覧
-
-### `wasm2kt generate`（サブコマンドの省略時も同じ）
-
-```text
-Usage: wasm2kt generate [<options>] [<input-path>]
-
-Arguments:
-  <input-path>               .wit ファイル、WIT パッケージディレクトリ、.wasm コンポーネントバイナリ、
-                             または JSON AST ファイルのパス（--from-json 時は省略で stdin から読込）
-
-Options:
-  -o, --output=<path>        生成された .kt ファイルの出力先ディレクトリ (必須)
-  -p, --package=<text>       生成される Kotlin コードのパッケージ名 (必須)
-  -w, --world=<text>         対象の WIT world 名を指定（省略時はすべての world を生成）
-  --from-json                入力を wasm-tools の JSON AST として直接読み込むフラグ
-  --no-wasmtime              Wasmtime (FFM/JNI) セッション実装を生成しない（Chicory のみ・Android 向け）
-  --with=<interface=package> import した interface を生成せず、既存のバインディングの package を使う
-                             （例: wasi:filesystem/types@0.3.0=wasm2kt.wasi.wasi.filesystem.types。繰り返し可。ADR-0014）
-  --library=<path>           --interfaces-only で生成したライブラリの jar / クラスディレクトリ。マニフェストにある
-                             interface を、world が同じ版を import していれば生成せずに使う（繰り返し可）
-  --no-library-interfaces    --library のマニフェストを使わない（--with だけを使う）
-  --interfaces-only          world が import する interface と、そのマニフェストだけを生成する（ライブラリ用）
-  --resources-output=<path>  --interfaces-only のマニフェストの出力先（省略時は --output）
-  --wasm-tools-path=<text>   wasm-tools 実行バイナリのパス（デフォルト: "wasm-tools"）
-  --bridge-id=<text>         Wasmtime のセッションを、型付きブリッジのこの ID のコンポーネントとして開く（ADR-0016）
-  -h, --help                 ヘルプを表示
-```
-
----
-
-## ドキュメント & 使用例 (Documentation & Examples)
-
-### 詳細ドキュメント (`docs/`)
-* **[プロジェクトの現状とアクションアイテム](docs/STATUS.md)** / **[設計判断の記録 (ADR)](docs/adr/README.md)**
-* **[Getting Started (環境構築・チュートリアル)](docs/getting-started.md)**: ゼロから Wasm コンポーネントを用意し、Kotlin プロジェクトに組み込んで実行するまでの手順。
-* **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `option`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
-* **[Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md)**: Android を含む純 JVM 実行。ビルド時の分解・AOT コンパイルのパイプラインと、プラグインの使い方。
-* **[性能とサイズ](docs/performance.md)**: Chicory バックエンドの呼び出しのコスト、初回のインスタンス化、APK サイズの計測結果（JVM と ART）。
-* **[ビルドの順序](docs/build-pipeline.md)** / **[Kotlin から wasm の関数を呼び出す経路](docs/call-path.md)**: 分解・AOT コンパイル・生成・rust-bridge のビルドの順序と、呼び出しごとの値の変換（今の仕組みと ADR-0015 の案）。
-* **[アーキテクチャ解説](docs/architecture.md)**: `wasm-tools` JSON AST から KotlinPoet への変換パイプラインと、JVM FFM API ⇄ Rust `wasmtime` (`cdylib`) 間の C ABI 設計。
-* **[技術仕様書 (SPEC.md)](SPEC.md)** / **[仕様レビューと決定事項 (SPEC_REVIEW.md)](SPEC_REVIEW.md)**
-
-### サンプルアプリ (`samples/`)
-* **[android](samples/android)**: Gradle プラグインを使い、ビルド時にコンパイルしたコンポーネントを Android アプリから呼び出すサンプル。
-
-### 使用例 (`examples/`)
-* **[01-arithmetic](examples/01-arithmetic/README.md)**: 最小構成の四則演算コンポーネントのネイティブ実行。
-* **[02-host-imports](examples/02-host-imports/README.md)**: ホスト関数 (`Imports` と `imports(...)`) の実装と Wasm からの FFM Upcall コールバック。
-* **[03-counter-resource](examples/03-counter-resource/README.md)**: ステートフルな `resource` のライフサイクル（`.use` 自動解放、`borrow` と `own` による `merge`）。
-* **[04-algebraic-types-and-mock](examples/04-algebraic-types-and-mock/README.md)**: `record`, `variant`, `flags`, `option`（`T?`）, `WitResult` の操作と、`InMemoryWasmtimeSession` を使った単体テスト。
+* **ガイド**: [バックエンドの選び方](docs/guides/choosing-a-backend.md) / [ホスト import と interface の共有](docs/guides/host-imports.md) / [リソースと所有権](docs/guides/resources-and-ownership.md) / [エラーとトラップ](docs/guides/errors-and-traps.md) / [テストの書き方](docs/guides/testing.md) / [コンポーネント作者向け](docs/guides/authoring-components.md) / [トラブルシューティング](docs/guides/troubleshooting.md)
+* **リファレンス**: [WIT 型マッピングと DSL](docs/reference/type-mapping.md) / [Gradle プラグイン](docs/reference/gradle-plugin.md) / [CLI](docs/reference/cli.md) / [機能の対応表](docs/reference/feature-support.md) / [互換性とバージョン要件](docs/reference/compatibility.md)
+* **仕組みと計測**: [アーキテクチャ](docs/explanation/architecture.md) / [ビルドの順序](docs/explanation/build-pipeline.md) / [呼び出しの経路](docs/explanation/call-path.md) / [性能とサイズ](docs/explanation/performance.md)
+* **開発・現状**: [CONTRIBUTING.md](CONTRIBUTING.md) / [プロジェクトの現状 (`STATUS.md`)](docs/STATUS.md) / [設計判断 (`adr/`)](docs/adr/README.md) / [変更履歴 (`CHANGELOG.md`)](CHANGELOG.md)
