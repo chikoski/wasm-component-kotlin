@@ -33,6 +33,7 @@ class Wasm2KtPluginFunctionalTest {
             """
             rootProject.name = "consumer"
             pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
             """.trimIndent(),
         )
         dir.resolve("build.gradle.kts").writeText(
@@ -110,7 +111,7 @@ class Wasm2KtPluginFunctionalTest {
     @Test
     fun `unsupported features are reported at build time`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("composed-res.wasm"), dir.resolve("composed.wasm").toPath())
-        dir.resolve("settings.gradle.kts").writeText("""rootProject.name = "consumer"""")
+        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n$ISOLATED_BUILD_CACHE")
         fun buildScript(fail: Boolean) = dir.resolve("build.gradle.kts").writeText(
             """
             plugins { id("io.github.wasm2kt") }
@@ -132,9 +133,17 @@ class Wasm2KtPluginFunctionalTest {
 
         // Default: a warning naming what will fail at run time, and the build goes on.
         buildScript(fail = false)
-        val warned = runner(dir, "wasm2ktDecomposeComposed").build()
+        val warned = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
         assertTrue("composed.wasm uses features the Chicory backend does not support yet" in warned.output, warned.output)
         assertTrue("ResourceTransferOwn" in warned.output, warned.output)
+        // The warning comes again when decomposing is UP-TO-DATE, and when it comes FROM-CACHE (#78).
+        val again = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
+        assertEquals(TaskOutcome.UP_TO_DATE, again.task(":wasm2ktDecomposeComposed")?.outcome)
+        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in again.output, again.output)
+        dir.resolve("build/wasm2kt").deleteRecursively() // this project has no `clean` task
+        val cached = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
+        assertEquals(TaskOutcome.FROM_CACHE, cached.task(":wasm2ktDecomposeComposed")?.outcome)
+        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in cached.output, cached.output)
 
         // Opted in: the same check fails the build.
         buildScript(fail = true)
@@ -240,3 +249,9 @@ class Wasm2KtPluginFunctionalTest {
         assertTrue(!generated.resolve("example").exists(), "the library's interfaces must not be generated again")
     }
 }
+
+/**
+ * A build cache of the test project's own: TestKit's default one outlives a test run, so a later run
+ * would find the outputs of an earlier one and see FROM-CACHE where the test expects a real build.
+ */
+private const val ISOLATED_BUILD_CACHE = "buildCache { local { directory = file(\"build-cache\") } }"

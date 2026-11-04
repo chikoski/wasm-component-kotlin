@@ -132,7 +132,20 @@ class Wasm2KtPlugin : Plugin<Project> {
             t.decomposedDir.set(decompose.flatMap { it.outputDir })
             t.internalPackage.set(internalPackage)
             t.jar.set(base.map { it.file("wasm2kt-${component.name}.jar") })
+            t.warnings.set(base.map { it.file("compile-warnings.txt") })
         }
+        // Build-time warnings are printed by tasks without outputs, so they show on every build, also
+        // when decomposing or compiling is UP-TO-DATE or FROM-CACHE (#78).
+        val decomposeWarnings = project.tasks.register("wasm2ktDecomposeWarnings$cap", Wasm2KtWarningsTask::class.java) { t ->
+            t.description = "Prints the build-time warnings of decomposing the '${component.name}' component."
+            t.reports.from(decompose.flatMap { it.outputDir.file(WARNINGS_FILE) })
+        }
+        val compileWarnings = project.tasks.register("wasm2ktCompileWarnings$cap", Wasm2KtWarningsTask::class.java) { t ->
+            t.description = "Prints the build-time warnings of compiling the '${component.name}' core modules."
+            t.reports.from(compile.flatMap { it.warnings })
+        }
+        decompose.configure { it.finalizedBy(decomposeWarnings) }
+        compile.configure { it.finalizedBy(compileWarnings) }
         val generate = project.tasks.register("wasm2ktGenerate$cap", Wasm2KtGenerateTask::class.java) { t ->
             t.group = GROUP
             t.description = "Generates Kotlin bindings for the '${component.name}' WebAssembly component."

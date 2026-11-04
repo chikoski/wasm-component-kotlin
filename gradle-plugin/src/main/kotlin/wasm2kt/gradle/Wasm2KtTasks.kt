@@ -11,6 +11,7 @@ import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
@@ -93,7 +94,8 @@ abstract class Wasm2KtDecomposeTask : Wasm2KtToolingTask() {
                 out.deleteRecursively() // never leave a decomposed result behind for a failed check
                 throw IllegalStateException("$report\n(set wasm2kt.failOnUnsupportedFeatures = false to build anyway)")
             }
-            logger.warn("$report\n(set wasm2kt.failOnUnsupportedFeatures = true to fail the build instead)")
+            // Printed by Wasm2KtWarningsTask, also when this task is UP-TO-DATE or FROM-CACHE (#78).
+            File(out, WARNINGS_FILE).writeText("$report\n(set wasm2kt.failOnUnsupportedFeatures = true to fail the build instead)\n")
         }
     }
 }
@@ -115,11 +117,16 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
     @get:OutputFile
     abstract val jar: RegularFileProperty
 
+    /** The build-time warnings of this compilation, printed by [Wasm2KtWarningsTask] on every build (#78). */
+    @get:OutputFile
+    abstract val warnings: RegularFileProperty
+
     @TaskAction
     fun compile() = submit(CompileAction::class.java) {
         it.decomposedDir.set(decomposedDir)
         it.internalPackage.set(internalPackage)
         it.jar.set(jar)
+        it.warnings.set(warnings)
         it.workDir.set(temporaryDir)
     }
 
@@ -127,12 +134,11 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
         val decomposedDir: DirectoryProperty
         val internalPackage: Property<String>
         val jar: RegularFileProperty
+        val warnings: RegularFileProperty
         val workDir: DirectoryProperty
     }
 
     abstract class CompileAction : WorkAction<Params> {
-        private val logger = org.gradle.api.logging.Logging.getLogger(Wasm2KtCompileTask::class.java)
-
         override fun execute() {
             val work = parameters.workDir.get().asFile.toPath()
             work.toFile().deleteRecursively()
@@ -142,9 +148,10 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
             val pkg = parameters.internalPackage.get()
             val compiled = CoreModuleCompiler.compile(decomposed, classes, resources, pkg)
             ComponentBuild.copyPlan(decomposed, resources, pkg)
-            compiled.filter { it.interpretedFunctions > 0 }.forEach {
-                logger.warn("wasm2kt: ${it.interpretedFunctions} function(s) of core module ${it.index} are too large for a JVM method and will be interpreted")
+            val warnings = compiled.filter { it.interpretedFunctions > 0 }.joinToString("") {
+                "wasm2kt: ${it.interpretedFunctions} function(s) of core module ${it.index} are too large for a JVM method and will be interpreted\n"
             }
+            parameters.warnings.get().asFile.apply { parentFile.mkdirs() }.writeText(warnings)
             writeJar(parameters.jar.get().asFile, listOf(classes, resources).map { it.toFile() })
         }
 
@@ -244,3 +251,24 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
 
 /** 1980-02-01, the same constant Gradle uses for reproducible archives (zip has no earlier dates). */
 private const val REPRODUCIBLE_TIMESTAMP = 318211200000L
+
+/** The file in a decomposed directory that holds the decomposition's build-time warnings (#78). */
+internal const val WARNINGS_FILE = "wasm2kt-warnings.txt"
+
+/**
+ * Prints the build-time warnings that a cacheable task recorded in [reports] (#39). The producing task
+ * may be UP-TO-DATE or come FROM-CACHE, where its own action does not run; this task declares no
+ * outputs, so it runs on every build that runs (or skips) the producing task, which it finalizes (#78).
+ */
+abstract class Wasm2KtWarningsTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val reports: ConfigurableFileCollection
+
+    @TaskAction
+    fun print() {
+        for (file in reports.files) {
+            if (file.isFile && file.length() > 0) logger.warn(file.readText().trimEnd())
+        }
+    }
+}
