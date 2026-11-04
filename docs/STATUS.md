@@ -47,6 +47,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 検証済み
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
+* Component Model の公式テストスイート（`values/`、`resources/`。[ADR-0017](adr/0017-component-model-conformance-suite.md)、#30）: Chicory で 191 のコマンドのうち 168 が通る。残りは `conformance/skip.txt` に理由つきで載せている（#70 合成したコンポーネントの間の resource、#71 `map`、#16 async）
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
 * 短い名前が同じ interface（`example:http/types` と `example:fs/types`）の import と export を、両バックエンドで区別して扱える。キーは完全修飾名で、短い名前と版なしの名前は一意のときだけ受け付け、曖昧ならエラー（`same-name` フィクスチャ、[ADR-0011](adr/0011-qualified-interface-keys.md)、#32）
 * ホスト定義 resource: Wasmtime（FFM / JNI）と Chicory で同じハーネスのイベント列が一致（own / borrow / 入れ子の option・result / static / world 直下の resource / drop 時の `close()`、貸し出し中のハンドルの drop の拒否）
@@ -107,6 +108,8 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 | [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い |
 | [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) | — | Gradle プラグインの分解タスクがまれに `Stream closed` で失敗する |
+| [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) | — | Chicory: 合成したコンポーネントの間で resource を受け渡す組み込み関数（`ResourceTransferOwn` など。公式テストで発見） |
+| [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない） |
 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（#16 の受け入れ基準にも使う） |

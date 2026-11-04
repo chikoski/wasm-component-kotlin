@@ -1,0 +1,18 @@
+# Known failures of the Component Model reference tests on Chicory (#30), with the reason.
+# `<file>` skips a whole file, `<file>:<line>` one command (the line of the command in the .wast).
+# A listed command that passes fails ConformanceTest, so remove it once fixed.
+
+# map<K, V> (the component model map feature) is not supported (#71).
+values/concat.wast:463  # map<K, V> is not supported (#71)
+
+# async lifts (task.return) are Chicory's next feature (#16).
+values/variants.wast:83  # async: task.return (#16)
+
+# Resources passed between nested components need adapter intrinsics Chicory lacks (#70).
+resources/borrows.wast:159  # ResourceTransferOwn (#70)
+resources/borrows.wast:162  # ResourceTransferOwn (#70)
+resources/handle-table.wast:106  # ResourceTransferOwn (#70)
+resources/handle-table.wast:211  # ResourceTransferOwn (#70)
+resources/handle-table.wast:213  # EnterSyncCall (#70)
+resources/handle-table.wast:260  # ResourceTransferOwn (#70)
+resources/multiple-resources.wast:170  # ResourceTransferOwn (#70)

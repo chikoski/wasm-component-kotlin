@@ -27,6 +27,17 @@ object Decomposer {
         Parser.parse(bytes)
     }
 
+    /**
+     * The `wit.json` of a decomposed component, for binding generation. Some valid components have no
+     * WIT form (e.g. ones exporting bare types); the decomposer then writes `wit-error.txt` instead.
+     */
+    fun witJson(decomposedDir: java.nio.file.Path): java.nio.file.Path {
+        val wit = decomposedDir.resolve("wit.json")
+        if (java.nio.file.Files.exists(wit)) return wit
+        val reason = decomposedDir.resolve("wit-error.txt").takeIf { java.nio.file.Files.exists(it) }?.let { java.nio.file.Files.readString(it).trim() }
+        throw IllegalStateException("No bindings can be generated: the component's WIT could not be decoded" + (reason?.let { ": $it" } ?: ""))
+    }
+
     /** Compiled once per JVM (i.e. per Gradle daemon) and reused across components. */
     private val machineFactory: Function<Instance, Machine> by lazy { MachineFactoryCompiler.compile(module) }
 

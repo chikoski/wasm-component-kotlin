@@ -12,7 +12,8 @@
 //! Usage: `wasm2kt-decompose <component.wasm> <out-dir>`
 //! Output: `<out-dir>/plan.json`, `<out-dir>/core<N>.wasm` and `<out-dir>/wit.json` (the
 //! component's WIT in the same JSON form as `wasm-tools component wit --json`, so binding
-//! generation needs no external wasm-tools).
+//! generation needs no external wasm-tools). A component whose WIT cannot be decoded gets
+//! `<out-dir>/wit-error.txt` with the reason instead of `wit.json`.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -40,7 +41,18 @@ fn main() -> Result<()> {
         std::fs::write(out_dir.join(file), wasm)?;
     }
     std::fs::write(out_dir.join("plan.json"), serde_json::to_string_pretty(&plan)?)?;
-    std::fs::write(out_dir.join("wit.json"), wit_json(&bytes)?)?;
+    // Running a component needs only the plan. Its WIT, for binding generation, cannot be decoded
+    // for every valid component (e.g. one that exports bare types, as the Component Model reference
+    // tests do, #30): such a component gets `wit-error.txt` instead of `wit.json`.
+    let _ = std::fs::remove_file(out_dir.join("wit-error.txt"));
+    match wit_json(&bytes) {
+        Ok(json) => std::fs::write(out_dir.join("wit.json"), json)?,
+        Err(e) => {
+            let _ = std::fs::remove_file(out_dir.join("wit.json"));
+            eprintln!("warning: {:#}", e);
+            std::fs::write(out_dir.join("wit-error.txt"), format!("{:#}\n", e))?;
+        }
+    }
     Ok(())
 }
 
