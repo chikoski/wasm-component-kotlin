@@ -12,7 +12,6 @@ import java.lang.invoke.MethodType
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 
 /**
  * Native Wasmtime Component Model runtime bridge using Java 22+ / 21 Foreign Function & Memory (FFM) API
@@ -504,36 +503,13 @@ class FfmWasmtimeBridge private constructor(
             }
         }
 
-        fun resolveBridgeLibraryPath(): Path {
-            System.getProperty("wasm2kt.bridge.lib")?.let { prop ->
-                val p = Paths.get(prop)
-                if (Files.exists(p)) return p.toAbsolutePath()
-            }
-            System.getenv("WASM2KT_BRIDGE_LIB")?.let { env ->
-                val p = Paths.get(env)
-                if (Files.exists(p)) return p.toAbsolutePath()
-            }
-            val osName = System.getProperty("os.name").lowercase()
-            val libFileName = when {
-                "mac" in osName || "darwin" in osName -> "libwasm2kt_wasmtime_bridge.dylib"
-                "win" in osName -> "wasm2kt_wasmtime_bridge.dll"
-                else -> "libwasm2kt_wasmtime_bridge.so"
-            }
-            val candidates = listOf(
-                Paths.get("rust-bridge/target/release/$libFileName"),
-                Paths.get("rust-bridge/target/debug/$libFileName"),
-                Paths.get("../rust-bridge/target/release/$libFileName"),
+        /** The bridge library to load; see [BridgeLibrary.locate] for the order. */
+        fun resolveBridgeLibraryPath(): Path =
+            BridgeLibrary.locate() ?: throw IllegalStateException(
+                "Could not locate the Wasmtime bridge ${BridgeLibrary.fileName()}: set -Dwasm2kt.bridge.lib=/path/to/it, put it on the " +
+                    "class path as ${BridgeLibrary.resourcePath()} (wasm2kt bridge --build --resources-output), or build the generic " +
+                    "bridge with `cargo build --release --manifest-path rust-bridge/Cargo.toml`",
             )
-            for (candidate in candidates) {
-                if (Files.exists(candidate)) {
-                    return candidate.toAbsolutePath()
-                }
-            }
-            throw IllegalStateException(
-                "Could not locate $libFileName. Build it with `cargo build --release --manifest-path rust-bridge/Cargo.toml` " +
-                    "or set -Dwasm2kt.bridge.lib=/path/to/$libFileName",
-            )
-        }
     }
 }
 

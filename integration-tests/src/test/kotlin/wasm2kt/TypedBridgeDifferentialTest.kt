@@ -53,10 +53,18 @@ object TypedBridgeFixtures {
     private val components: Path = Paths.get("runtime-chicory/src/test/resources/components").toAbsolutePath()
     val crate: Path = Paths.get("integration-tests/build/typed-bridge").toAbsolutePath()
 
-    /** Makes the typed library the bridge of this JVM (before any session opens). */
+    /**
+     * Makes the typed library the bridge of this JVM (before any session opens). It is put on the class
+     * path, as `wasm2kt bridge --build --resources-output` does, so the bridges find it there (#65).
+     */
     fun use() {
-        System.setProperty("wasm2kt.bridge.lib", library.toString())
-        check(FfmWasmtimeBridge.resolveBridgeLibraryPath() == library) { "Another bridge library was loaded first" }
+        val resources = Paths.get(requireNotNull(System.getProperty("wasm2kt.test.bridgeResources")) { "Run with the typedBridgeTest task" })
+        TypedBridge.copyToResources(library, resources)
+        check(System.getProperty("wasm2kt.bridge.lib") == null && System.getenv("WASM2KT_BRIDGE_LIB") == null) {
+            "The typed bridge tests load the bridge from the class path; unset -Dwasm2kt.bridge.lib / WASM2KT_BRIDGE_LIB"
+        }
+        val located = FfmWasmtimeBridge.resolveBridgeLibraryPath()
+        check(Files.mismatch(located, library) == -1L) { "Loaded $located instead of the typed bridge $library" }
     }
 
     /** Built once per JVM; Cargo's target directory is shared with rust-bridge so Wasmtime is compiled once. */

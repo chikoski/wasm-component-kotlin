@@ -5,7 +5,7 @@
 > いずれも 2026-11-04 に決まりました（4 節、5 節、6 節）。
 >
 > **2026-11-04 追記**: 型付きブリッジは、`bindgen!` ではなく、tooling が wit.json から Rust の型と呼び出しを生成する方式にしました（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）。
-> WIT を取り出す段階（4 節）は要らなくなりました。CLI（6 節）は実装済みです。Gradle プラグインでの Wasmtime の対応（3.2 節、5 節）は、今は行わないことにしました（2026-11-04）。ライブラリは jar のリソースから読み込む方針です（#65）。
+> WIT を取り出す段階（4 節）は要らなくなりました。CLI（6 節）は実装済みです。Gradle プラグインでの Wasmtime の対応（3.2 節、5 節）は、今は行わないことにしました（2026-11-04）。ライブラリは jar のリソースから読み込めます（#65）。
 
 ## 1. 成果物と、それを使う時期
 
@@ -198,7 +198,11 @@ wasm2kt bridge -o <クレート> --component calc=calc.wasm --component http=htt
 ```
 
 * `--component` の入力は、`.wasm`、`.wit`、WIT の JSON です（`.json` 以外は `wasm-tools component wit --json` で読みます）
-* `--build` は、ビルドしたライブラリのパスを出力します。ライブラリは汎用ブリッジと同じ名前（`libwasm2kt_wasmtime_bridge`）なので、`-Dwasm2kt.bridge.lib` で指定するか、汎用ブリッジの代わりに置きます
+* `--build` は、ビルドしたライブラリのパスを出力します。ライブラリは汎用ブリッジと同じ名前（`libwasm2kt_wasmtime_bridge`）です
+* `--resources-output <dir>` を付けると、ライブラリを `<dir>/META-INF/wasm2kt/native/<platform>/` にコピーします（#65）。`<platform>` は `linux-x86_64`、`macos-aarch64`、`windows-x86_64` などで、`--target` のトリプルか、ビルドしたマシンから決まります
+  * このディレクトリを jar に入れれば、`runtime-wasmtime` がクラスパスから一時ファイルに取り出して読み込みます
+  * 探す順序は `-Dwasm2kt.bridge.lib` / `WASM2KT_BRIDGE_LIB`、クラスパス、リポジトリの `rust-bridge/target/` です（`BridgeLibrary`）
+  * Android の `jniLibs` には使いません（#60）
 * サブコマンドのない `wasm2kt <入力> -o ... -p ...` は、`generate` と同じに扱います
 
 以下は判断のときの記録です。
