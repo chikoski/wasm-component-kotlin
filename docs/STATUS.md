@@ -94,13 +94,23 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 QC レビュー（2026-10-31）で見つかったものは、すべて片付けました（「完了」を参照）。
 
-async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。公式テストスイートを先に入れ、#16 の受け入れ基準に使います（2026-11-04 に決定）。
+**QC レビュー（2026-11-04）で見つかったもの**を先に片付けます。async（#16）は、調査が済むまで止めています（2026-11-04 に決定）。優先度の見直しの理由は、各 Issue のコメントにあります。
+
+| 順 | Issue | 優先度 | 内容 |
+| :--- | :--- | :--- | :--- |
+| 1 | [#75](https://github.com/chikoski/wasm-component-kotlin/issues/75) | P1 | 同じセッションを複数のスレッドから使うと、ホスト resource の貸し出しが別の呼び出しのものとして扱われる（`bind` が直列化の外にある） |
+| 2 | [#76](https://github.com/chikoski/wasm-component-kotlin/issues/76) | P1（P2 から上げた） | 生成コードがゲスト resource のハンドルを検証しない。別のセッションの resource が、黙って別のものとして使われる。own は呼び出しの前に手放される |
+| 3 | [#79](https://github.com/chikoski/wasm-component-kotlin/issues/79) | P2 | 型付きブリッジの `cargo build` が `--locked` を使わず、タイムアウトも効かない（修正が小さいので早めに） |
+| 4 | [#80](https://github.com/chikoski/wasm-component-kotlin/issues/80) | P2 | `runtime-api` / `runtime-chicory` を Android の API レベル（minSdk 26）で検査していない |
+| 5 | [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) | P2 | ビルド時の警告が、2 回目以降のビルド（UP-TO-DATE、FROM-CACHE）で出ない |
+| 6 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | P2 | 実行時間とメモリの制限がない。まずドキュメントに明記し、実装は後で優先度を見直す |
+
+そのあと、async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。公式テストスイート（#30）は取り込み済みで、#16 の受け入れ基準に使います。
 
 | 順 | Issue | ID | 内容 |
 | :--- | :--- | :--- | :--- |
-| 1 | [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) | — | Component Model 仕様の公式テストスイートの取り込み（Chicory の適合性検証。#16 の受け入れ基準） |
-| 2 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ） |
-| 3 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。ライブラリとして配る仕組みは #54 で用意済み） |
+| 1 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ）。調査が済むまで止めている |
+| 2 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。ライブラリとして配る仕組みは #54 で用意済み） |
 
 並行して進めるもの:
 
@@ -115,7 +125,6 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 | [#68](https://github.com/chikoski/wasm-component-kotlin/issues/68) | — | 数値だけの関数をバイト列を通さずに呼ぶ（ADR-0015 の進め方の 3。必要になってから） |
 | [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い |
-| [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) | — | Gradle プラグインの分解タスクがまれに `Stream closed` で失敗する |
 | [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) | — | Chicory: 合成したコンポーネントの間で resource を受け渡す組み込み関数（`ResourceTransferOwn` など。公式テストで発見） |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
@@ -123,6 +132,8 @@ async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0
 
 ### 完了
 
+* [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) Component Model の公式テストスイートの取り込み — #72（[ADR-0017](adr/0017-component-model-conformance-suite.md)）
+* [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) 分解タスクがまれに `Stream closed` で失敗する — #73（jar のキャッシュを使わずに読む。原因は推定）
 * [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) JSON 境界をやめ、型に沿ったバイナリ形式と Wasmtime の型付きブリッジにする — #62（[ADR-0015](adr/0015-binary-value-boundary.md)）、#64（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）、#67（#65。ライブラリをクラスパスから読み込む）。Gradle プラグインでの Wasmtime の対応は見送り
 * [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) 性能・サイズの計測 — [docs/performance.md](performance.md)（`benchmarks/`、`samples/android/benchmark`、`Bench` ワークフロー、`heavy` フィクスチャ）
 
