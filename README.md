@@ -200,6 +200,7 @@ Options:
 * **[WIT 型マッピング & DSL ガイド](docs/type-mapping-and-dsl.md)**: プリミティブ型・複合型（`record`, `variant`, `enum`, `flags`, `tuple`, `option`, `WitResult`）および `resource`・Context Parameters の詳細リファレンス。
 * **[Chicory バックエンドと Gradle プラグイン](docs/chicory-backend.md)**: Android を含む純 JVM 実行。ビルド時の分解・AOT コンパイルのパイプラインと、プラグインの使い方。
 * **[性能とサイズ](docs/performance.md)**: Chicory バックエンドの呼び出しのコスト、初回のインスタンス化、APK サイズの計測結果（JVM と ART）。
+* **[ビルドの順序](docs/build-pipeline.md)** / **[Kotlin から wasm の関数を呼び出す経路](docs/call-path.md)**: 分解・AOT コンパイル・生成・rust-bridge のビルドの順序と、呼び出しごとの値の変換（今の仕組みと ADR-0015 の案）。
 * **[アーキテクチャ解説](docs/architecture.md)**: `wasm-tools` JSON AST から KotlinPoet への変換パイプラインと、JVM FFM API ⇄ Rust `wasmtime` (`cdylib`) 間の C ABI 設計。
 * **[技術仕様書 (SPEC.md)](SPEC.md)** / **[仕様レビューと決定事項 (SPEC_REVIEW.md)](SPEC_REVIEW.md)**
 
