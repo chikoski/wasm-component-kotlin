@@ -34,6 +34,9 @@ class BridgeLibraryTest {
             assertEquals("libwasm2kt_wasmtime_bridge.so", file.fileName.toString())
             assertNotEquals(resource, file)
             assertContentEquals(bytes, Files.readAllBytes(file))
+            if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+                assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(file.parent)))
+            }
             // Extracted once per JVM.
             assertEquals(file, BridgeLibrary.fromClassPath(loader, "linux-x86_64"))
             assertNull(BridgeLibrary.fromClassPath(loader, "macos-aarch64"))

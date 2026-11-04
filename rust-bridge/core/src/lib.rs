@@ -40,9 +40,15 @@ pub trait TypedComponent: Sync {
 }
 
 /// An export called with typed arguments: reads them from the binary format, calls the function and
-/// writes the results.
+/// writes the results. Errors of the call itself carry [`call_failed`]'s context for `name` (the name
+/// the caller resolved), like the generic path; errors in the arguments do not.
 pub trait TypedExport: Send {
-    fn call(&self, store: &mut Store<StoreData>, args: &[u8]) -> Result<Vec<u8>>;
+    fn call(&self, store: &mut Store<StoreData>, args: &[u8], name: &str) -> Result<Vec<u8>>;
+}
+
+/// The context of an error raised by Wasmtime while it calls the export `name`.
+pub fn call_failed(name: &str) -> String {
+    format!("Wasmtime call to '{}' failed", name)
 }
 
 /// The typed components a bridge library contains (empty for the generic bridge).
@@ -749,7 +755,7 @@ fn lower_and_call(store: &mut Store<StoreData>, export: &ExportFn, args: &[u8], 
     export
         .func
         .call(&mut *store, &params, results)
-        .with_context(|| format!("Wasmtime call to '{}' failed", export.name))
+        .with_context(|| call_failed(&export.name))
 }
 
 fn session_invoke_internal(session: &mut BridgeSession, index: u32, args: &[u8]) -> Result<Vec<u8>> {
@@ -763,10 +769,7 @@ fn session_invoke_internal(session: &mut BridgeSession, index: u32, args: &[u8])
             let called = lower_and_call(&mut session.store, export, args, &mut wasm_results);
             (called.map(|()| Vec::new()), Some((export, wasm_results)))
         }
-        Export::Typed(name, call) => (
-            call.call(&mut session.store, args).with_context(|| format!("Wasmtime call to '{}' failed", name)),
-            None,
-        ),
+        Export::Typed(name, call) => (call.call(&mut session.store, args, name), None),
     };
     // End the host borrows of this call (these handles carry no destructor).
     for lent in std::mem::take(&mut session.store.data_mut().lent_host_resources) {

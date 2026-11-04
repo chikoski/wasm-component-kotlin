@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.FfmWasmtimeBridge
+import wasm2kt.runtime.JniWasmtimeBridge
 import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitWriter
@@ -38,37 +39,47 @@ open class ChicoryDifferentialTest {
     /** Open the Wasmtime sessions as the typed component named like the fixture (ADR-0016). */
     protected open val typedBridge: Boolean = false
 
+    /** Drive Wasmtime through the JNI bridge instead of FFM. */
+    protected open val jni: Boolean = false
+
+    /**
+     * Also run each sequence on the generic path of the same bridge library and require the very same
+     * results, error messages included (the typed bridge must behave like the generic one).
+     */
+    protected open val compareWithGenericBridge: Boolean = false
+
     private fun fixture(name: String): Path = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$name.wasm")).toURI())
 
     private fun chicoryPlanDir(name: String): Path =
         Paths.get("runtime-chicory/src/test/resources/components/$name").toAbsolutePath()
 
     /** Adapts a Wasmtime FFM bridge session to [ComponentBackend] so both can be driven alike. */
-    private class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?, componentId: String?) : ComponentBackend {
-        private val bridge = FfmWasmtimeBridge.getDefault()
-        private val session = bridge.openSession(wasm, imports, componentId)
+    /** Adapts a Wasmtime bridge session (FFM or JNI) to [ComponentBackend] so both can be driven alike. */
+    private class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?, componentId: String?, private val jni: Boolean) : ComponentBackend {
+        private val ffm = if (jni) null else FfmWasmtimeBridge.getDefault()
+        private val session = ffm?.openSession(wasm, imports, componentId) ?: JniWasmtimeBridge.openSession(wasm, imports, componentId)
 
-        override fun resolve(functionName: String): Int = bridge.resolve(session, functionName)
+        override fun resolve(functionName: String): Int = ffm?.resolve(session, functionName) ?: JniWasmtimeBridge.resolve(session, functionName)
 
         override fun invoke(function: Int, args: WitReader): WitReader {
             val writer = WitWriter()
             val n = args.remaining
             if (n > 0) args.region(n) { a, off -> writer.raw(a, off, n) }
-            return bridge.invoke(session, function, writer)
+            return ffm?.invoke(session, function, writer) ?: JniWasmtimeBridge.invoke(session, function, writer)
         }
 
-        override fun dropResource(handle: Int) = bridge.dropResource(session, handle)
+        override fun dropResource(handle: Int) = ffm?.dropResource(session, handle) ?: JniWasmtimeBridge.dropResource(session, handle)
 
-        override fun close() = bridge.sessionClose(session)
+        override fun close() = ffm?.sessionClose(session) ?: JniWasmtimeBridge.nativeSessionClose(session)
     }
 
     /** Host imports answered with JSON-written values (typed by the component's plan). */
     private fun types(name: String) = PlanTypes.fromDirectory(chicoryPlanDir(name))
 
-    private fun wasmtime(name: String, imports: JsonImports?): JsonBackend {
+    private fun wasmtime(name: String, imports: JsonImports?, typed: Boolean = typedBridge): JsonBackend {
         val types = types(name)
-        val id = if (typedBridge) name else null
-        return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }, id), types)
+        val id = if (typed) name else null
+        return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }, id, jni), types)
     }
 
     private fun chicory(name: String, imports: JsonImports?): JsonBackend {
@@ -79,20 +90,32 @@ open class ChicoryDifferentialTest {
     private class Call(val fn: String, vararg val args: JsonElement)
 
     private fun runBoth(name: String, imports: () -> JsonImports?, calls: List<Call>) {
+        /** Each call's result, or `error: <type>: <message>`. */
         fun run(backend: JsonBackend): List<String> = backend.use { b ->
             calls.map { c ->
                 try {
                     normalize(b.invoke(c.fn, JsonArray(c.args.toList()))).toString()
                 } catch (e: Exception) {
                     System.err.println("DIFF ${b.backend.javaClass.simpleName} ${c.fn}(${c.args.joinToString()}): ${e.message}")
-                    "error"
+                    "error: ${e.javaClass.name}: ${e.message}"
                 }
             }
         }
+        fun outcome(r: String) = if (r.startsWith("error: ")) "error" else r
         val expected = run(wasmtime(name, imports()))
         val actual = run(chicory(name, imports()))
         calls.forEachIndexed { i, c ->
-            assertEquals(expected[i], actual[i], "Mismatch for ${c.fn}(${c.args.joinToString()})")
+            assertEquals(outcome(expected[i]), outcome(actual[i]), "Mismatch for ${c.fn}(${c.args.joinToString()})")
+        }
+        if (compareWithGenericBridge) {
+            // Errors raised inside Wasmtime's call (lifting the guest's results, traps) are worded by
+            // Wasmtime, differently for its dynamic (`Val`) and typed lifts; only their kind must match.
+            // Everything else (results, the bridge's own errors) must be the same.
+            fun comparable(r: String) = r.replace(Regex("(Wasmtime call to '[^']*' failed): .*", RegexOption.DOT_MATCHES_ALL), "$1: <Wasmtime's message>")
+            val generic = run(wasmtime(name, imports(), typed = false))
+            calls.forEachIndexed { i, c ->
+                assertEquals(comparable(generic[i]), comparable(expected[i]), "The typed bridge differs from the generic one for ${c.fn}(${c.args.joinToString()})")
+            }
         }
     }
 
@@ -145,6 +168,39 @@ open class ChicoryDifferentialTest {
             add(Call("check-even", JsonPrimitive(1), JsonPrimitive(2))) // arity error on both sides
         }
         runBoth("roundtrip", envProvider, calls)
+    }
+
+    @Test
+    fun `boundary values match Wasmtime`() {
+        fun bytes(n: Int) = JsonArray(List(n) { JsonPrimitive(it % 256) })
+        fun str(s: String) = JsonPrimitive(s)
+        val calls = buildList {
+            // Empty and large lists, which the backends copy in bulk.
+            for (n in listOf(0, 1, 65_536, 262_144)) {
+                add(Call("echo-bytes", bytes(n)))
+                add(Call("reverse-bytes", bytes(n)))
+            }
+            // Strings: empty, multi-byte, surrogate pairs (UTF-16 and UTF-8 lengths differ).
+            for (s in listOf("", "a", "日本語", "🎌🎌", "a\u0000b", "é".repeat(10_000))) {
+                add(Call("echo-name", str(s)))
+                add(Call("maybe-len", str(s)))
+            }
+            // Chars at the edges of the scalar values; next-char of U+D7FF and U+10FFFF is not a char.
+            for (cp in listOf(0, 0x7F, 0x80, 0xD7FF, 0xE000, 0xFFFF, 0x10000, 0x10FFFF)) {
+                add(Call("echo-char", str(String(Character.toChars(cp)))))
+                add(Call("next-char", str(String(Character.toChars(cp)))))
+            }
+            // Lists of options, empty and long.
+            for (n in listOf(0, 1, 10_000)) {
+                val v = JsonArray(List(n) { if (it % 3 == 0) JsonNull else JsonPrimitive(it - 5000) })
+                add(Call("compact", v))
+                add(Call("echo-optional-list", v))
+            }
+            add(Call("nested", j("""{"option":"some","value":{"option":"some","value":""}}""")))
+            add(Call("echo-packet", j("""{"case":"bytes","value":[]}""")))
+            add(Call("echo-packet", j("""{"case":"text","value":""}""")))
+        }
+        runBoth("types", { null }, calls)
     }
 
     @Test

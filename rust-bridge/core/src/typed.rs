@@ -5,7 +5,7 @@ pub use crate::wire::{
     read_borrow_guest, read_borrow_host, read_discriminant, read_own_guest, read_own_host, write_discriminant, write_resource,
     Reader,
 };
-pub use crate::{call_host, ImportKey, StoreData, TypedComponent, TypedExport};
+pub use crate::{call_failed, call_host, ImportKey, StoreData, TypedComponent, TypedExport};
 pub use wasmtime::component::{ComponentType, Func, Lift, LinkerInstance, Lower, ResourceAny, TypedFunc};
 pub use wasmtime::error::Context;
 pub use wasmtime::{AsContextMut, Result, Store, StoreContextMut};
