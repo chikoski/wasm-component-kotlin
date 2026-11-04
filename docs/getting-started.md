@@ -142,6 +142,8 @@ withPrecompiledSession(Paths.get("build/arithmetic.cwasm")) {
 }
 ```
 
+実行時間とメモリを制限しないことなど、外から受け取ったコンポーネントを動かすときの注意は、[README の「安全性の前提」](../README.md#安全性の前提-trust-model)にあります。
+
 `.cwasm` にはネイティブの機械語が入っていて、Wasmtime はその中身を検証しません。そのため、**自分のビルドで作ったものなど、信頼できる `.cwasm` だけを渡してください**。細工した `.cwasm` を読み込むと、WebAssembly のサンドボックスを経ずにコードが動きます。
 
 `withSession` / `openSession` は `.wasm` だけを受け付け、`.cwasm` を渡すとエラーになります。また、`.cwasm` は作ったときと同じブリッジ（同じ Wasmtime）でしか読み込めません。
