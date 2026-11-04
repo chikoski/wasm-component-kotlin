@@ -54,7 +54,12 @@ val typedBridgeTest by tasks.registering(Test::class) {
     description = "Runs the integration tests on a typed Wasmtime bridge built with cargo."
     group = "verification"
     testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
+    // The tests copy the typed bridge here, so it is on this task's class path only (#65).
+    val bridgeResources = layout.buildDirectory.dir("typed-bridge-resources")
+    classpath = sourceSets.test.get().runtimeClasspath + files(bridgeResources)
+    systemProperty("wasm2kt.test.bridgeResources", bridgeResources.get().asFile.absolutePath)
+    // The JVM skips class path directories that do not exist when it starts.
+    doFirst { bridgeResources.get().asFile.mkdirs() }
     useJUnitPlatform { includeTags("typed-bridge") }
     jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
     workingDir = rootDir

@@ -102,6 +102,48 @@ object TypedBridge {
         }
     }
 
+    /**
+     * The platform directory `runtime-wasmtime` looks for on the class path (`BridgeLibrary.platform`):
+     * `linux-x86_64`, `macos-aarch64`, `windows-x86_64`, ... for a Rust [target] triple, or the host.
+     */
+    fun platform(target: String? = null): String {
+        if (target == null) {
+            val os = System.getProperty("os.name").lowercase()
+            val osPart = when {
+                "mac" in os || "darwin" in os -> "macos"
+                "win" in os -> "windows"
+                else -> "linux"
+            }
+            val arch = when (val a = System.getProperty("os.arch").lowercase()) {
+                "amd64", "x86_64", "x64" -> "x86_64"
+                "aarch64", "arm64" -> "aarch64"
+                else -> a
+            }
+            return "$osPart-$arch"
+        }
+        require("android" !in target) { "Android targets are not packaged as class path resources (#60): $target" }
+        val arch = target.substringBefore('-').let { if (it == "arm64") "aarch64" else it }
+        val os = when {
+            "apple-darwin" in target -> "macos"
+            "windows" in target -> "windows"
+            "linux" in target -> "linux"
+            else -> throw IllegalArgumentException("No class path platform for target $target")
+        }
+        return "$os-$arch"
+    }
+
+    /**
+     * Copies a built bridge [library] into [resourcesDir] at the class path resource `runtime-wasmtime`
+     * loads it from (`META-INF/wasm2kt/native/<platform>/<file>`, #65), and returns the copy. Packaged
+     * in a jar, it replaces `-Dwasm2kt.bridge.lib`.
+     */
+    fun copyToResources(library: Path, resourcesDir: Path, target: String? = null): Path {
+        val dest = resourcesDir.resolve("META-INF/wasm2kt/native/${platform(target)}/${libraryFileName(target)}")
+        Files.createDirectories(dest.parent)
+        Files.copy(library, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        return dest
+    }
+
     private const val RESOURCES = "/wasm2kt/bridge-core/"
 
     private fun resource(name: String): String =

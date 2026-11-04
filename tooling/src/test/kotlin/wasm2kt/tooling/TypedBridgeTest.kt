@@ -47,4 +47,18 @@ class TypedBridgeTest {
         assertEquals("libwasm2kt_wasmtime_bridge.dylib", TypedBridge.libraryFileName("aarch64-apple-darwin"))
         assertEquals("wasm2kt_wasmtime_bridge.dll", TypedBridge.libraryFileName("x86_64-pc-windows-msvc"))
     }
+
+    @Test
+    fun `built libraries are copied where runtime-wasmtime looks on the class path`(@TempDir dir: Path) {
+        assertEquals("linux-x86_64", TypedBridge.platform("x86_64-unknown-linux-gnu"))
+        assertEquals("linux-aarch64", TypedBridge.platform("aarch64-unknown-linux-gnu"))
+        assertEquals("macos-aarch64", TypedBridge.platform("aarch64-apple-darwin"))
+        assertEquals("windows-x86_64", TypedBridge.platform("x86_64-pc-windows-msvc"))
+        assertTrue(runCatching { TypedBridge.platform("aarch64-linux-android") }.isFailure)
+
+        val lib = Files.writeString(dir.resolve("libwasm2kt_typed.so"), "elf")
+        val copy = TypedBridge.copyToResources(lib, dir.resolve("res"), "x86_64-unknown-linux-gnu")
+        assertEquals(dir.resolve("res/META-INF/wasm2kt/native/linux-x86_64/libwasm2kt_wasmtime_bridge.so"), copy)
+        assertEquals("elf", Files.readString(copy))
+    }
 }

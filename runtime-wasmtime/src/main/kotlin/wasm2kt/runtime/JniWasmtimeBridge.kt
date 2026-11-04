@@ -3,7 +3,6 @@ package wasm2kt.runtime
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 
 /**
  * Runs host imports for the JNI bridge (ADR-0015): the bridge passes the import's index and key and
@@ -48,34 +47,14 @@ object JniWasmtimeBridge {
                 System.load(candidateFile.absolutePath)
             } else {
                 // Standard Android APK/AAB path: loads `libwasm2kt_wasmtime_bridge.so` from `jniLibs/<abi>/`
-                System.loadLibrary("wasm2kt_wasmtime_bridge")
+                System.loadLibrary(BridgeLibrary.NAME)
             }
             loaded = true
         }
     }
 
-    private fun resolveLocalLibraryFileOrNull(): File? {
-        System.getProperty("wasm2kt.bridge.lib")?.let { prop ->
-            val f = File(prop)
-            if (f.exists()) return f.absoluteFile
-        }
-        System.getenv("WASM2KT_BRIDGE_LIB")?.let { env ->
-            val f = File(env)
-            if (f.exists()) return f.absoluteFile
-        }
-        val osName = System.getProperty("os.name")?.lowercase().orEmpty()
-        val libFileName = when {
-            "mac" in osName || "darwin" in osName -> "libwasm2kt_wasmtime_bridge.dylib"
-            "win" in osName -> "wasm2kt_wasmtime_bridge.dll"
-            else -> "libwasm2kt_wasmtime_bridge.so"
-        }
-        val candidates = listOf(
-            File("rust-bridge/target/release/$libFileName"),
-            File("rust-bridge/target/debug/$libFileName"),
-            File("../rust-bridge/target/release/$libFileName"),
-        )
-        return candidates.firstOrNull { it.exists() }?.absoluteFile
-    }
+    /** See [BridgeLibrary.locate]: a path, the class path, or this repository's `rust-bridge/target`. */
+    private fun resolveLocalLibraryFileOrNull(): File? = BridgeLibrary.locate()?.toFile()
 
     /** Opens a session on a `.wasm` component; a precompiled `.cwasm` is rejected (see [openPrecompiledSession]). */
     fun openSession(wasmPath: Path, imports: Any?, componentId: String? = null): Long =

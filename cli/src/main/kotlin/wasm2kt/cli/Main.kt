@@ -226,13 +226,19 @@ class BridgeCommand : CliktCommand(name = "bridge") {
         id to world
     }.multiple()
 
-    private val build: Boolean by option("--build", help = "Also run cargo build --release; prints the library's path").flag(default = false)
+    private val build: Boolean by option("--build", help = "Also run cargo build --release; prints the library's path (or its copy with --resources-output)").flag(default = false)
 
     private val target: String? by option("--target", help = "Rust target triple to build for (default: the host)")
 
     private val targetDir: Path? by option("--target-dir", help = "Cargo's target directory (share it between builds to compile Wasmtime once)").path()
 
     private val cargo: String by option("--cargo", help = "Override for the cargo binary path").default("cargo")
+
+    private val resourcesOutput: Path? by option(
+        "--resources-output",
+        help = "With --build, also copy the library into this resources directory as " +
+            "META-INF/wasm2kt/native/<platform>/<file>, where runtime-wasmtime finds it on the class path (#65)",
+    ).path()
 
     private val wasmToolsPath: String by option("--wasm-tools-path", help = "Override for the wasm-tools binary path").default("wasm-tools")
 
@@ -246,8 +252,11 @@ class BridgeCommand : CliktCommand(name = "bridge") {
             },
             outputDir,
         )
+        require(resourcesOutput == null || build) { "--resources-output needs --build" }
         if (build) {
-            echo(TypedBridge.cargoBuild(outputDir, targetDir, target, cargo).toAbsolutePath())
+            val library = TypedBridge.cargoBuild(outputDir, targetDir, target, cargo)
+            val resources = resourcesOutput
+            echo((if (resources != null) TypedBridge.copyToResources(library, resources, target) else library).toAbsolutePath())
         }
     }
 }

@@ -168,12 +168,12 @@ wasm-tools component wit --json component.wasm | ./gradlew run --args="--from-js
 # バインディングは、ブリッジの中のコンポーネントの ID を指定して生成する
 ./gradlew run --args="generate fixtures/counter.wasm -o build/generated -p com.example.counter --bridge-id counter"
 
-# 型付きブリッジのクレートを生成してビルドする（ライブラリのパスを出力する）
-./gradlew run --args="bridge -o build/typed-bridge --component counter=fixtures/counter.wasm --build"
-
-# 実行時は、汎用ブリッジの代わりにこのライブラリを読み込む
-java -Dwasm2kt.bridge.lib=build/typed-bridge/target/release/libwasm2kt_wasmtime_bridge.so ...
+# 型付きブリッジのクレートを生成してビルドし、ライブラリをリソースのディレクトリに置く
+./gradlew run --args="bridge -o build/typed-bridge --component counter=fixtures/counter.wasm --build --resources-output build/typed-bridge-resources"
 ```
+
+`--resources-output` のディレクトリ（`META-INF/wasm2kt/native/<platform>/` の下にライブラリが入る）を jar に含めるかクラスパスに加えれば、
+`runtime-wasmtime` が汎用ブリッジの代わりにそれを読み込みます。`-Dwasm2kt.bridge.lib` でライブラリのパスを直接指定することもできます。
 
 ### 3. テストの実行（実 `.wasm` コンポーネントの E2E 検証を含む）
 
