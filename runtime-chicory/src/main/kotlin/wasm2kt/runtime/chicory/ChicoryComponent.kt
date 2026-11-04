@@ -63,7 +63,7 @@ class ChicoryComponent(
     companion object {
         /** Loads `plan.json` and `core<N>.wasm` written by `wasm2kt-decompose`, using the interpreter. */
         fun fromDirectory(dir: Path): ChicoryComponent {
-            val plan = ComponentPlan.parse(Files.readString(dir.resolve("plan.json")))
+            val plan = ComponentPlan.parse(String(Files.readAllBytes(dir.resolve("plan.json")), Charsets.UTF_8))
             return ChicoryComponent(plan, plan.modules.associate { it.index to CoreModule.interpreted(Files.readAllBytes(dir.resolve(it.file))) })
         }
 
