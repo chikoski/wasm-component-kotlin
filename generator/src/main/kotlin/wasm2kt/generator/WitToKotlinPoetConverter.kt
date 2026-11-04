@@ -1554,12 +1554,25 @@ class WitToKotlinPoetConverter(
             )
             .addSuperinterface(autoCloseableClass)
             .addFunction(
-                FunSpec.builder("consumeOwnership")
+                FunSpec.builder("handleFor")
+                    .addKdoc(
+                        "The handle to pass to a call on [target] (null: not known, e.g. inside a record). Fails, before " +
+                            "the call reaches the component, if this resource is closed or moved, or belongs to another " +
+                            "session: handles are numbered per session, so another session would take it for one of its own (#76).\n",
+                    )
                     .addModifiers(KModifier.INTERNAL)
+                    .addParameter("target", ANY.copy(nullable = true))
                     .returns(INT)
                     .addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
-                    .addStatement("isClosed = true")
+                    .addStatement("check(target == null || session === target) { %P }", "Resource $resourcePascalName(handle=\$handle) belongs to another session")
                     .addStatement("return handle")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("markMoved")
+                    .addKdoc("Gives up ownership after a call that took this resource as `own` returned (#76).\n")
+                    .addModifiers(KModifier.INTERNAL)
+                    .addStatement("isClosed = true")
                     .build(),
             )
 
@@ -1579,7 +1592,7 @@ class WitToKotlinPoetConverter(
                     for (param in fn.params) invokeBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
                     val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
                     invokeBuilder.addCode(call.prelude)
-                    invokeBuilder.addStatement("val handle = session.runtimeSession.newResource(%S, %L, %L)", key, call.args, call.encode)
+                    invokeBuilder.addStatement("val handle = session.runtimeSession.newResource(%S, %L, %L)%L", key, call.args, call.encode, call.after)
                     invokeBuilder.addStatement("return %T(session, handle)", resourceClassName)
                     companionBuilder.addFunction(invokeBuilder.build())
                 }
@@ -1595,8 +1608,8 @@ class WitToKotlinPoetConverter(
                     methodBuilder.addCode(call.prelude)
                     val target = if (returnsOwnedResource(fn)) "val resultHandle =" else "return"
                     methodBuilder.addStatement(
-                        "$target session.runtimeSession.invokeMethod(handle, %S, %L, %L, %L)",
-                        key, call.args, call.encode, call.decode,
+                        "$target session.runtimeSession.invokeMethod(handle, %S, %L, %L, %L)%L",
+                        key, call.args, call.encode, call.decode, call.after,
                     )
                     if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
                     builder.addFunction(methodBuilder.build())
@@ -1610,10 +1623,10 @@ class WitToKotlinPoetConverter(
                     val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
                     staticBuilder.addCode(call.prelude)
                     if (returnsOwnedResource(fn)) {
-                        staticBuilder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
+                        staticBuilder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
                         staticBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
                     } else {
-                        staticBuilder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
+                        staticBuilder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
                     }
                     companionBuilder.addFunction(staticBuilder.build())
                 }
@@ -1674,10 +1687,10 @@ class WitToKotlinPoetConverter(
         builder.addCode(call.prelude)
         val key = "$invokeTargetPrefix${fn.name}"
         if (returnsOwnedResource(fn)) {
-            builder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
+            builder.addStatement("val resultHandle = session.runtimeSession.invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
             builder.addStatement("return %T(session, resultHandle)", returnType)
         } else {
-            builder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)", key, call.args, call.encode, call.decode)
+            builder.addStatement("return session.runtimeSession.invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
         }
         return builder.build()
     }
@@ -1795,7 +1808,7 @@ class WitToKotlinPoetConverter(
         if (isHostResource(resourceIdx)) {
             CodeBlock.builder().addStatement(if (own) "$w.ownHostResource(%L)" else "$w.borrowHostResource(%L)", value).build()
         } else {
-            CodeBlock.builder().addStatement("$w.int((%L).handle)", value).build()
+            CodeBlock.builder().addStatement("$w.int((%L).handleFor(null))", value).build()
         }
 
     /**
@@ -1885,7 +1898,12 @@ class WitToKotlinPoetConverter(
      * Kotlin values (what `InMemoryWasmtimeSession` receives), the lambda writing them, and the lambda
      * reading the results.
      */
-    private class CallParts(val prelude: CodeBlock, val args: CodeBlock, val encode: CodeBlock, val decode: CodeBlock)
+    /**
+     * [after] is appended to the call expression: `.also { ... }` giving up the guest resources passed
+     * as `own` once the call returned, or nothing. A call that fails keeps them usable: the backends put
+     * their handles back (#76).
+     */
+    private class CallParts(val prelude: CodeBlock, val args: CodeBlock, val encode: CodeBlock, val decode: CodeBlock, val after: CodeBlock)
 
     /**
      * [params] are the WIT parameters after `self`; [selfHandle] writes the resource's own handle
@@ -1895,19 +1913,18 @@ class WitToKotlinPoetConverter(
         val prelude = CodeBlock.builder()
         val argValues = mutableListOf<CodeBlock>()
         val encode = CodeBlock.builder()
+        val moved = mutableListOf<CodeBlock>()
+        val target = sessionExpr ?: CodeBlock.of("null")
         if (selfHandle) encode.addStatement("__w.int(handle)")
         params.forEachIndexed { i, param ->
             val name = NamingConventions.toCamelCase(param.name)
             val handle = (param.type as? WitTypeRef.Id)?.let { resolve.types.getOrNull(it.index)?.kind as? WitTypeDefKind.Handle }
             when {
-                handle != null && !isHostResource(handle.resourceId) && handle.kind == wasm2kt.ast.HandleKind.OWN -> {
-                    prelude.addStatement("val __own$i = %N.consumeOwnership()", name)
-                    argValues += CodeBlock.of("__own$i")
-                    encode.addStatement("__w.int(__own$i)")
-                }
                 handle != null && !isHostResource(handle.resourceId) -> {
-                    argValues += CodeBlock.of("%N.handle", name)
-                    encode.addStatement("__w.int(%N.handle)", name)
+                    prelude.addStatement("val __handle$i = %N.handleFor(%L)", name, target)
+                    argValues += CodeBlock.of("__handle$i")
+                    encode.addStatement("__w.int(__handle$i)")
+                    if (handle.kind == wasm2kt.ast.HandleKind.OWN) moved += CodeBlock.of("%N.markMoved()", name)
                 }
                 handle != null && handle.kind == wasm2kt.ast.HandleKind.BORROW -> {
                     argValues += CodeBlock.of("%T(%N)", witBorrowedClass, name)
@@ -1939,7 +1956,8 @@ class WitToKotlinPoetConverter(
                 CodeBlock.of("{ __r -> %T(%L) }", tupleClass, fn.results.map { buildRead(it.type, "__r", sessionExpr = sessionExpr) }.joinToCode(", "))
             }
         }
-        return CallParts(prelude.build(), args, encodeLambda, decode)
+        val after = if (moved.isEmpty()) CodeBlock.of("") else CodeBlock.of(".also { %L }", moved.joinToCode("; "))
+        return CallParts(prelude.build(), args, encodeLambda, decode, after)
     }
 
 
