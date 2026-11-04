@@ -982,11 +982,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm2kt-wasmtime-bridge"
+name = "wasm2kt-bridge-core"
 version = "0.1.0"
 dependencies = [
  "jni",
  "wasmtime",
+]
+
+[[package]]
+name = "wasm2kt-wasmtime-bridge"
+version = "0.1.0"
+dependencies = [
+ "wasm2kt-bridge-core",
 ]
 
 [[package]]

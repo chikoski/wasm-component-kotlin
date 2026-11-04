@@ -95,6 +95,8 @@ jobs:
           cargo test --locked --release
       - run: cargo build --locked --release --manifest-path rust-bridge/Cargo.toml
       - run: ./gradlew :integration-tests:test
+      # Builds a typed bridge for the fixtures (ADR-0016) with cargo, sharing rust-bridge/target.
+      - run: ./gradlew :integration-tests:typedBridgeTest
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

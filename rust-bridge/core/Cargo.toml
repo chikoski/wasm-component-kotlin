@@ -1,0 +1,15 @@
+[package]
+name = "wasm2kt-bridge-core"
+version = "0.1.0"
+edition = "2021"
+description = "Sessions, value format and C ABI / JNI entry points shared by the wasm2kt Wasmtime bridges (ADR-0016)"
+
+[lib]
+name = "wasm2kt_bridge_core"
+
+[dependencies]
+wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
+jni = "0.21"
+
+[lints]
+workspace = true

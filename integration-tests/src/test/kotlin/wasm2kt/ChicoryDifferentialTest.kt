@@ -25,22 +25,28 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 
+internal typealias JsonImports = (String, JsonArray) -> JsonElement
+
 /**
  * Runs identical call sequences against the Wasmtime bridge (the reference implementation) and the
- * Chicory backend, and requires identical results — including errors — at the JSON boundary.
+ * Chicory backend, and requires identical results, including errors. Values are written as JSON and
+ * converted to the binary format by the test's codec (`test-support`).
+ *
+ * [TypedBridgeDifferentialTest] runs the same sequences with Wasmtime's typed bridge (ADR-0016).
  */
-private typealias JsonImports = (String, JsonArray) -> JsonElement
+open class ChicoryDifferentialTest {
+    /** Open the Wasmtime sessions as the typed component named like the fixture (ADR-0016). */
+    protected open val typedBridge: Boolean = false
 
-class ChicoryDifferentialTest {
     private fun fixture(name: String): Path = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$name.wasm")).toURI())
 
     private fun chicoryPlanDir(name: String): Path =
         Paths.get("runtime-chicory/src/test/resources/components/$name").toAbsolutePath()
 
     /** Adapts a Wasmtime FFM bridge session to [ComponentBackend] so both can be driven alike. */
-    private class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?) : ComponentBackend {
+    private class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?, componentId: String?) : ComponentBackend {
         private val bridge = FfmWasmtimeBridge.getDefault()
-        private val session = bridge.openSession(wasm, imports)
+        private val session = bridge.openSession(wasm, imports, componentId)
 
         override fun resolve(functionName: String): Int = bridge.resolve(session, functionName)
 
@@ -61,7 +67,8 @@ class ChicoryDifferentialTest {
 
     private fun wasmtime(name: String, imports: JsonImports?): JsonBackend {
         val types = types(name)
-        return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }), types)
+        val id = if (typedBridge) name else null
+        return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }, id), types)
     }
 
     private fun chicory(name: String, imports: JsonImports?): JsonBackend {

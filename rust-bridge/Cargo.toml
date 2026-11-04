@@ -1,3 +1,18 @@
+# The generic bridge (any component, no build step) and the core it shares with the typed bridges
+# that tooling generates per project (ADR-0015, ADR-0016).
+[workspace]
+members = [".", "core"]
+default-members = [".", "core"]
+resolver = "2"
+
+[workspace.lints.clippy]
+# The extern "C" / JNI entry points take raw pointers from the Kotlin bridge, which owns their
+# validity contract (documented on each function); marking them `unsafe fn` would not change what
+# foreign callers can do, so this lint only adds noise for an FFI crate.
+not_unsafe_ptr_arg_deref = "allow"
+# The C ABI and JNI entry points mirror the Kotlin side's signatures.
+too_many_arguments = "allow"
+
 [package]
 name = "wasm2kt-wasmtime-bridge"
 version = "0.1.0"
@@ -8,11 +23,7 @@ name = "wasm2kt_wasmtime_bridge"
 crate-type = ["cdylib"]
 
 [dependencies]
-wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
-jni = "0.21"
+wasm2kt-bridge-core = { path = "core" }
 
-[lints.clippy]
-# The extern "C" / JNI entry points take raw pointers from the Kotlin bridge, which owns their
-# validity contract (documented on each function); marking them `unsafe fn` would not change what
-# foreign callers can do, so this lint only adds noise for an FFI crate.
-not_unsafe_ptr_arg_deref = "allow"
+[lints]
+workspace = true

@@ -4,7 +4,7 @@ import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import wasm2kt.ast.WitResolve
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.generator.WitToKotlinPoetConverter
 import java.nio.file.Files
 import java.nio.file.Path
@@ -105,7 +105,7 @@ class WitToKotlinPoetConverterTest {
         val jsonFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/calculator.json"))
         val jsonPath = Paths.get(jsonFixtureUrl.toURI())
 
-        val cmd = Wasm2KtCommand()
+        val cmd = GenerateCommand()
         cmd.parse(
             listOf(
                 "--from-json",
@@ -148,7 +148,7 @@ class WitToKotlinPoetConverterTest {
         val jsonPath = Paths.get(jsonFixtureUrl.toURI())
 
         // 1. Generate bindings via CLI
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--from-json",
                 "-o",
@@ -316,12 +316,12 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Extract JSON AST directly from the compiled .wasm component binary via wasm-tools (or .wit)
-        val jsonAst = Wasm2KtCommand.extractWitJsonViaWasmTools(wasmToolsBin, witPath)
+        val jsonAst = GenerateCommand.extractWitJsonViaWasmTools(wasmToolsBin, witPath)
         val jsonFile = tempDir.resolve("live_calc.json")
         Files.writeString(jsonFile, jsonAst)
 
         // 2. Generate Kotlin host bindings via wasm2kt CLI
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--from-json",
                 "-o",
@@ -405,7 +405,7 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Generate Kotlin host bindings from both arithmetic.wit (ArithmeticWorld) and arithmetic.wasm (RootWorld)
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -416,7 +416,7 @@ class WitToKotlinPoetConverterTest {
                 witPath.toString(),
             ),
         )
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -492,7 +492,7 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Generate Kotlin host bindings from both counter.wit (CounterWorld) and counter.wasm (RootWorld)
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -503,7 +503,7 @@ class WitToKotlinPoetConverterTest {
                 witPath.toString(),
             ),
         )
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -605,7 +605,7 @@ class WitToKotlinPoetConverterTest {
             val witUrl = requireNotNull(javaClass.getResource("/fixtures/${ex.witFixture}"))
             val witPath = Paths.get(witUrl.toURI())
 
-            Wasm2KtCommand().parse(
+            GenerateCommand().parse(
                 listOf(
                     "--wasm-tools-path",
                     wasmToolsBin,
@@ -659,7 +659,7 @@ class WitToKotlinPoetConverterTest {
         val witPath = Paths.get(witFixtureUrl.toURI())
 
         // 1. Generate bindings from roundtrip.wit
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -792,7 +792,7 @@ class WitToKotlinPoetConverterTest {
         val witFixtureUrl = requireNotNull(javaClass.getResource("/fixtures/counter.wit"))
         val witPath = Paths.get(witFixtureUrl.toURI())
 
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -902,7 +902,7 @@ class WitToKotlinPoetConverterTest {
             "wasm-tools rejects flags with more than 32 members",
         )
 
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -977,7 +977,7 @@ class WitToKotlinPoetConverterTest {
         val witFile = tempDir.resolve("keywords.wit")
         Files.writeString(witFile, witText)
 
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1030,7 +1030,7 @@ class WitToKotlinPoetConverterTest {
         Files.writeString(multiWitFile, multiWorldWit)
 
         val selectedOutDir = tempDir.resolve("selected")
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1048,7 +1048,7 @@ class WitToKotlinPoetConverterTest {
 
         // Without --world, several worlds cannot share the package's top level (ADR-0012).
         val noWorld = runCatching {
-            Wasm2KtCommand().parse(
+            GenerateCommand().parse(
                 listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.resolve("all").toString(), "-p", "com.example.multi", multiWitFile.toString()),
             )
         }.exceptionOrNull()
@@ -1066,7 +1066,7 @@ class WitToKotlinPoetConverterTest {
         Files.writeString(ifaceWitFile, ifaceOnlyWit)
 
         val standaloneOutDir = tempDir.resolve("standalone")
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1097,7 +1097,7 @@ class WitToKotlinPoetConverterTest {
         Files.write(cwasmPath, cwasmBytes)
 
         // 2. Generate bindings from roundtrip.wit
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1223,7 +1223,7 @@ class WitToKotlinPoetConverterTest {
         assertTrue(cwasmBytes.isNotEmpty(), "JNI precompiled .cwasm bytes must not be empty")
 
         // Generate bindings for roundtrip and counter, one world per package (ADR-0012)
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1234,7 +1234,7 @@ class WitToKotlinPoetConverterTest {
                 roundtripWitPath.toString(),
             ),
         )
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1377,7 +1377,7 @@ class WitToKotlinPoetConverterTest {
         val witFile = tempDir.resolve("nested_res.wit")
         Files.writeString(witFile, witText)
 
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1441,7 +1441,7 @@ class WitToKotlinPoetConverterTest {
         val witFile = tempDir.resolve("collision.wit")
         Files.writeString(witFile, witText)
 
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf(
                 "--wasm-tools-path",
                 wasmToolsBin,
@@ -1550,7 +1550,7 @@ class WitToKotlinPoetConverterTest {
     @Test
     fun `generated WitSupport does not import java lang foreign and serializes session access`(@TempDir tempDir: Path) {
         val witPath = Paths.get(requireNotNull(javaClass.getResource("/fixtures/counter.wit")).toURI())
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.android", witPath.toString()),
         )
         val support = Files.readString(tempDir.resolve("com/example/android/WitSupport.kt"))
@@ -1602,7 +1602,7 @@ class WitToKotlinPoetConverterTest {
         """.trimIndent()
         val witFile = tempDir.resolve("host_res.wit")
         Files.writeString(witFile, witText)
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.hostres", witFile.toString()),
         )
         val pkgDir = tempDir.resolve("com/example/hostres")
@@ -1710,7 +1710,7 @@ class WitToKotlinPoetConverterTest {
         """.trimIndent()
         val witFile = tempDir.resolve("collision2.wit")
         Files.writeString(witFile, witText)
-        Wasm2KtCommand().parse(
+        GenerateCommand().parse(
             listOf("--wasm-tools-path", wasmToolsBin, "-o", tempDir.toString(), "-p", "com.example.collision2", witFile.toString()),
         )
         // Names no longer depend on other interfaces: alpha's config stays Config, gamma's alpha-config is AlphaConfig.

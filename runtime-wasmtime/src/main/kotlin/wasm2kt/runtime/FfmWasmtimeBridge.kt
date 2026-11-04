@@ -26,6 +26,7 @@ class FfmWasmtimeBridge private constructor(
     private val lookup: SymbolLookup = SymbolLookup.libraryLookup(libraryPath, arena)
 
     // extern "C" fn wasm2kt_session_open(
+    //     component_id_ptr: *const c_char, // null: generic; else the typed component (ADR-0016)
     //     wasm_path_ptr: *const c_char,
     //     host_callback: Option<HostCallbackFn>,
     //     precompiled: bool,
@@ -38,6 +39,7 @@ class FfmWasmtimeBridge private constructor(
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
             ValueLayout.JAVA_BOOLEAN,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
@@ -45,6 +47,7 @@ class FfmWasmtimeBridge private constructor(
     )
 
     // extern "C" fn wasm2kt_session_open_bytes(
+    //     component_id_ptr: *const c_char,
     //     wasm_bytes_ptr: *const u8,
     //     wasm_bytes_len: usize,
     //     host_callback: Option<HostCallbackFn>,
@@ -55,6 +58,7 @@ class FfmWasmtimeBridge private constructor(
     val sessionOpenBytesHandle: MethodHandle = linker.downcallHandle(
         lookup.find("wasm2kt_session_open_bytes").orElseThrow(),
         FunctionDescriptor.of(
+            ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
@@ -194,8 +198,12 @@ class FfmWasmtimeBridge private constructor(
     /**
      * Opens a session on the `.wasm` component at [wasmPath]. A precompiled `.cwasm` is rejected:
      * it holds native code Wasmtime does not validate, so it must go through [openPrecompiledSession].
+     *
+     * With a [componentId], the session uses that component's typed calls, which the bridge library
+     * must contain (a typed bridge, ADR-0016); without one, every call goes through the generic path.
      */
-    fun openSession(wasmPath: Path, imports: Any?): Long = openSession(wasmPath, imports, precompiled = false)
+    fun openSession(wasmPath: Path, imports: Any?, componentId: String? = null): Long =
+        openSession(wasmPath, imports, precompiled = false, componentId)
 
     /**
      * Opens a session on a `.cwasm` written by [precompileComponent] **with this bridge's Wasmtime build**.
@@ -203,16 +211,19 @@ class FfmWasmtimeBridge private constructor(
      * The file's native code runs without validation, so pass only files your own build produced
      * or that come from an equally trusted source; never one a user or the network supplied.
      */
-    fun openPrecompiledSession(cwasmPath: Path, imports: Any?): Long = openSession(cwasmPath, imports, precompiled = true)
+    fun openPrecompiledSession(cwasmPath: Path, imports: Any?, componentId: String? = null): Long =
+        openSession(cwasmPath, imports, precompiled = true, componentId)
 
-    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean): Long {
+    private fun openSession(wasmPath: Path, imports: Any?, precompiled: Boolean, componentId: String?): Long {
         val sessionArena = Arena.ofShared()
         try {
+            val idPtr = componentId?.let { allocateUtf8CString(sessionArena, it) } ?: MemorySegment.NULL
             val wasmPathPtr = allocateUtf8CString(sessionArena, wasmPath.toAbsolutePath().toString())
             val callbackStub = createHostCallbackStub(sessionArena, imports)
             val errCap = 4096L
             val errBuf = sessionArena.allocate(errCap)
             val ptr = sessionOpenHandle.invokeExact(
+                idPtr,
                 wasmPathPtr,
                 callbackStub,
                 precompiled,
@@ -233,20 +244,23 @@ class FfmWasmtimeBridge private constructor(
     }
 
     /** Like [openSession] for a `.wasm` component in memory; precompiled bytes are rejected. */
-    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?): Long = openSessionBytes(wasmBytes, imports, precompiled = false)
+    fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, componentId: String? = null): Long =
+        openSessionBytes(wasmBytes, imports, precompiled = false, componentId)
 
     /** Like [openPrecompiledSession] for `.cwasm` bytes in memory; the same trust requirement applies. */
-    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?): Long =
-        openSessionBytes(cwasmBytes, imports, precompiled = true)
+    fun openPrecompiledSessionBytes(cwasmBytes: ByteArray, imports: Any?, componentId: String? = null): Long =
+        openSessionBytes(cwasmBytes, imports, precompiled = true, componentId)
 
-    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean): Long {
+    private fun openSessionBytes(wasmBytes: ByteArray, imports: Any?, precompiled: Boolean, componentId: String?): Long {
         val sessionArena = Arena.ofShared()
         try {
+            val idPtr = componentId?.let { allocateUtf8CString(sessionArena, it) } ?: MemorySegment.NULL
             val wasmBytesPtr = allocateBytes(sessionArena, wasmBytes)
             val callbackStub = createHostCallbackStub(sessionArena, imports)
             val errCap = 4096L
             val errBuf = sessionArena.allocate(errCap)
             val ptr = sessionOpenBytesHandle.invokeExact(
+                idPtr,
                 wasmBytesPtr,
                 wasmBytes.size.toLong(),
                 callbackStub,

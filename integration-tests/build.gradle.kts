@@ -12,6 +12,7 @@ dependencies {
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))
     testImplementation(project(":test-support"))
+    testImplementation(project(":tooling"))
     testImplementation(libs.clikt)
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))
@@ -41,8 +42,21 @@ sourceSets.test {
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform { excludeTags("typed-bridge") }
     jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
     // Tests refer to examples/, rust-bridge/target/ and runtime-chicory test data relative to the repository root.
     workingDir = rootDir
+}
+
+// The tests on a typed Wasmtime bridge (ADR-0016) build one with cargo and load it instead of the
+// generic bridge, so they run in their own JVM.
+val typedBridgeTest by tasks.registering(Test::class) {
+    description = "Runs the integration tests on a typed Wasmtime bridge built with cargo."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { includeTags("typed-bridge") }
+    jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
+    workingDir = rootDir
+    shouldRunAfter(tasks.test)
 }

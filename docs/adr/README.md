@@ -22,4 +22,5 @@
 | [0012](0012-world-at-package-top-level.md) | world を package のトップレベルに生成し、export した interface はマーカーを context に取る | 承認 |
 | [0013](0013-multi-memory-adapters.md) | 合成コンポーネントのアダプターを multi-memory で検証し、async の組み込み関数を使わない形で生成する | 承認 |
 | [0014](0014-interface-mappings.md) | 既存の package の interface を対応表（with）で使い、ライブラリはマニフェストで提供する interface を示す | 承認 |
-| [0015](0015-binary-value-boundary.md) | 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える | 承認 |
+| [0015](0015-binary-value-boundary.md) | 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える | 承認（型付きブリッジの作り方は → ADR-0016） |
+| [0016](0016-typed-bridge-from-wit-json.md) | 型付きブリッジの Rust の型を wit.json から生成し、bindgen! を使わない | 承認 |

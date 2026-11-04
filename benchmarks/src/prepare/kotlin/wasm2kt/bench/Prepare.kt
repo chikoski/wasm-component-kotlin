@@ -13,7 +13,8 @@ import kotlin.io.path.name
  * Builds the benchmark components the way the Gradle plugin does (decompose, AOT-compile, generate)
  * and records build-time statistics. Usage: `Prepare <fixturesDir> <outDir> <name>...`
  *
- * Writes `<outDir>/kotlin` (full bindings including the Wasmtime sessions, plus `<Name>Component`),
+ * Writes `<outDir>/kotlin` (full bindings including the Wasmtime sessions, plus `<Name>Component`, and
+ * `bench.typed.<name>` bindings opening their sessions on the typed bridge),
  * `<outDir>/classes` and `<outDir>/resources` (the compiled core modules), `<outDir>/decomposed/<name>`
  * (for the interpreter) and `<outDir>/build-stats.tsv`.
  */
@@ -35,6 +36,9 @@ fun main(args: Array<String>) {
         val decomposed = work.resolve("decomposed")
         val resolve = WitResolve.parse(Files.readString(decomposed.resolve("wit.json")))
         WitToKotlinPoetConverter(resolve = resolve, targetPackage = pkg, emitWasmtimeSessions = true)
+            .generate().forEach { it.writeTo(kotlinOut) }
+        // The same bindings opening their sessions on the typed bridge (ADR-0016), for TypedBench.
+        WitToKotlinPoetConverter(resolve = resolve, targetPackage = "bench.typed." + name.replace('-', '_'), emitWasmtimeSessions = true, bridgeId = name)
             .generate().forEach { it.writeTo(kotlinOut) }
         val componentFile = ComponentCodegen.componentObjectName(name) + ".kt"
         val src = Files.walk(built.kotlinDir).use { s -> s.filter { it.name == componentFile }.findFirst().get() }

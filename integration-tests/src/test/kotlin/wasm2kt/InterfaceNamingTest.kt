@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import wasm2kt.ast.WitResolve
-import wasm2kt.cli.Wasm2KtCommand
+import wasm2kt.cli.GenerateCommand
 import wasm2kt.generator.WitToKotlinPoetConverter
 import java.nio.file.Files
 import java.nio.file.Path
@@ -23,7 +23,7 @@ class InterfaceNamingTest {
     private fun resolve(tempDir: Path, wit: String): WitResolve {
         val witFile = tempDir.resolve("input.wit")
         Files.writeString(witFile, wit.trimIndent())
-        return WitResolve.parse(Wasm2KtCommand.extractWitJsonViaWasmTools(wasmToolsBin, witFile))
+        return WitResolve.parse(GenerateCommand.extractWitJsonViaWasmTools(wasmToolsBin, witFile))
     }
 
     /** Generates [wit] into `tempDir/out`, checks that it compiles, and returns the files by relative path. */
