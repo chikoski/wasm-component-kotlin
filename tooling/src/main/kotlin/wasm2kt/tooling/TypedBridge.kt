@@ -62,9 +62,14 @@ object TypedBridge {
     }
 
     /**
-     * Runs `cargo build --release` in [crateDir] (for [target], or the host) and returns the library.
-     * [targetDir] is Cargo's target directory; sharing it between builds avoids compiling Wasmtime
-     * again. Fails if `cargo` is missing: a build that asks for the typed bridge needs it (ADR-0015).
+     * Runs `cargo build --release --locked` in [crateDir] (for [target], or the host) and returns the
+     * library. [targetDir] is Cargo's target directory; sharing it between builds avoids compiling
+     * Wasmtime again.
+     *
+     * `--locked` keeps the dependencies of the generic bridge's Cargo.lock, which CI checks (ADR-0010,
+     * ADR-0016): a lock that does not match the bundled core fails instead of being re-resolved (#79).
+     * A build that runs longer than [timeout] is killed. Fails if `cargo` is missing: a build that asks
+     * for the typed bridge needs it (ADR-0015).
      */
     fun cargoBuild(
         crateDir: Path,
@@ -72,21 +77,39 @@ object TypedBridge {
         target: String? = null,
         cargo: String = "cargo",
         libraryName: String = DEFAULT_LIBRARY,
+        timeout: java.time.Duration = java.time.Duration.ofHours(2),
     ): Path {
         val command = buildList {
-            add(cargo); add("build"); add("--release")
+            add(cargo); add("build"); add("--release"); add("--locked")
             add("--manifest-path"); add(crateDir.resolve("Cargo.toml").toAbsolutePath().toString())
             if (targetDir != null) { add("--target-dir"); add(targetDir.toAbsolutePath().toString()) }
             if (target != null) { add("--target"); add(target) }
         }
-        val process = try {
-            ProcessBuilder(command).redirectErrorStream(true).start()
-        } catch (e: java.io.IOException) {
-            throw IllegalStateException("The typed bridge needs cargo, which was not found ('$cargo'): install Rust (https://rustup.rs)", e)
-        }
-        val output = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(2, TimeUnit.HOURS) || process.exitValue() != 0) {
-            throw IllegalStateException("cargo build of the typed bridge failed:\n$output")
+        // The output goes to a file, so a cargo that stops writing cannot block the timeout below.
+        val log = Files.createTempFile("wasm2kt-cargo", ".log")
+        try {
+            val process = try {
+                ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start()
+            } catch (e: java.io.IOException) {
+                throw IllegalStateException("The typed bridge needs cargo, which was not found ('$cargo'): install Rust (https://rustup.rs)", e)
+            }
+            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                process.descendants().forEach { it.destroyForcibly() }
+                process.destroyForcibly()
+                process.waitFor(10, TimeUnit.SECONDS)
+                throw IllegalStateException("cargo build of the typed bridge did not finish within $timeout:\n${Files.readString(log)}")
+            }
+            if (process.exitValue() != 0) {
+                val output = Files.readString(log)
+                val hint = if ("--locked" in output && "lock file" in output) {
+                    "\nThe crate's Cargo.lock does not match its dependencies: regenerate the crate with the same wasm2kt version"
+                } else {
+                    ""
+                }
+                throw IllegalStateException("cargo build of the typed bridge failed:\n$output$hint")
+            }
+        } finally {
+            Files.deleteIfExists(log)
         }
         val dir = (targetDir ?: crateDir.resolve("target")).let { if (target != null) it.resolve(target) else it }.resolve("release")
         return dir.resolve(libraryFileName(target, libraryName))

@@ -61,4 +61,43 @@ class TypedBridgeTest {
         assertEquals(dir.resolve("res/META-INF/wasm2kt/native/linux-x86_64/libwasm2kt_wasmtime_bridge.so"), copy)
         assertEquals("elf", Files.readString(copy))
     }
+
+    /** A stand-in for cargo that records its arguments and then runs [body]. */
+    private fun fakeCargo(dir: Path, body: String): Path {
+        val script = dir.resolve("cargo")
+        Files.writeString(script, "#!/bin/sh\necho \"$@\" > \"${dir.resolve("args.txt")}\"\n$body\n")
+        script.toFile().setExecutable(true)
+        return script
+    }
+
+    @Test
+    fun `cargo builds with --locked`(@TempDir dir: Path) {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").lowercase().startsWith("win"))
+        val cargo = fakeCargo(dir, "exit 0")
+        TypedBridge.cargoBuild(dir.resolve("crate"), cargo = cargo.toString())
+        val args = Files.readString(dir.resolve("args.txt"))
+        assertTrue(args.startsWith("build --release --locked --manifest-path "), args)
+    }
+
+    @Test
+    fun `a cargo build that does not finish is stopped`(@TempDir dir: Path) {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").lowercase().startsWith("win"))
+        // Keeps its output open and never exits, like a cargo waiting on a lock.
+        val cargo = fakeCargo(dir, "echo compiling; exec sleep 600")
+        val started = System.nanoTime()
+        val e = runCatching {
+            TypedBridge.cargoBuild(dir.resolve("crate"), cargo = cargo.toString(), timeout = java.time.Duration.ofSeconds(2))
+        }.exceptionOrNull()
+        val seconds = (System.nanoTime() - started) / 1e9
+        assertTrue(e is IllegalStateException && "did not finish within" in e.message!! && "compiling" in e.message!!, "got $e")
+        assertTrue(seconds < 30, "took $seconds s")
+    }
+
+    @Test
+    fun `a failed cargo build reports its output`(@TempDir dir: Path) {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").lowercase().startsWith("win"))
+        val cargo = fakeCargo(dir, "echo 'error: the lock file x/Cargo.lock needs to be updated but --locked was passed to prevent this'; exit 101")
+        val e = runCatching { TypedBridge.cargoBuild(dir.resolve("crate"), cargo = cargo.toString()) }.exceptionOrNull()
+        assertTrue(e is IllegalStateException && "needs to be updated" in e.message!! && "does not match its dependencies" in e.message!!, "got $e")
+    }
 }
