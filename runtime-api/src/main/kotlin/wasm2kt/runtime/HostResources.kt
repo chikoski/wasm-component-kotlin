@@ -26,7 +26,9 @@ interface WitHostResource : AutoCloseable {
  *
  * Generated code finds the table of the call in progress through [current]: sessions [bind] it
  * around instantiation and every call into the component, so host imports the component calls
- * meanwhile (synchronously, on the same thread) see it too.
+ * meanwhile (synchronously, on the same thread) see it too. *
+ * Not thread-safe: it tracks the lends of the one call in progress. The generated session serializes
+ * every call that binds it, so one session can still be used from several threads (#75).
  */
 class HostResourceTable : AutoCloseable {
     private class Entry(val resource: WitHostResource, var owned: Boolean)

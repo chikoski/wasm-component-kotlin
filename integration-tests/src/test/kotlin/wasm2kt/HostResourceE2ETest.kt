@@ -130,6 +130,35 @@ class HostResourceE2ETest {
             withSession(component, h.imports) { h.exercise() }
             return h.log.joinToString(",")
         }
+
+        /**
+         * One session used by several threads at once (#75): every call lends a host blob, which the
+         * guest reads through a host import while the call is in progress.
+         */
+        fun concurrent(session: Session): String {
+            val errors = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val threads = (1..4).map { t ->
+                Thread {
+                    context(session) {
+                        repeat(300) { i ->
+                            try {
+                                val blob = HostBlob("t${'$'}t-${'$'}i", ByteArray(t), mutableListOf())
+                                if (measure(blob) != t.toUInt()) errors += "measure gave a wrong size"
+                            } catch (e: Throwable) {
+                                errors += e.toString()
+                            }
+                        }
+                    }
+                }
+            }
+            threads.forEach { it.start() }
+            threads.forEach { it.join() }
+            return if (errors.isEmpty()) "ok" else "${'$'}{errors.size} errors, e.g. ${'$'}{errors.first()}"
+        }
+
+        fun runConcurrentWasmtime(wasm: Path): String = openSession(wasm, Harness().imports).use { concurrent(it) }
+
+        fun runConcurrentChicory(component: ComponentBackendFactory): String = openSession(component, Harness().imports).use { concurrent(it) }
     """.trimIndent()
 
     private fun compile(tempDir: Path): ClassLoader {
@@ -172,6 +201,22 @@ class HostResourceE2ETest {
         val wasm = Paths.get(requireNotNull(javaClass.getResource("/fixtures/host-res.wasm")).toURI())
         val result = loader.loadClass("$pkg.HarnessKt").getDeclaredMethod("runWasmtimeJni", Path::class.java).invoke(null, wasm)
         assertEquals(expected, result)
+    }
+
+    @Test
+    fun `one session used by several threads keeps each call's lends apart on Wasmtime`(@TempDir tempDir: Path) {
+        val loader = compile(tempDir)
+        val wasm = Paths.get(requireNotNull(javaClass.getResource("/fixtures/host-res.wasm")).toURI())
+        val result = loader.loadClass("$pkg.HarnessKt").getDeclaredMethod("runConcurrentWasmtime", Path::class.java).invoke(null, wasm)
+        assertEquals("ok", result)
+    }
+
+    @Test
+    fun `one session used by several threads keeps each call's lends apart on Chicory`(@TempDir tempDir: Path) {
+        val loader = compile(tempDir)
+        val component = ChicoryComponent.fromDirectory(Paths.get("runtime-chicory/src/test/resources/components/host-res").toAbsolutePath())
+        val result = loader.loadClass("$pkg.HarnessKt").getDeclaredMethod("runConcurrentChicory", ComponentBackendFactory::class.java).invoke(null, component)
+        assertEquals("ok", result)
     }
 
     @Test

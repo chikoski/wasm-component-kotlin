@@ -2237,7 +2237,11 @@ class WitToKotlinPoetConverter(
             .build()
     }
 
-    /** Binds the session's [HostResourceTable] around every call into the component (ADR-0008). */
+    /**
+     * Binds the session's [HostResourceTable] around every call into the component (ADR-0008). Its
+     * methods are serialized: the table tracks the lends of the call in progress, so binding it from
+     * two threads at once would mix up their lends (#75).
+     */
     private fun buildHostResourceBoundSessionTypeSpec(): TypeSpec {
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val typeR = TypeVariableName("R")
@@ -2256,33 +2260,33 @@ class WitToKotlinPoetConverter(
             .addProperty(PropertySpec.builder("delegate", runtimeSessionClass, KModifier.PRIVATE).initializer("delegate").build())
             .addProperty(PropertySpec.builder("resources", hostResourceTableClass, KModifier.PRIVATE).initializer("resources").build())
             .addFunction(
-                FunSpec.builder("invoke").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
+                FunSpec.builder("invoke").addModifiers(KModifier.OVERRIDE).addAnnotation(ClassName("kotlin.jvm", "Synchronized")).addTypeVariable(typeR)
                     .addParameter("functionName", STRING).addParameter("args", argsType)
                     .addParameter("encode", encodeLambdaType).addParameter("decode", decodeType).returns(typeR)
                     .addStatement("return resources.bind { delegate.invoke(functionName, args, encode, decode) }")
                     .build(),
             )
             .addFunction(
-                FunSpec.builder("newResource").addModifiers(KModifier.OVERRIDE)
+                FunSpec.builder("newResource").addModifiers(KModifier.OVERRIDE).addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
                     .addParameter("constructorName", STRING).addParameter("args", argsType)
                     .addParameter("encode", encodeLambdaType).returns(INT)
                     .addStatement("return resources.bind { delegate.newResource(constructorName, args, encode) }")
                     .build(),
             )
             .addFunction(
-                FunSpec.builder("invokeMethod").addModifiers(KModifier.OVERRIDE).addTypeVariable(typeR)
+                FunSpec.builder("invokeMethod").addModifiers(KModifier.OVERRIDE).addAnnotation(ClassName("kotlin.jvm", "Synchronized")).addTypeVariable(typeR)
                     .addParameter("handle", INT).addParameter("methodName", STRING).addParameter("args", argsType)
                     .addParameter("encode", encodeLambdaType).addParameter("decode", decodeType).returns(typeR)
                     .addStatement("return resources.bind { delegate.invokeMethod(handle, methodName, args, encode, decode) }")
                     .build(),
             )
             .addFunction(
-                FunSpec.builder("dropResource").addModifiers(KModifier.OVERRIDE).addParameter("handle", INT)
+                FunSpec.builder("dropResource").addModifiers(KModifier.OVERRIDE).addAnnotation(ClassName("kotlin.jvm", "Synchronized")).addParameter("handle", INT)
                     .addStatement("resources.bind { delegate.dropResource(handle) }")
                     .build(),
             )
             .addFunction(
-                FunSpec.builder("close").addModifiers(KModifier.OVERRIDE)
+                FunSpec.builder("close").addModifiers(KModifier.OVERRIDE).addAnnotation(ClassName("kotlin.jvm", "Synchronized"))
                     .beginControlFlow("try")
                     .addStatement("delegate.close()")
                     .nextControlFlow("finally")
