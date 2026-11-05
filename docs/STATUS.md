@@ -75,6 +75,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
+* 実行時間とメモリの上限、実行中の中断はない。読み込むコンポーネントは信頼できるものに限る（[README](../README.md) の「安全性の前提」、#77）
 * integration-tests には `wasm-tools`（CI は 1.258.0 に固定）と、ビルド済みの `rust-bridge` が必要
 
 ## 3. アクションアイテム
@@ -94,18 +95,9 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 QC レビュー（2026-10-31）で見つかったものは、すべて片付けました（「完了」を参照）。
 
-**QC レビュー（2026-11-04）で見つかったもの**を先に片付けます。async（#16）は、調査が済むまで止めています（2026-11-04 に決定）。優先度の見直しの理由は、各 Issue のコメントにあります。
+QC レビュー（2026-11-04）で見つかったものも片付けました（「完了」を参照）。#77 は、ドキュメントで前提を明記し、上限の実装を P2 に残しています。
 
-| 順 | Issue | 優先度 | 内容 |
-| :--- | :--- | :--- | :--- |
-| 1 | [#75](https://github.com/chikoski/wasm-component-kotlin/issues/75) | P1 | 同じセッションを複数のスレッドから使うと、ホスト resource の貸し出しが別の呼び出しのものとして扱われる（`bind` が直列化の外にある） |
-| 2 | [#76](https://github.com/chikoski/wasm-component-kotlin/issues/76) | P1（P2 から上げた） | 生成コードがゲスト resource のハンドルを検証しない。別のセッションの resource が、黙って別のものとして使われる。own は呼び出しの前に手放される |
-| 3 | [#79](https://github.com/chikoski/wasm-component-kotlin/issues/79) | P2 | 型付きブリッジの `cargo build` が `--locked` を使わず、タイムアウトも効かない（修正が小さいので早めに） |
-| 4 | [#80](https://github.com/chikoski/wasm-component-kotlin/issues/80) | P2 | `runtime-api` / `runtime-chicory` を Android の API レベル（minSdk 26）で検査していない |
-| 5 | [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) | P2 | ビルド時の警告が、2 回目以降のビルド（UP-TO-DATE、FROM-CACHE）で出ない |
-| 6 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | P2 | 実行時間とメモリの制限がない。まずドキュメントに明記し、実装は後で優先度を見直す |
-
-そのあと、async と WASI 0.3 に向けて、上から順に進めます（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。公式テストスイート（#30）は取り込み済みで、#16 の受け入れ基準に使います。
+次は async と WASI 0.3 です。上から順に進めます。async（#16）は、調査が済むまで止めています（2026-11-04 に決定）（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）。公式テストスイート（#30）は取り込み済みで、#16 の受け入れ基準に使います。
 
 | 順 | Issue | ID | 内容 |
 | :--- | :--- | :--- | :--- |
@@ -122,6 +114,7 @@ QC レビュー（2026-10-31）で見つかったものは、すべて片付け�
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
+| [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
 | [#68](https://github.com/chikoski/wasm-component-kotlin/issues/68) | — | 数値だけの関数をバイト列を通さずに呼ぶ（ADR-0015 の進め方の 3。必要になってから） |
 | [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い |
@@ -136,6 +129,15 @@ QC レビュー（2026-10-31）で見つかったものは、すべて片付け�
 * [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) 分解タスクがまれに `Stream closed` で失敗する — #73（jar のキャッシュを使わずに読む。原因は推定）
 * [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) JSON 境界をやめ、型に沿ったバイナリ形式と Wasmtime の型付きブリッジにする — #62（[ADR-0015](adr/0015-binary-value-boundary.md)）、#64（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）、#67（#65。ライブラリをクラスパスから読み込む）。Gradle プラグインでの Wasmtime の対応は見送り
 * [#19](https://github.com/chikoski/wasm-component-kotlin/issues/19) 性能・サイズの計測 — [docs/performance.md](performance.md)（`benchmarks/`、`samples/android/benchmark`、`Bench` ワークフロー、`heavy` フィクスチャ）
+
+QC レビュー（2026-11-04）で見つかったもの:
+
+* [#75](https://github.com/chikoski/wasm-component-kotlin/issues/75) 同じセッションを複数のスレッドから使うと、ホスト resource の貸し出しが混ざる — #82（`HostResourceTable` の束縛も直列化の中で行う）
+* [#76](https://github.com/chikoski/wasm-component-kotlin/issues/76) ゲスト resource のハンドルを検証する（閉じたもの・別セッションのもの）。own は呼び出しが成功してから手放す — #83
+* [#79](https://github.com/chikoski/wasm-component-kotlin/issues/79) 型付きブリッジの `cargo build` に `--locked` とタイムアウト — #84
+* [#80](https://github.com/chikoski/wasm-component-kotlin/issues/80) `runtime-api` / `runtime-chicory` を Android API 26 のシグネチャで検査する（animal-sniffer）— #85
+* [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) ビルド時の警告を UP-TO-DATE / FROM-CACHE のときも出す — #86（警告をファイルに出力し、キャッシュしないタスクで表示）
+* [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) のうちドキュメント（コンポーネントは信頼できるものに限る）— #87。上限の実装は P2 に残す
 
 QC レビュー（2026-10-31）で見つかったもの:
 
