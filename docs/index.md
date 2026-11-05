@@ -24,6 +24,7 @@
 * [Android クイックスタート](tutorials/android-quickstart.md): Gradle プラグインで `.wasm` をビルド時にコンパイルし、Android アプリから呼び出す
 * [Kotlin/JVM クイックスタート](tutorials/jvm-quickstart.md): Gradle プラグインと Chicory バックエンドで、Kotlin/JVM から呼び出す
 * [Wasmtime クイックスタート](tutorials/wasmtime-quickstart.md): `wasm2kt` CLI でバインディングを生成し、Wasmtime ブリッジで実行する
+* [機能別サンプル集 (`examples/`)](../examples/README.md): 四則演算、ホスト import、`resource`、単体テスト、Gradle プラグイン（Chicory）の実行可能なサンプルコード
 
 ### ガイド (`guides/`)
 

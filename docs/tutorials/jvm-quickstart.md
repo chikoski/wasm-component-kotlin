@@ -78,6 +78,7 @@ fun main() {
 
 ## 次のステップ
 
+* 実行可能なサンプルコード：[Example 05: Gradle プラグインと Chicory バックエンド](../../examples/05-chicory-gradle-plugin/README.md)
 * Wasmtime（ネイティブ）との違いを確認する：[バックエンドの選び方](../guides/choosing-a-backend.md)
 * プラグインの設定項目とキャッシュの挙動：[Gradle プラグイン リファレンス](../reference/gradle-plugin.md)
 * ホスト import の実装方法：[ホスト import と interface の共有](../guides/host-imports.md)

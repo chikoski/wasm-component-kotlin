@@ -15,6 +15,7 @@ import kotlin.test.assertTrue
 
 class Wasm2KtPluginFunctionalTest {
     private val fixtures: Path = Paths.get(System.getProperty("wasm2kt.fixtures"))
+    private val examples: Path = Paths.get(System.getProperty("wasm2kt.examples"))
     private val testRepo = System.getProperty("wasm2kt.testRepo")
     private val kotlinVersion = System.getProperty("wasm2kt.kotlinVersion")
 
@@ -247,6 +248,34 @@ class Wasm2KtPluginFunctionalTest {
         val generated = app.resolve("build/wasm2kt/samename/kotlin/com/example/app")
         assertTrue(generated.resolve("RootWorld.kt").isFile, generated.list().orEmpty().joinToString())
         assertTrue(!generated.resolve("example").exists(), "the library's interfaces must not be generated again")
+    }
+
+    @Test
+    fun `example 05-chicory-gradle-plugin builds and runs with the plugin`(@TempDir dir: File) {
+        val exampleDir = examples.resolve("05-chicory-gradle-plugin")
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        Files.copy(exampleDir.resolve("build.gradle.kts"), dir.resolve("build.gradle.kts").toPath())
+        Files.copy(exampleDir.resolve("Main.kt"), dir.resolve("Main.kt").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "05-chicory-gradle-plugin"
+            pluginManagement {
+                repositories { gradlePluginPortal(); mavenCentral() }
+                plugins { kotlin("jvm") version "$kotlinVersion" }
+            }
+            dependencyResolutionManagement {
+                repositories {
+                    maven(url = uri("${testRepo.replace("\\", "/")}"))
+                    mavenCentral()
+                }
+            }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "run", "--configuration-cache").build()
+        assertTrue("scaled = 42, tag = ERR#404, count = 15" in result.output, "unexpected output:\n${result.output}")
+        assertEquals(TaskOutcome.SUCCESS, result.task(":wasm2ktCompileRoundtrip")?.outcome)
     }
 }
 

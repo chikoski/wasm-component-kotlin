@@ -112,12 +112,6 @@ QC レビュー（2026-10-31）で見つかったものは、すべて片付け�
 | 1 | [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) | A-13 | Component Model Async（Chicory のみ）。調査が済むまで止めている |
 | 2 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。ライブラリとして配る仕組みは #54 で用意済み） |
 
-並行して進めるもの:
-
-| Issue | 内容 |
-| :--- | :--- |
-| [#50](https://github.com/chikoski/wasm-component-kotlin/issues/50) | ドキュメントの組み直し（読者別の構成。古い記述の修正） |
-
 ### P2
 
 | Issue | ID | 内容 |
@@ -132,6 +126,7 @@ QC レビュー（2026-10-31）で見つかったものは、すべて片付け�
 
 ### 完了
 
+* [#50](https://github.com/chikoski/wasm-component-kotlin/issues/50) ドキュメントの組み直し（読者別の構成、古い記述の修正、`examples/05-chicory-gradle-plugin` の追加、`examples/*/Main.kt` のコンパイル・実行検査と Markdown 相対リンク検査の CI 組み込み）— #89（KDoc / Dokkatoo は #10 公開準備時に実施）
 * [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) Component Model の公式テストスイートの取り込み — #72（[ADR-0017](adr/0017-component-model-conformance-suite.md)）
 * [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) 分解タスクがまれに `Stream closed` で失敗する — #73（jar のキャッシュを使わずに読む。原因は推定）
 * [#15](https://github.com/chikoski/wasm-component-kotlin/issues/15) JSON 境界をやめ、型に沿ったバイナリ形式と Wasmtime の型付きブリッジにする — #62（[ADR-0015](adr/0015-binary-value-boundary.md)）、#64（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)）、#67（#65。ライブラリをクラスパスから読み込む）。Gradle プラグインでの Wasmtime の対応は見送り
