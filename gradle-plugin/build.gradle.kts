@@ -88,6 +88,7 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     systemProperty("wasm2kt.testRepo", testRepo.get().asFile.absolutePath)
     systemProperty("wasm2kt.version", project.version.toString())
     systemProperty("wasm2kt.fixtures", rootProject.file("fixtures").absolutePath)
+    systemProperty("wasm2kt.examples", rootProject.file("examples").absolutePath)
     systemProperty("wasm2kt.kotlinVersion", libs.versions.kotlin.get())
     // Optional: reuse a Gradle user home (caches, init scripts) for the builds under test.
     systemProperty("wasm2kt.testKitDir", providers.gradleProperty("wasm2kt.testKitDir").getOrElse(""))

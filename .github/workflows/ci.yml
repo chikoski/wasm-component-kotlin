@@ -28,7 +28,9 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
       # Everything except integration-tests, which need native tools (see the `native` job).
-      # Includes the gradle-plugin functional tests (TestKit builds of a consumer project).
+      # Includes the gradle-plugin functional tests (TestKit builds of consumer projects and
+      # examples/05-chicory-gradle-plugin), compilation/execution of examples/*/Main.kt
+      # (ExamplesBuildTest), and relative Markdown link checks (MarkdownLinkCheckTest).
       - run: ./gradlew check -x :integration-tests:test --continue
       - if: failure()
         uses: actions/upload-artifact@v4

@@ -14,6 +14,7 @@ dependencies {
     implementation(libs.chicory.compiler)
     implementation(libs.chicory.build.time.compiler)
 
+    testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))
@@ -43,6 +44,8 @@ tasks.processResources {
 tasks.test {
     useJUnitPlatform()
     systemProperty("wasm2kt.fixtures", rootProject.file("fixtures").absolutePath)
+    systemProperty("wasm2kt.examples", rootProject.file("examples").absolutePath)
+    systemProperty("wasm2kt.rootDir", rootProject.projectDir.absolutePath)
 }
 
 // The typed bridges carry the generic bridge's core crate and lock file (ADR-0016).

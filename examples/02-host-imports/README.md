@@ -1,7 +1,7 @@
 # Example 02: ホスト関数のインポートと FFM Upcall コールバック (`live-calc`)
 
 Wasm コンポーネントがホスト側の関数（`import record-calc: func(a: s32, b: s32)`）を呼び出すケースのサンプルです。
-ホスト側で `<WorldName>.Imports` インターフェースを実装し、`<WorldName>.imports(...)` で `withSession` に渡すと、Wasm 実行中に JVM Foreign Function & Memory (FFM) API の Upcall Stub を経由して Kotlin のメソッドがリアルタイムにコールバックされます。
+ホスト側で `Imports` インターフェースを実装し、`imports(...)` で `withSession` に渡すと、Wasm 実行中に JVM Foreign Function & Memory (FFM) API の Upcall Stub を経由して Kotlin のメソッドがコールバックされます。
 
 ---
 
