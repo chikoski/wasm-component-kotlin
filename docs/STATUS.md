@@ -176,5 +176,5 @@ QC レビュー（2026-10-31）で見つかったもの:
 | `docs/explanation/`（`architecture.md`、`build-pipeline.md`、`call-path.md`、`performance.md`） | 内部構造・ビルド順序・呼び出し経路・性能とサイズの計測結果 |
 | `CONTRIBUTING.md`、`CHANGELOG.md` | 開発手順・不変条件（人間向け）、および破壊的変更・主要変更の記録 |
 | `docs/adr/` | 設計判断の記録（追記のみ） |
-| `docs/notes/`（[`phase1-implementation-tasks.md`](notes/phase1-implementation-tasks.md)、[`wit-async-guide.md`](notes/wit-async-guide.md)） | 作業計画・async 調査メモ（#16 の前提資料） |
+| `docs/notes/`（[`phase1-implementation-tasks.md`](notes/phase1-implementation-tasks.md)、[`wit-async-guide.md`](notes/wit-async-guide.md)、[`android-glitch-camera-demo.md`](notes/android-glitch-camera-demo.md)） | 作業計画・async 調査メモ（#16 の前提資料）・Android カメラグリッチデモ設計メモ |
 | `docs/archive/`（`SPEC.md`、`SPEC_REVIEW.md`、`ANDROID_INTEGRATION_PLAN.md`、`CODE_REVIEW.md`、`TEST_PROPOSALS.md`） | 過去の記録（プロジェクト初期の仕様書・レビュー記録） |
