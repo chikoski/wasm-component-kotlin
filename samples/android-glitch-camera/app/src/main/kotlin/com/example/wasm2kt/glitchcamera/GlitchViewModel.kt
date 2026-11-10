@@ -87,6 +87,50 @@ class GlitchViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Runs a synthetic 160x120 warmup sequence through [GlitchEngine] (`fromPixels`, `reloadPixels`,
+     * `apply`, `renderRgba`, and `snapshot`) on the worker thread so Baseline Profile generation
+     * captures the AOT-compiled `png-glitch-component` hot path even without a physical camera stream.
+     */
+    fun runBenchmarkWarmup() {
+        analysisExecutor.execute {
+            val width = 160
+            val height = 120
+            val syntheticRgba = ByteArray(width * height * 4) { idx ->
+                when (idx % 4) {
+                    0 -> ((idx / 4) % 256).toByte()
+                    1 -> ((idx / 7) % 256).toByte()
+                    2 -> ((idx / 11) % 256).toByte()
+                    else -> 0xFF.toByte()
+                }
+            }
+            for (preset in RecipePresets.curated.take(3)) {
+                engine.updateConfig(
+                    recipeYaml = preset.yaml,
+                    seed = 42uL,
+                    seedMode = SeedMode.PER_FRAME,
+                    filterOption = PngFilterOption.ADAPTIVE_FAST,
+                )
+                repeat(3) {
+                    engine.processFrame(width, height, syntheticRgba).onSuccess { output ->
+                        val targetBitmap = acquireBitmap(output.width, output.height)
+                        targetBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(output.rgbaBytes))
+                        _uiState.update { state ->
+                            state.copy(
+                                previewBitmap = targetBitmap,
+                                frameNumber = state.frameNumber + 1L,
+                                processingTimeMs = output.processingTimeMs,
+                                frameWidth = output.width,
+                                frameHeight = output.height,
+                            )
+                        }
+                    }
+                }
+            }
+            engine.captureSnapshotPng()
+        }
+    }
+
     fun analyzeImage(image: ImageProxy) {
         if (!processingFrame.compareAndSet(false, true)) {
             image.close()

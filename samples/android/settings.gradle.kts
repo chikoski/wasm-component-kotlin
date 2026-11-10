@@ -23,3 +23,4 @@ rootProject.name = "wasm2kt-android-sample"
 includeBuild("../..")
 include(":app")
 include(":benchmark")
+include(":baselineprofile")

@@ -70,6 +70,16 @@ counter merge(11, 31) = 42
 android emulator stop
 ```
 
+## ベースラインプロファイルの生成
+
+`:baselineprofile` モジュールを使って、アプリの起動と WebAssembly コンポーネント実行のベースラインプロファイルを生成できます。エミュレーターまたは実機を接続した状態で以下のコマンドを実行します。
+
+```bash
+./gradlew -p samples/android :app:generateBaselineProfile
+```
+
+生成されたプロファイルは `app/src/release/generated/baselineProfiles/` に配置され、リリースビルドの APK に組み込まれます。
+
 ## 確認の記録
 
 | 日付 | 環境 | 内容 | 結果 |

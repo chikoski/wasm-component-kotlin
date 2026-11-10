@@ -12,10 +12,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.getBooleanExtra(EXTRA_BENCHMARK_WARMUP, false) == true) {
+            viewModel.runBenchmarkWarmup()
+        }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 GlitchCameraScreen(viewModel = viewModel)
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_BENCHMARK_WARMUP = "com.example.wasm2kt.glitchcamera.BENCHMARK_WARMUP"
     }
 }
