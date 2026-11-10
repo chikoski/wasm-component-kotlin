@@ -74,6 +74,6 @@ dependencies {
 }
 
 baselineProfile {
-    automaticGenerationDuringBuild = false
+    automaticGenerationDuringBuild = true
     dexLayoutOptimization = true
 }

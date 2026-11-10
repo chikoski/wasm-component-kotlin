@@ -72,13 +72,13 @@ android emulator stop
 
 ## ベースラインプロファイルの生成
 
-`:baselineprofile` モジュールを使って、アプリの起動と WebAssembly コンポーネント実行のベースラインプロファイルを生成できます。エミュレーターまたは実機を接続した状態で以下のコマンドを実行します。
+`:baselineprofile` モジュールを使って、アプリの起動と WebAssembly コンポーネント実行のベースラインプロファイルを生成します。`automaticGenerationDuringBuild = true` を設定しているため、エミュレーターまたは実機を接続した状態で `:app:assembleRelease` を実行すると、リリースビルドの作成時にベースラインプロファイルが自動生成されて APK に組み込まれます。単体で生成する場合は以下のコマンドを実行します。
 
 ```bash
 ./gradlew -p samples/android :app:generateBaselineProfile
 ```
 
-生成されたプロファイルは `app/src/release/generated/baselineProfiles/` に配置され、リリースビルドの APK に組み込まれます。
+生成されたプロファイルは `app/src/release/generated/baselineProfiles/` に配置されます。エミュレーターを接続せずにリリースビルドだけを行う場合は `-PgenerateBaselineProfileOnBuild=false` を付与します。
 
 ## 確認の記録
 

@@ -62,6 +62,8 @@ dependencies {
 }
 
 baselineProfile {
-    automaticGenerationDuringBuild = false
+    automaticGenerationDuringBuild = providers.gradleProperty("generateBaselineProfileOnBuild")
+        .map { it.toBoolean() }
+        .getOrElse(true)
     dexLayoutOptimization = true
 }

@@ -45,11 +45,11 @@
 
 ## ベースラインプロファイルの生成
 
-`:baselineprofile` モジュールと `androidx.baselineprofile` プラグインを使って、アプリの起動と `png-glitch-component` のフレーム処理ホットパスを含むベースラインプロファイルを生成できます。エミュレーターまたは実機を接続した状態で以下のコマンドを実行します。
+`:baselineprofile` モジュールと `androidx.baselineprofile` プラグインを使って、アプリの起動と `png-glitch-component` のフレーム処理ホットパスを含むベースラインプロファイルを生成します。`automaticGenerationDuringBuild = true` を設定しているため、エミュレーターまたは実機を接続した状態で `:app:assembleRelease` を実行すると、リリースビルドの作成時にベースラインプロファイルの収集が自動的に走り、生成されたプロファイルと DEX レイアウト最適化が APK に組み込まれます。単体でプロファイル生成のみを実行する場合は以下のコマンドを使用します。
 
 ```bash
 ./gradlew -p samples/android-glitch-camera :app:generateBaselineProfile
 ```
 
-プロファイル収集時は `MainActivity` にウォームアップ用のフラグが渡されます。物理カメラの入力がないエミュレーター環境でも、合成 RGBA フレームに対する `fromPixels`、`reloadPixels`、`apply`、`renderRgba`、`snapshot` の一連の呼び出しがワーカースレッドで実行され、AOT コンパイルされた WebAssembly コンポーネントのホットパスがプロファイルに記録されます。生成されたプロファイルは `app/src/release/generated/baselineProfiles/` に出力され、リリースビルド時に DEX レイアウト最適化とともに APK へ組み込まれます。
+プロファイル収集時は `MainActivity` にウォームアップ用のフラグが渡されます。物理カメラの入力がないエミュレーター環境でも、合成 RGBA フレームに対する `fromPixels`、`reloadPixels`、`apply`、`renderRgba`、`snapshot` の一連の呼び出しがワーカースレッドで実行され、AOT コンパイルされた WebAssembly コンポーネントのホットパスがプロファイルに記録されます。生成されたプロファイルは `app/src/release/generated/baselineProfiles/` に出力されます。
 
