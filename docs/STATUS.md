@@ -41,6 +41,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
 | `samples/android` | Android サンプルアプリ（composite build） | 11 | ART（エミュレーター）で debug / release とも動作確認済み |
+| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 11 | ホスト JVM のユニットテストと debug / release APK ビルドを確認済み |
 
 ## 2. 現在の状態
 

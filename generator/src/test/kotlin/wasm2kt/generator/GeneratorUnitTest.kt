@@ -110,4 +110,12 @@ class GeneratorUnitTest {
             assertEquals(generate(name), generate(name), "$name generated differently on a second run")
         }
     }
+
+    @Test
+    fun `records with multiple option and list fields use distinct local variable names in writeTo`() {
+        val world = generate("roundtrip").getValue("RoundtripWorld")
+        // Verify that a generated writeTo never declares duplicate __o0 or __l0 in the same function scope.
+        assertFalse(Regex("""val __l0 =[^\n]*\n(?:.*\n)*?\s*val __l0 =""").containsMatchIn(world), world)
+        assertTrue("writer.reset()" in generate("roundtrip").getValue("WitSupport"))
+    }
 }

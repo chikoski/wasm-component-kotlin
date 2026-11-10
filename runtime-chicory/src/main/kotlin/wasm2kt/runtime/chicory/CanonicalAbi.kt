@@ -481,19 +481,23 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             w.int(0)
             return
         }
-        val bytes = m.readBytes(ptr, byteLength.toInt())
+        val n = byteLength.toInt()
         when (kind) {
             StringEncoding.UTF8 -> {
-                if (!Utf8.isValid(bytes, 0, bytes.size)) trap("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}")
-                w.int(bytes.size)
-                w.raw(bytes, 0, bytes.size)
+                w.int(n)
+                val at = copyFromMemory(m, ptr, n)
+                if (!Utf8.isValid(w.buffer, at, n)) trap("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}")
             }
             StringEncoding.UTF16 -> {
+                val bytes = m.readBytes(ptr, n)
                 val chars = CharArray(bytes.size / 2) { i -> ((bytes[2 * i].toInt() and 0xFF) or ((bytes[2 * i + 1].toInt() and 0xFF) shl 8)).toChar() }
                 if (!Utf8.isValidUtf16(chars)) trap("Invalid ${cx.encoding.name.lowercase()} string at ${unsigned(ptr)}")
                 w.string(String(chars))
             }
-            StringEncoding.LATIN1_UTF16 -> w.string(String(bytes, Charsets.ISO_8859_1))
+            StringEncoding.LATIN1_UTF16 -> {
+                val bytes = m.readBytes(ptr, n)
+                w.string(String(bytes, Charsets.ISO_8859_1))
+            }
         }
     }
 
@@ -506,10 +510,37 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
         checkRange(cx.memory, ptr, byteLength, CanonicalAbi.alignOf(element), "list")
         w.length(length.toInt())
         if (CanonicalAbi.isRawInteger(element)) {
-            if (byteLength > 0) w.raw(cx.memory.readBytes(ptr, byteLength.toInt()), 0, byteLength.toInt())
+            if (byteLength > 0) copyFromMemory(cx.memory, ptr, byteLength.toInt())
         } else {
             for (i in 0 until length.toInt()) load(element, ptr + i * size)
         }
+    }
+
+    /** Copies [byteLength] already-bounds-checked bytes from [memory] at [ptr] directly into [w], returning the start offset in [w]. */
+    private fun copyFromMemory(memory: Memory, ptr: Int, byteLength: Int): Int {
+        val start = w.reserve(byteLength)
+        val buf = w.buffer
+        var dst = start
+        var src = ptr
+        val end8 = ptr + (byteLength and -8)
+        while (src < end8) {
+            val v = memory.readLong(src)
+            buf[dst] = v.toByte()
+            buf[dst + 1] = (v ushr 8).toByte()
+            buf[dst + 2] = (v ushr 16).toByte()
+            buf[dst + 3] = (v ushr 24).toByte()
+            buf[dst + 4] = (v ushr 32).toByte()
+            buf[dst + 5] = (v ushr 40).toByte()
+            buf[dst + 6] = (v ushr 48).toByte()
+            buf[dst + 7] = (v ushr 56).toByte()
+            src += 8
+            dst += 8
+        }
+        val end = ptr + byteLength
+        while (src < end) {
+            buf[dst++] = memory.read(src++)
+        }
+        return start
     }
 
     private fun checkDiscriminant(index: Int, t: WitType.Variant) {

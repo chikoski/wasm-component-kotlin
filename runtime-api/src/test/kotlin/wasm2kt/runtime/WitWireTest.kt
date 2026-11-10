@@ -58,4 +58,21 @@ class WitWireTest {
         assertThrows<IllegalStateException> { WitReader(byteArrayOf(-1, -1, -1, -1)).bytes() }
         assertThrows<IllegalStateException> { WitReader(byteArrayOf(1)).requireEnd() }
     }
+
+    @Test
+    fun `reset and reserve reuse the backing buffer`() {
+        val w = WitWriter(8)
+        w.bytes(ByteArray(256) { it.toByte() })
+        val backingBefore = w.buffer
+        w.reset()
+        assertEquals(0, w.size)
+        w.int(5)
+        val offset = w.reserve(5)
+        for (i in 0 until 5) {
+            w.buffer[offset + i] = (10 + i).toByte()
+        }
+        kotlin.test.assertSame(backingBefore, w.buffer)
+        assertContentEquals(byteArrayOf(10, 11, 12, 13, 14), w.toReader().bytes())
+        assertThrows<IllegalArgumentException> { w.reserve(-1) }
+    }
 }
