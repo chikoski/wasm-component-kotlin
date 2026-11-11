@@ -81,13 +81,13 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
         hasCameraPermission = granted
     }
 
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
+    LaunchedEffect(state.isBenchmarkWarmup) {
+        if (!hasCameraPermission && !state.isBenchmarkWarmup) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
-    if (hasCameraPermission) {
+    if (hasCameraPermission && !state.isBenchmarkWarmup) {
         DisposableEffect(lifecycleOwner, state.lensFacing, state.resolution) {
             val providerFuture = ProcessCameraProvider.getInstance(context)
             val mainExecutor = ContextCompat.getMainExecutor(context)
@@ -148,7 +148,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            if (!hasCameraPermission) {
+            if (!hasCameraPermission && !state.isBenchmarkWarmup) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "Camera permission is required for live glitching.",

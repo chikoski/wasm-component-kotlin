@@ -1,6 +1,5 @@
 package com.example.wasm2kt.glitchcamera.baselineprofile
 
-import android.content.Intent
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -26,14 +25,13 @@ class BaselineProfileGenerator {
             packageName = targetPackage,
             includeInStartupProfile = true,
         ) {
+            device.wakeUp()
+            device.executeShellCommand("wm dismiss-keyguard")
             pressHome()
-            val intent = Intent().apply {
-                setClassName(targetPackage, "com.example.wasm2kt.glitchcamera.MainActivity")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                putExtra("com.example.wasm2kt.glitchcamera.BENCHMARK_WARMUP", true)
+            startActivityAndWait { intent ->
+                intent.putExtra("com.example.wasm2kt.glitchcamera.BENCHMARK_WARMUP", true)
             }
-            startActivityAndWait(intent)
-            device.wait(Until.hasObject(By.text("PNG-GLITCH LIVE")), 5_000)
+            device.wait(Until.hasObject(By.textContains("ms/frame")), 10_000)
             device.waitForIdle()
         }
     }
