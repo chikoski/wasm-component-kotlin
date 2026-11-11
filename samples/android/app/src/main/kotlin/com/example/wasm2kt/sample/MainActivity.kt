@@ -1,9 +1,11 @@
 package com.example.wasm2kt.sample
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -11,6 +13,12 @@ import android.widget.TextView
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            getSystemService(KeyguardManager::class.java)?.requestDismissKeyguard(this, null)
+        }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val title = TextView(this).apply {
             text = "wasm2kt sample"
             textSize = 22f

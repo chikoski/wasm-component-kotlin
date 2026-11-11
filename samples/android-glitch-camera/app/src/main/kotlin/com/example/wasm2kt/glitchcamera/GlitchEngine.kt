@@ -37,8 +37,12 @@ data class GlitchFrameOutput(
 
 class GlitchEngine : AutoCloseable {
     private val lock = Any()
-    private val worldSession: WorldSession = openSession(PngglitchComponent)
+    private var worldSession: WorldSession? = null
     private var liveSession: LiveSession? = null
+
+    private fun ensureWorldSessionLocked(): WorldSession {
+        return worldSession ?: openSession(PngglitchComponent).also { worldSession = it }
+    }
 
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
@@ -50,7 +54,7 @@ class GlitchEngine : AutoCloseable {
     private var recipeDirty: Boolean = true
 
     fun availablePngFilters(): List<FilterInfo> = synchronized(lock) {
-        context(worldSession) {
+        context(ensureWorldSessionLocked()) {
             listFilters().filter { info ->
                 !info.deprecated && info.formats.contains(Format.PNG)
             }
@@ -58,7 +62,7 @@ class GlitchEngine : AutoCloseable {
     }
 
     fun validate(recipeYaml: String): GlitchError? = synchronized(lock) {
-        context(worldSession) {
+        context(ensureWorldSessionLocked()) {
             when (val res = validateRecipe(recipeYaml)) {
                 is WitResult.Ok -> null
                 is WitResult.Err -> res.error
@@ -143,7 +147,7 @@ class GlitchEngine : AutoCloseable {
             bitDepth = 8u,
             filter = currentFilterOption.strategy,
         )
-        val created = context(worldSession) {
+        val created = context(ensureWorldSessionLocked()) {
             LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
         }
         return when (created) {
@@ -161,7 +165,8 @@ class GlitchEngine : AutoCloseable {
     override fun close() = synchronized(lock) {
         liveSession?.close()
         liveSession = null
-        worldSession.close()
+        worldSession?.close()
+        worldSession = null
     }
 
     companion object {

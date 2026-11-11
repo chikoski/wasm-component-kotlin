@@ -25,6 +25,8 @@ class BaselineProfileGenerator {
             packageName = targetPackage,
             includeInStartupProfile = true,
         ) {
+            device.wakeUp()
+            device.executeShellCommand("wm dismiss-keyguard")
             pressHome()
             startActivityAndWait()
             device.wait(Until.hasObject(By.textContains("counter merge")), 10_000)

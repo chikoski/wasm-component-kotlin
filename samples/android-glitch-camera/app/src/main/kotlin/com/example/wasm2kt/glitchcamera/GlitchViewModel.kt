@@ -51,6 +51,7 @@ data class GlitchUiState(
     val frameWidth: Int = 0,
     val frameHeight: Int = 0,
     val isRecording: Boolean = false,
+    val isBenchmarkWarmup: Boolean = false,
     val statusMessage: String? = null,
 )
 
@@ -93,6 +94,7 @@ class GlitchViewModel : ViewModel() {
      * captures the AOT-compiled `png-glitch-component` hot path even without a physical camera stream.
      */
     fun runBenchmarkWarmup() {
+        _uiState.update { it.copy(isBenchmarkWarmup = true) }
         analysisExecutor.execute {
             val width = 160
             val height = 120
