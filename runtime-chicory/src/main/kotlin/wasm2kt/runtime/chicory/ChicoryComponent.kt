@@ -145,6 +145,7 @@ internal class ChicoryComponentInstance(
     /** Exports resolved so far; [invoke] takes their index. */
     private val resolved = ArrayList<PlanExport>()
     private val resolvedIndices = HashMap<String, Int>()
+    private val results = WitWriter()
 
     override fun resolve(functionName: String): Int {
         checkUsable()
@@ -188,7 +189,7 @@ internal class ChicoryComponentInstance(
             val coreResults = guest { coreFunction(export.func).apply(*coreArgs.toLongArray()) ?: LongArray(0) }
             cx.checkBorrowsDropped()
 
-            val results = WitWriter()
+            results.reset()
             guest {
                 val lifter = Lifter(cx, results)
                 if (CanonicalAbi.flattenAll(type.results).size > CanonicalAbi.MAX_FLAT_RESULTS) {

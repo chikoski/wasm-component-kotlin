@@ -164,6 +164,9 @@ class WitToKotlinPoetConverter(
     private val witBorrowedClass = ClassName("wasm2kt.runtime", "WitBorrowed")
     private val hostResourceBoundSessionClass = ClassName(targetPackage, "HostResourceBoundSession")
 
+    /** Monotonic counter so temporary locals in generated `writeTo` / encoders never shadow or collide. */
+    private var localVarCounter: Int = 0
+
     private val witWriterClass = ClassName("wasm2kt.runtime", "WitWriter")
     private val witReaderClass = ClassName("wasm2kt.runtime", "WitReader")
     private val codePointClass = ClassName(targetPackage, "CodePoint")
@@ -868,6 +871,7 @@ class WitToKotlinPoetConverter(
         val worldClassName = currentWorldClassName
         val b = CodeBlock.builder()
         val argsName = if (fn.params.isEmpty()) "_" else "__args"
+        localVarCounter = 0
         b.beginControlFlow("define(%S) { $argsName, __results ->", key)
         fn.params.forEachIndexed { i, param -> b.addStatement("val __a$i = %L", buildRead(param.type, "__args")) }
         val args = fn.params.indices.map { CodeBlock.of("__a$it") }
@@ -1249,6 +1253,7 @@ class WitToKotlinPoetConverter(
         val writeTo = FunSpec.builder("writeTo")
             .addKdoc(WRITE_TO_KDOC)
             .addParameter("writer", witWriterClass)
+        localVarCounter = 0
         for (field in fields) {
             writeTo.addCode(buildWrite(field.type, CodeBlock.of("this.%N", NamingConventions.toCamelCase(field.name)), "writer"))
         }
@@ -1427,6 +1432,7 @@ class WitToKotlinPoetConverter(
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
         val writeTo = CodeBlock.builder().beginControlFlow("when (this)")
+        localVarCounter = 0
         cases.forEachIndexed { index, case ->
             val caseName = NamingConventions.toPascalCase(case.name)
             if (case.type == null) {
@@ -1755,7 +1761,8 @@ class WitToKotlinPoetConverter(
             is WitTypeDefKind.Resource -> b.add(resourceWrite(index, own = true, value, w))
             is WitTypeDefKind.Handle -> b.add(resourceWrite(kind.resourceId, own = kind.kind == wasm2kt.ast.HandleKind.OWN, value, w))
             is WitTypeDefKind.OptionType -> {
-                val v = "__o$depth"
+                val id = localVarCounter++
+                val v = "__o$id"
                 b.addStatement("val $v = %L", value)
                 if (mapTypeRef(kind.type, currentWorldClassName).isNullable) {
                     val opt = ClassName(targetPackage, "WitOption")
@@ -1768,7 +1775,8 @@ class WitToKotlinPoetConverter(
                 b.nextControlFlow("else").addStatement("$w.byte(0)").endControlFlow()
             }
             is WitTypeDefKind.ResultType -> {
-                val v = "__res$depth"
+                val id = localVarCounter++
+                val v = "__res$id"
                 val res = ClassName(targetPackage, "WitResult")
                 b.addStatement("val $v = %L", value)
                 b.beginControlFlow("when ($v)")
@@ -1783,8 +1791,9 @@ class WitToKotlinPoetConverter(
             is WitTypeDefKind.ListType -> if (isPrimitive(kind.type, "u8")) {
                 b.addStatement("$w.bytes(%L)", value)
             } else {
-                val v = "__l$depth"
-                val e = "__e$depth"
+                val id = localVarCounter++
+                val v = "__l$id"
+                val e = "__e$id"
                 b.addStatement("val $v = %L", value)
                 b.addStatement("$w.length($v.size)")
                 b.beginControlFlow("for ($e in $v)")
@@ -1793,7 +1802,8 @@ class WitToKotlinPoetConverter(
             }
             is WitTypeDefKind.Tuple -> {
                 generatedTupleArities += kind.types.size
-                val v = "__t$depth"
+                val id = localVarCounter++
+                val v = "__t$id"
                 b.addStatement("val $v = %L", value)
                 kind.types.forEachIndexed { i, t -> b.add(buildWrite(t, CodeBlock.of("$v.f$i"), w, depth + 1)) }
             }
@@ -1915,6 +1925,7 @@ class WitToKotlinPoetConverter(
         val encode = CodeBlock.builder()
         val moved = mutableListOf<CodeBlock>()
         val target = sessionExpr ?: CodeBlock.of("null")
+        localVarCounter = 0
         if (selfHandle) encode.addStatement("__w.int(handle)")
         params.forEachIndexed { i, param ->
             val name = NamingConventions.toCamelCase(param.name)
@@ -2771,7 +2782,7 @@ class WitToKotlinPoetConverter(
             .addAnnotation(synchronizedAnnotation)
             .addModifiers(KModifier.OVERRIDE)
             .addStatement("check(!isClosed) { %S }", "$sessionName is already closed")
-            .addStatement("val writer = %T()", witWriterClass)
+            .addStatement("writer.reset()")
             .addStatement("encode(writer)")
             .addStatement("val index = functionIndices.getOrPut(functionName) { $bridge.resolve(sessionPtr, functionName) }", *bridgeArgs)
             .addStatement("return decode($bridge.invoke(sessionPtr, index, writer))", *bridgeArgs)
@@ -2848,6 +2859,11 @@ class WitToKotlinPoetConverter(
             .addProperty(
                 PropertySpec.builder("functionIndices", ClassName("kotlin.collections", "HashMap").parameterizedBy(STRING, INT), KModifier.PRIVATE)
                     .initializer("HashMap()")
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("writer", witWriterClass, KModifier.PRIVATE)
+                    .initializer("%T()", witWriterClass)
                     .build(),
             )
             .addFunctions(nativeSessionCallFunctions("bridge", null, "FfmWasmtimeSession"))
@@ -2948,6 +2964,11 @@ class WitToKotlinPoetConverter(
                     .initializer("HashMap()")
                     .build(),
             )
+            .addProperty(
+                PropertySpec.builder("writer", witWriterClass, KModifier.PRIVATE)
+                    .initializer("%T()", witWriterClass)
+                    .build(),
+            )
             .addFunctions(nativeSessionCallFunctions("%T", jniBridgeClass, "JniWasmtimeSession"))
             .addFunction(
                 FunSpec.builder("close")
@@ -3027,12 +3048,17 @@ class WitToKotlinPoetConverter(
                     .initializer("HashMap()")
                     .build(),
             )
+            .addProperty(
+                PropertySpec.builder("writer", witWriterClass, KModifier.PRIVATE)
+                    .initializer("%T()", witWriterClass)
+                    .build(),
+            )
             .addFunction(
                 callFunctionSpec("invoke", typeR, anyNullable)
                     .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
                     .addStatement("check(!isClosed) { %S }", closedMessage)
-                    .addStatement("val writer = %T()", witWriterClass)
+                    .addStatement("writer.reset()")
                     .addStatement("encode(writer)")
                     .addStatement("val index = functionIndices.getOrPut(functionName) { backend.resolve(functionName) }")
                     .addStatement("return decode(backend.invoke(index, writer.toReader()))")

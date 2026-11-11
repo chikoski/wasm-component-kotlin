@@ -1,129 +1,109 @@
-# Android カメラグリッチデモの設計と機能改善計画
+# Android カメラグリッチデモの作成計画と機能改善設計
 
-このドキュメントでは、Android のカメラ入力に MediaPipe と `png-glitch` を組み合わせてグリッチエフェクトをかけるデモアプリの設計をまとめます。あわせて、リアルタイム処理を実現するために `wasm-component-kotlin` と `png-glitch` の双方で必要となる機能改善を整理します。
+このドキュメントでは、`samples/android-glitch-camera` に作成するデモアプリの実装計画をまとめます。最初の段階では MediaPipe によるセグメンテーションを行わず、カメラ入力全体に `png-glitch` でリアルタイムのグリッチエフェクトをかけ、静止画保存と動画録画を行うアプリを構築します。あわせて、最新の `png-glitch` リポジトリの実装状況と、`wasm-component-kotlin` 側で行うランタイム改善を整理します。
 
-## 1. デモアプリの全体構成
+## 1. `png-glitch` の最新実装状況の調査結果
 
-デモアプリは、カメラからのライブ映像に対して MediaPipe のセグメンテーションと Rust 製の `png-glitch` コンポーネントを適用し、プレビュー表示、動画の録画、静止画の保存を行います。
+最新の `png-glitch` リポジトリでは、ライブフレーム処理やレシピ解決、および WebAssembly コンポーネント化の基盤がすでに実装されています。
 
-構成要素は以下の4つです。
+実装済みの主な機能は以下の4つです。
 
-* CameraX によるフレーム取得
-* MediaPipe Tasks Vision の Image Segmenter
-* `wasm-component-kotlin` の Chicory バックエンドで動作する `png-glitch` コンポーネント
-* `MediaCodec` と `MediaMuxer` による録画および画像保存パイプライン
+* `png-glitch` クレートの `LivePipeline` と `ScanLines`
+* `png-glitch` クレートの `Mask` と `Masked` ラッパー
+* `png-glitch-recipe` クレートの `LiveRecipe` と `resolve_into`
+* `png-glitch-component` クレートと WIT 定義 `chikoski:png-glitch@0.1.0`
 
-CameraX の `ImageAnalysis` から RGBA 形式のフレームを取得します。取得したフレームを MediaPipe の Image Segmenter に渡し、人物領域と背景領域を表すセグメンテーションマスクを生成します。
+1つ目は、DEFLATE 圧縮やチェックサム計算を行わずに RGBA ピクセル列とスキャンラインを往復する `LivePipeline` です。初回に `PngGlitch::from_pixels` と `Renderer::new` でバッファを確保したあとは、毎フレーム `LivePipeline::encode` でフィルタ処理を適用し、`ScanLines` ビュー上でスキャンラインを直接編集し、`LivePipeline::decode_into` で RGBA ピクセル列へ展開します。これら一連の操作はヒープ割り当てを一切行わずに動作します。静止画として PNG バイト列が必要なときだけ `LivePipeline::snapshot` を呼んで DEFLATE 圧縮を実行します。
 
-続いて、RGBA フレームとセグメンテーションマスクのバイト列を `wasm-component-kotlin` が生成したバインディング経由で `png-glitch` コンポーネントに渡します。コンポーネント内部でマスク領域に応じたスキャンラインのフィルタ操作とピクセル破損、元画像との合成を一括で行い、グリッチ適用後の RGBA フレームをホストへ返します。
+2つ目は、ピクセル単位でエフェクトの適用強度を制御する `Mask` と `Masked` です。ADR 0006 に基づき、`Masked` は任意の `ScanLinesEffect` をラップし、内部の `Mutex<Vec<u8>>` にスキャンラインの元データを退避したうえで、エフェクト適用後のバイト列と元のバイト列をマスク値に応じてブレンドします。これらは次の段階で MediaPipe セグメンテーションを導入する際の基盤になります。
 
-ライブプレビューでは返された RGBA フレームを画面に描画します。動画の録画時は、カメラの生映像ではなくグリッチ適用後のフレームを `MediaCodec` のエンコーダ入力へ送り、`MediaMuxer` で MP4 ファイルとして書き出します。静止画の保存時は、プレビューと同じ RGBA フレームからの画像保存と、本来の PNG チャンク構造を直接破損させる `png-glitch` 本来の出力の2通りに対応します。
+3つ目は、フレームごとのレシピ解決をゼロアロケーションで行う `LiveRecipe` です。ADR 0005 に基づき、全フレームで同じ乱数を使う `SeedMode::Static` と、SplitMix64 による `frame_seed` で毎フレーム異なる乱数を引く `SeedMode::PerFrame` の2種類を備えています。`Recipe::resolve_into` が前フレームの `ResolvedRecipe` 内のベクタ容量を再利用するため、組み込みフィルタであれば `PerFrame` モードでも2フレーム目以降のヒープ割り当てが発生しません。
 
-## 2. `png-glitch` 側に必要な機能改善
+4つ目は、WebAssembly コンポーネントを提供する `png-glitch-component` クレートです。`crates/png-glitch-component/wit/world.wit` において、`glitch` インターフェースと `live` インターフェースが定義されています。`live` インターフェースの `session` リソースは、`from-pixels`、`reload-pixels`、`set-recipe`、`apply`、`reset`、`render-rgba`、`snapshot` の各メソッドを公開しています。また、`glitch` インターフェースの `list-filters` 関数を使えば、利用可能な全フィルタの名前やパラメータ範囲、説明文のメタデータをホスト側から動的に取得できます。セグメンテーションなしのカメラグリッチアプリに必要な WIT 関数は、すべて現行の `png-glitch-component` に揃っています。
 
-現行の `png-glitch` は PNG ファイルのバイト列を入力とし、IDAT チャンクの DEFLATE 展開と再圧縮を伴う設計になっています。カメラフレームのリアルタイム処理と Android の Chicory バックエンドでの実行に向けて、以下の4つの機能改善を行います。
+## 2. `wasm-component-kotlin` 側の機能改善
 
-* 生の RGBA ピクセル列に対するスキャンライン処理モード
-* セグメンテーションマスク連動と領域合成
-* フレーム間の状態を保持するリソース指向の API
-* WASI に依存しない WebAssembly コンポーネント用クレート
-
-1つ目の改善は、生の RGBA ピクセル列を直接扱うモードの追加です。毎フレーム PNG のエンコードとデコードを繰り返すと、DEFLATE 圧縮と INFLATE 展開の計算負荷がボトルネックになります。さらに、圧縮・展開ライブラリに含まれる大きな関数は Chicory の AOT コンパイラで JVM メソッドサイズの上限である 64 KB に近づきやすく、インタプリタ実行へフォールバックする要因にもなります。そのため、RGBA ピクセル列の各行に対して PNG の 5 種類のスキャンラインフィルタである `None`、`Sub`、`Up`、`Average`、`Paeth` を直接適用し、フィルタ種別の書き換えやバイト破損を加えたうえで直ちに逆フィルタ処理を行って RGBA ピクセル列へ戻す経路を追加します。これにより、PNG 特有の幾何学的なグリッチ表現を維持したまま DEFLATE 処理を省略できます。
-
-2つ目の改善は、セグメンテーションマスクを用いたグリッチ制御と合成です。人物領域のみ、背景領域のみ、あるいは境界付近のみを対象としてスキャンラインのフィルタ変更やバイト破損を適用できるようにします。PNG の `Up` や `Average` や `Paeth` フィルタは前の行のデコード結果に依存し、`Sub` フィルタは左隣のピクセルに依存するため、1 箇所の破損が画面の下方向や右方向へ伝播します。このエラー伝播をマスク領域の内部だけに閉じ込めるか、マスクの外側まであふれさせるかをパラメータで切り替えられるようにし、最終的な元画像とのマスク合成までを Wasm 内の 1 パスで完了させます。
-
-3つ目の改善は、フレーム間の状態と作業バッファを保持する設計への拡張です。WIT の `resource` としてエンジンを定義し、フレーム解像度に応じたスキャンライン作業用バッファや前フレームのピクセル状態をインスタンス内に保持します。これにより、毎フレームのメモリ確保を省くとともに、前フレームのグリッチ結果やフィルタ残差を次フレームへ持ち越す時間軸方向のグリッチ表現が可能になります。
-
-4つ目の改善は、WASI 非依存のコンポーネント構成です。`wasm-component-kotlin` の Chicory バックエンドは現時点で WASI のホスト実装を同梱していません。そのため、`png-glitch` 本体のコア処理をファイルシステムや OS 乱数から切り離し、`wasm32-unknown-unknown` ターゲットと `wit-bindgen` でビルドできるコンポーネント用クレートを用意します。ランダムなフィルタ変更やバイト置換に使う乱数は、ホスト側から WIT 経由でシード値を渡す決定論的な擬似乱数生成器で実装します。
-
-## 3. WIT インターフェースの設計案
-
-上記の要件を満たす `png-glitch` コンポーネントの WIT 定義案を以下に示します。
-
-```wit
-package chikoski:png-glitch@0.1.0;
-
-interface types {
-    enum filter-mode {
-        none,
-        sub,
-        up,
-        average,
-        paeth,
-        random,
-    }
-
-    enum mask-target {
-        all,
-        foreground,
-        background,
-        edge,
-    }
-
-    record glitch-config {
-        filter-override: option<filter-mode>,
-        filter-change-rate: f32,
-        byte-corrupt-rate: f32,
-        byte-shift-amount: u8,
-        target: mask-target,
-        mask-threshold: u8,
-        confine-propagation: bool,
-        temporal-persistence: f32,
-        seed: u64,
-    }
-}
-
-interface engine {
-    use types.{glitch-config};
-
-    resource glitch-session {
-        constructor(width: u32, height: u32);
-        resize: func(width: u32, height: u32);
-        process-rgba-frame: func(
-            rgba: list<u8>,
-            mask: list<u8>,
-            config: glitch-config
-        ) -> list<u8>;
-        reset-state: func();
-    }
-
-    glitch-png-bytes: func(png-data: list<u8>, config: glitch-config) -> result<list<u8>, string>;
-}
-
-world png-glitch {
-    export types;
-    export engine;
-}
-```
-
-`glitch-session` リソースはライブプレビューと動画録画のフレーム処理を担当します。`glitch-png-bytes` 関数は静止画保存時に本来の PNG バイナリを直接グリッチさせる用途で使用します。
-
-## 4. `wasm-component-kotlin` 側に必要な機能改善
-
-解像度 1280×720 の RGBA フレームは約 3.68 MB あり、同解像度の 1 チャンネルマスクは約 0.92 MB あります。これらを毎秒 15 から 30 フレームの頻度でやり取りする場合、現行の `wasm-component-kotlin` にはメモリアロケーションとコピーに関する課題があります。
-
-改善項目は以下の4点です。
+セグメンテーションなしのカメラグリッチアプリでは、解像度 640×480 で毎フレーム約 1.22 MB、解像度 1280×720 で毎フレーム約 3.68 MB の RGBA 配列を `reload-pixels` と `render-rgba` で往復させます。GC 負荷を抑えて滑らかなフレームレートを実現するため、デモアプリ作成に先立って以下の2つのランタイム改善を実装します。
 
 * セッション単位での `WitWriter` バッファの再利用
-* `Lifter` における `list<u8>` 読み出し時の中間 `ByteArray` 排除
-* ホスト側で出力用 `ByteArray` または `ByteBuffer` を再利用する API の導入
-* 生成セッションの `invoke` における引数ボックス配列の削減
+* `Lifter` における `list` および `string` 読み出し時の中間 `ByteArray` 排除
 
-1つ目の課題は、呼び出しごとの `WitWriter` の新規生成とバッファ拡張です。現在、生成コードの `BackendWasmtimeSession.invoke` と `ChicoryComponentInstance.invoke` は、関数呼び出しのたびに初期容量 64 バイトの `WitWriter` を新規作成しています。約 4.6 MB の入力と約 3.68 MB の出力を書き込む際、内部の `ByteArray` が 64 バイトから倍々に再確保されるため、1 フレームあたり 20 MB を超える一時配列がヒープ上に割り当てられます。セッションへのアクセスは `@Synchronized` で直列化されているため、入力用と出力用の `WitWriter` をセッションインスタンスのフィールドとして保持し、呼び出しごとに `reset` メソッドで書き込み位置だけを 0 に戻すことで、2 フレーム目以降のバッファ再確保をなくすことができます。
+1つ目は、`WitWriter` の再利用です。これまでの `BackendWasmtimeSession.invoke`、`FfmWasmtimeSession.invoke`、`JniWasmtimeSession.invoke`、および `ChicoryComponentInstance.invoke` は、呼び出しのたびに初期容量 64 バイトの `WitWriter` を新規作成していました。数 MB の RGBA 配列を書き込むたびに配列の倍々拡張が走るため、1 フレームあたり十数 MB の一時配列がヒープに割り当てられていました。`WitWriter` に書き込み位置だけを 0 に戻す `reset` メソッドを追加し、各セッションインスタンスおよび `ChicoryComponentInstance` のフィールドとして `WitWriter` を保持して使い回すことで、2 フレーム目以降のバッファ再確保をなくします。
 
-2つ目の課題は、`runtime-chicory` の `Lifter.loadList` における二重コピーです。現在の実装では `cx.memory.readBytes` を呼んで線形メモリから新しい `ByteArray` を切り出し、その直後に `WitWriter.raw` へ再度コピーしています。これに対し、`WitWriter` に書き込み領域を予約して内部配列とオフセットを返す API、または Chicory の `Memory` から直接 `WitWriter` の内部バッファへ書き込む経路を追加することで、3.68 MB の中間配列の確保とコピーを 1 回分削減できます。
+2つ目は、`runtime-chicory` の `Lifter.loadList` および `Lifter.loadString` における中間配列の排除です。これまでの実装は `cx.memory.readBytes` を呼んで線形メモリから新しい `ByteArray` を確保し、その直後に `WitWriter.raw` へ再度コピーしていました。`WitWriter` に書き込み領域を予約する `reserve` メソッドを追加し、Chicory の `Memory.readLong` と `Memory.read` を使って `WitWriter` の内部バッファへ直接読み出すように変更します。これにより、`render-rgba` 呼び出し時に `Lifter` 内部で発生していた数 MB の一時配列確保をゼロにします。
 
-3つ目の課題は、デコード結果として毎回新しい `ByteArray` が生成される点です。`WitReader.bytes` は戻り値として毎回新しい `ByteArray` を確保します。Android のカメラ処理では、あらかじめ確保した 1 つのピクセルバッファを使い回して `Bitmap.copyPixelsFromBuffer` 等に渡すことで GC によるフレームドロップを防ぎます。そのため、`WitReader` に既存の `ByteArray` や `java.nio.ByteBuffer` へ直接読み出すメソッドを追加し、生成コード側でも出力先バッファを受け取れるオーバーロードや、戻り値のバッファを再利用できる仕組みを検討します。
+なお、将来 MediaPipe セグメンテーションを追加するフェーズでは、`png-glitch-component` の `live.session` への `set-mask` メソッド追加と、ホスト側での出力用 `ByteArray` の再利用 API も段階的に導入します。
 
-4つ目の課題は、生成コードの `WasmtimeSession.invoke` に渡される `args: Array<out Any?>` です。この配列はテスト用の `InMemoryWasmtimeSession` でしか使われていませんが、`BackendWasmtimeSession` や `FfmWasmtimeSession` でも呼び出しのたびに `arrayOf` による配列生成と引数のボクシングが発生しています。インターフェースから不要な配列生成を取り除くか、`InMemoryWasmtimeSession` 専用の経路に分離することで、毎フレームの不要なオブジェクト生成を減らせます。
+## 3. デモアプリ `samples/android-glitch-camera` の作成計画
 
-## 5. 実装の進め方
+デモアプリは `samples/android-glitch-camera` ディレクトリに配置し、既存の最小サンプルである `samples/android` とは独立した Gradle プロジェクトとして構成します。UI フレームワークには Jetpack Compose を採用します。
 
-作業は以下の順序で段階的に進めます。
+### 3.1 ディレクトリ構成
 
-1. `wasm-component-kotlin` の `WitWriter` 再利用と `Lifter` の中間配列削減
-2. `png-glitch` への生 RGBA スキャンラインモードと WIT コンポーネントクレートの追加
-3. `wasm-component-kotlin` の出力バッファ再利用 API の設計と実装
-4. `samples/` 配下での Android カメラグリッチデモアプリの実装と実機・エミュレーター計測
+プロジェクトのファイル構成は以下のとおりです。
 
-まずは既存の生成 API を変えずにランタイム内部で完結する `WitWriter` の再利用と `Lifter` の中間コピー削減から着手し、`benchmarks` モジュールで大きな `list<u8>` の往復性能とアロケーション量の変化を計測します。
+```text
+samples/android-glitch-camera/
+├── README.md
+├── build-wasm.sh
+├── settings.gradle.kts
+├── build.gradle.kts
+├── gradle.properties
+├── gradle/
+│   └── gradle-daemon-jvm.properties
+└── app/
+    ├── build.gradle.kts
+    ├── proguard-rules.pro
+    └── src/
+        ├── main/
+        │   ├── AndroidManifest.xml
+        │   ├── wasm/
+        │   │   └── png-glitch-component.wasm
+        │   └── kotlin/com/example/wasm2kt/glitchcamera/
+        │       ├── MainActivity.kt
+        │       ├── GlitchCameraScreen.kt
+        │       ├── GlitchViewModel.kt
+        │       ├── GlitchEngine.kt
+        │       ├── RecipePresets.kt
+        │       ├── Mp4VideoRecorder.kt
+        │       └── MediaStoreHelper.kt
+        └── test/
+            └── kotlin/com/example/wasm2kt/glitchcamera/
+                └── GlitchEngineTest.kt
+```
+
+`settings.gradle.kts` では `includeBuild("../..")` を指定し、このリポジトリの `io.github.wasm2kt` プラグインと `runtime-chicory` を Composite Build で直接参照します。`build-wasm.sh` は `png-glitch` リポジトリの `png-glitch-component` クレートを `wasm32-unknown-unknown` ターゲットでビルドし、`wasm-tools component new` で `app/src/main/wasm/png-glitch-component.wasm` を生成します。
+
+### 3.2 カメラパイプラインと Wasm セッション管理
+
+カメラ入力から Wasm 処理、プレビュー表示、録画までの流れは以下の3つのクラスで分担します。
+
+* `GlitchEngine`
+* `GlitchViewModel`
+* `GlitchCameraScreen`
+
+`GlitchEngine` は `wasm-component-kotlin` が生成した `PngGlitch` ワールドのセッションと `live.Session` リソースをラップし、専用の単一スレッドディスパッチャー上で直列に呼び出します。起動時に `glitch.listFilters` を呼び出して PNG 対応フィルタのメタデータ一覧を取得します。最初のカメラフレームが到着した際、または解像度や PNG エンコード戦略が変更された際に `Session.fromPixels` を呼び出してセッションを初期化します。以降のフレームでは `reloadPixels`、`apply`、`renderRgba` を順に実行してグリッチ適用後の RGBA バイト列を返します。
+
+`GlitchViewModel` は UI 状態を保持します。管理する状態には、カメラの前後切り替え、解像度の 640×480 と 1280×720 の切り替え、プリセットモードとカスタムフィルタモードの切り替え、`listFilters` から取得した各フィルタのパラメータ値、PNG フィルタ戦略である `AdaptiveFast` や `Paeth` や `Sub` や `Up` や `Average`、およびシードモードの `PerFrame` と `Fixed` が含まれます。パラメータが変更された際は YAML 形式のレシピ文字列を組み立て、次のフレーム処理の前に `session.setRecipe` で反映します。
+
+`GlitchCameraScreen` は Jetpack Compose でカメラプレビューと操作パネルを描画します。CameraX の `ImageAnalysis` を `OUTPUT_IMAGE_FORMAT_RGBA_8888` および `STRATEGY_KEEP_ONLY_LATEST` で構成し、到着したフレームから RGBA バイト列を取り出して `GlitchEngine` に渡します。返された RGBA バイト列を `Bitmap` に書き戻して画面上に表示します。
+
+### 3.3 静止画保存と MP4 動画録画
+
+グリッチ適用後の映像を保存するため、以下の2つの保存機能を実装します。
+
+* `session.snapshot` による本来のグリッチ PNG 静止画保存
+* `Mp4VideoRecorder` による H.264 MP4 動画録画
+
+静止画保存では、シャッターボタンが押されたタイミングでワーカースレッドから `session.snapshot` を呼び出します。これにより、現在の破損したスキャンラインがそのまま DEFLATE 圧縮された正規の PNG バイナリとして出力されます。得られたバイト列を `MediaStoreHelper` 経由で端末の `Pictures/GlitchCamera` に保存します。
+
+動画録画では、`Mp4VideoRecorder` が Android の `MediaCodec` と `MediaMuxer` を使って H.264 形式の MP4 ファイルを生成します。`MediaCodec.createInputSurface` で作成した入力 `Surface` に対し、毎フレーム `GlitchEngine` が出力したグリッチ済み `Bitmap` を描画してエンコーダへ送り、出力バッファを `MediaMuxer` で書き出します。録画停止後に `MediaStoreHelper` 経由で `Movies/GlitchCamera` へ登録します。
+
+## 4. 実装手順
+
+以下の順序で実装と検証を進めます。
+
+1. `runtime-api`、`runtime-chicory`、`generator` における `WitWriter` 再利用と `Lifter` の中間配列削除の実装および既存テストの実行
+2. `png-glitch-component` の `wasm32-unknown-unknown` ビルドと `png-glitch-component.wasm` の生成
+3. `samples/android-glitch-camera` の Gradle プロジェクトと Jetpack Compose アプリ一式の実装
+4. `GlitchEngineTest` によるホスト JVM 上でのユニットテストと、`assembleDebug` および `assembleRelease` によるビルド検証

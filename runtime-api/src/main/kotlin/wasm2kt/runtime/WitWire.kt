@@ -137,6 +137,23 @@ class WitWriter(initialCapacity: Int = 64) {
         size += length
     }
 
+    /**
+     * Reserves [length] raw bytes in [buffer] without a length prefix and returns the offset at
+     * which to write them. [buffer] remains valid until the next write.
+     */
+    fun reserve(length: Int): Int {
+        require(length >= 0) { "Negative length $length" }
+        ensure(length)
+        val at = size
+        size += length
+        return at
+    }
+
+    /** Clears the bytes written so far while keeping the backing array for reuse. */
+    fun reset() {
+        size = 0
+    }
+
     /** `own<R>` of a host resource: moves it to the component (ADR-0008). */
     fun ownHostResource(v: WitHostResource) = int(HostResourceTable.current().lower(v))
 

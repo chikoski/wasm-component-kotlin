@@ -1,0 +1,40 @@
+package com.example.wasm2kt.glitchcamera.baselineprofile
+
+import android.content.Intent
+import androidx.benchmark.macro.junit4.BaselineProfileRule
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+@LargeTest
+class BaselineProfileGenerator {
+    @get:Rule
+    val rule = BaselineProfileRule()
+
+    @Test
+    fun generate() {
+        val targetPackage = InstrumentationRegistry.getArguments().getString("targetAppId")
+            ?: "com.example.wasm2kt.glitchcamera"
+
+        rule.collect(
+            packageName = targetPackage,
+            includeInStartupProfile = true,
+        ) {
+            pressHome()
+            val intent = Intent().apply {
+                setClassName(targetPackage, "com.example.wasm2kt.glitchcamera.MainActivity")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                putExtra("com.example.wasm2kt.glitchcamera.BENCHMARK_WARMUP", true)
+            }
+            startActivityAndWait(intent)
+            device.wait(Until.hasObject(By.text("PNG-GLITCH LIVE")), 5_000)
+            device.waitForIdle()
+        }
+    }
+}
