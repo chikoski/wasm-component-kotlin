@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "modules": [
     {
       "index": 0,
@@ -108,87 +108,120 @@
   "options": [
     {
       "index": 0,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 4,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 1,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 2,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 2,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 1,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 3,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": null,
       "realloc": null,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 4,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 7,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 5,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 0,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 6,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 5,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 7,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 3,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 8,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 9,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 6,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     }
   ],
   "imports": [],
   "resourceTables": [],
+  "streamTables": [],
+  "futureTables": [],
+  "errorContextTables": [],
   "exports": [
     {
       "instance": null,

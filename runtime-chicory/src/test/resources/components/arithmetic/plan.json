@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "modules": [
     {
       "index": 0,
@@ -19,15 +19,21 @@
   "options": [
     {
       "index": 0,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": null,
       "realloc": null,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     }
   ],
   "imports": [],
   "resourceTables": [],
+  "streamTables": [],
+  "futureTables": [],
+  "errorContextTables": [],
   "exports": [
     {
       "instance": null,

@@ -10,6 +10,7 @@ import com.dylibso.chicory.runtime.ImportMemory
 import com.dylibso.chicory.runtime.ImportTable
 import com.dylibso.chicory.runtime.ImportValues
 import com.dylibso.chicory.runtime.Instance
+import com.dylibso.chicory.runtime.InterpreterMachine
 import com.dylibso.chicory.runtime.Machine
 import com.dylibso.chicory.runtime.Memory
 import com.dylibso.chicory.runtime.TableInstance
@@ -86,22 +87,29 @@ class ChicoryComponent(
  * `borrow` cannot be moved or dropped until that call returns. Any trap poisons the instance.
  */
 internal class ChicoryComponentInstance(
-    private val plan: ComponentPlan,
+    internal val plan: ComponentPlan,
     private val modules: Map<Int, CoreModule>,
     private val imports: WitHostImportDispatcher?,
 ) : ComponentBackend {
     private val instances = HashMap<Int, Instance>()
-    private val memories = HashMap<Int, Memory>()
-    private val reallocs = HashMap<Int, ExportFunction>()
-    private val postReturns = HashMap<Int, ExportFunction>()
+    internal val memories = HashMap<Int, Memory>()
+    internal val reallocs = HashMap<Int, ExportFunction>()
+    internal val postReturns = HashMap<Int, ExportFunction>()
+    internal val callbacks = HashMap<Int, ExportFunction>()
+    internal val tables = HashMap<Int, TableInstance>()
     private val instanceFlags = HashMap<Int, GlobalInstance>()
     private val resourceDtors = HashMap<Int, ExportFunction>()
 
-    /** The task's "may block" flag. Every call here is synchronous, so it stays false (0). */
-    private val taskMayBlock = GlobalInstance(Value.i32(0), MutabilityType.Var)
+    /**
+     * The current task's "may block" flag, which fused adapters read. Wasmtime's adapters trap when a
+     * task that may not block calls an `async` function synchronously; here that is checked where a
+     * task actually blocks ([AsyncAbi.checkBlocking]), so it stays 1 for components that use the
+     * async ABI. Synchronous components never block, so it stays 0 (ADR-0018).
+     */
+    private val taskMayBlock = GlobalInstance(Value.i32(if (plan.usesAsync) 1 else 0), MutabilityType.Var)
 
-    /** Per resource table: guest handle -> representation. Handle 0 is reserved as invalid. */
-    private val guestTables = HashMap<Int, ResourceTable>()
+    /** The async ABI (#16): the scheduler, and every component instance's handle table. */
+    internal val async = AsyncAbi(this)
 
     /**
      * A resource handle owned by the host. As in the spec's `lift_own`, the component's own handle
@@ -124,7 +132,7 @@ internal class ChicoryComponentInstance(
     private var entered = false
 
     /** The guest may call imports (false during `cabi_realloc` and post-return). */
-    private var mayLeave = true
+    internal var mayLeave = true
 
     init {
         for (init in plan.initializers) {
@@ -133,7 +141,8 @@ internal class ChicoryComponentInstance(
                 is Initializer.ExtractMemory -> memories[init.index] = instance(init.export.instance).exports().memory(init.export.name)
                 is Initializer.ExtractRealloc -> reallocs[init.index] = coreFunction(init.def)
                 is Initializer.ExtractPostReturn -> postReturns[init.index] = coreFunction(init.def)
-                is Initializer.ExtractTable -> Unit // tables are only shared between core instances
+                is Initializer.ExtractTable -> tables[init.index] = instance(init.export.instance).exports().table(init.export.name)
+                is Initializer.ExtractCallback -> callbacks[init.index] = coreFunction(init.def)
                 is Initializer.Resource -> init.dtor?.let { d ->
                     // The dtor's instance may not exist yet; resolve lazily on first drop.
                     resourceDtors[init.resource] = ExportFunction { args -> coreFunction(d).apply(*args) }
@@ -161,6 +170,14 @@ internal class ChicoryComponentInstance(
         val export = resolved.getOrNull(function) ?: throw IllegalArgumentException("Unknown function index $function")
         val functionName = export.instance?.let { "$it#${export.name}" } ?: export.name
         if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        if (plan.usesAsync) {
+            entered = true
+            try {
+                return async.invoke(export, functionName, args)
+            } finally {
+                entered = false
+            }
+        }
         val type = export.type
         val opts = plan.options.getValue(export.options)
         val cx = Context(opts, Direction.HOST_TO_GUEST)
@@ -218,10 +235,32 @@ internal class ChicoryComponentInstance(
         guest { destroy(h.table, h.rep) }
     }
 
+    override fun readStream(handle: Int, maxCount: Int): WitReader? = hostCall { async.hostRead(handle, maxCount, stream = true) }
+
+    override fun readFuture(handle: Int): WitReader? = hostCall { async.hostRead(handle, 1, stream = false) }
+
+    override fun dropReadable(handle: Int) = hostCall { async.hostDropReadable(handle) }
+
+    override fun newStream(values: ByteArray, count: Int): Int = hostCall { async.newHostStream(values, count) }
+
+    override fun newFuture(value: ByteArray): Int = hostCall { async.newHostFuture(value) }
+
+    /** A host call that runs the component's tasks, like [invoke]. */
+    private inline fun <T> hostCall(block: () -> T): T {
+        checkUsable()
+        if (entered) poison("Cannot reenter component instance: a stream or future was used while another call into it is in progress")
+        entered = true
+        try {
+            return block()
+        } finally {
+            entered = false
+        }
+    }
+
     override fun close() {
         closed = true
         hostHandles.clear()
-        guestTables.clear()
+        async.close()
     }
 
     // ---------------------------------------------------------------- instance state
@@ -232,24 +271,35 @@ internal class ChicoryComponentInstance(
     }
 
     /** Traps and poisons the instance. */
-    private fun poison(message: String): Nothing {
-        if (poisoned == null) poisoned = message
+    internal fun poison(message: String): Nothing {
+        markPoisoned(message)
         throw ComponentTrapException(message)
+    }
+
+    private fun markPoisoned(message: String) {
+        if (poisoned == null) {
+            poisoned = message
+            // Guest threads still blocked can never run again.
+            async.close()
+        }
     }
 
     /**
      * Runs guest code (or validates guest-produced values). Anything thrown poisons the instance,
      * since the guest may be left mid-execution; wasm traps surface as [ComponentTrapException].
      */
-    private inline fun <T> guest(block: () -> T): T = try {
+    internal inline fun <T> guest(block: () -> T): T = try {
         block()
+    } catch (e: HostValueException) {
+        // The host's own arguments were wrong (ADR-0007): not a trap.
+        throw e.cause!!
     } catch (e: Throwable) {
         val surfaced = asTrap(e)
-        if (poisoned == null) poisoned = surfaced.message ?: surfaced.javaClass.name
+        markPoisoned(surfaced.message ?: surfaced.javaClass.name)
         throw surfaced
     }
 
-    private fun asTrap(e: Throwable): Throwable {
+    internal fun asTrap(e: Throwable): Throwable {
         var c: Throwable? = e
         while (c != null) {
             if (c is ComponentTrapException) return c
@@ -258,7 +308,7 @@ internal class ChicoryComponentInstance(
         return if (e is ChicoryException) ComponentTrapException("wasm trap: ${e.message}", e) else e
     }
 
-    private inline fun <T> withoutLeaving(block: () -> T): T {
+    internal inline fun <T> withoutLeaving(block: () -> T): T {
         val previous = mayLeave
         mayLeave = false
         try {
@@ -268,7 +318,7 @@ internal class ChicoryComponentInstance(
         }
     }
 
-    private fun checkMayLeave(what: String) {
+    internal fun checkMayLeave(what: String) {
         if (!mayLeave) poison("Cannot leave component instance: $what was called during cabi_realloc or post-return")
     }
 
@@ -295,6 +345,9 @@ internal class ChicoryComponentInstance(
                     HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), trampoline(def.index)),
                 )
                 is CoreDef.TaskMayBlock -> builder.addGlobal(ImportGlobal(arg.module, arg.name, taskMayBlock))
+                is CoreDef.Intrinsic -> builder.addFunction(
+                    HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), async.intrinsic(def.name)),
+                )
                 is CoreDef.InstanceFlags -> builder.addGlobal(
                     ImportGlobal(arg.module, arg.name, instanceFlags.getOrPut(def.index) {
                         // may_leave | may_enter, as Wasmtime initializes them.
@@ -305,7 +358,15 @@ internal class ChicoryComponentInstance(
         }
         val instance = Instance.builder(core.module)
             .withImportValues(builder.build())
-            .apply { core.machineFactory?.let { withMachineFactory(it) } }
+            .apply {
+                if (plan.usesAsync) {
+                    // Guest threads of one instance interleave (ADR-0018), and Chicory's machines keep
+                    // their operand and call stacks per machine: give every JVM thread its own.
+                    withMachineFactory(threadConfined(core.machineFactory ?: Function { InterpreterMachine(it) }))
+                } else {
+                    core.machineFactory?.let { withMachineFactory(it) }
+                }
+            }
             .build()
         instances[init.instance] = instance
     }
@@ -321,10 +382,15 @@ internal class ChicoryComponentInstance(
         error("Core module has no function import $importModule::$name")
     }
 
+    private fun threadConfined(factory: Function<Instance, Machine>): Function<Instance, Machine> = Function { instance ->
+        val machines = ThreadLocal.withInitial { factory.apply(instance) }
+        Machine { funcId, args -> machines.get().call(funcId, args) }
+    }
+
     private fun instance(index: Int): Instance =
         instances[index] ?: error("Core instance $index referenced before it was instantiated")
 
-    private fun coreFunction(def: CoreDef): ExportFunction = when (def) {
+    internal fun coreFunction(def: CoreDef): ExportFunction = when (def) {
         is CoreDef.Export -> instance(def.ref.instance).export(def.ref.name)
         is CoreDef.Trampoline -> {
             val handle = trampoline(def.index)
@@ -332,6 +398,10 @@ internal class ChicoryComponentInstance(
         }
         is CoreDef.InstanceFlags -> error("Instance flags are not callable")
         is CoreDef.TaskMayBlock -> error("The task-may-block flag is not callable")
+        is CoreDef.Intrinsic -> {
+            val handle = async.intrinsic(def.name)
+            ExportFunction { args -> handle.apply(null, *args) }
+        }
     }
 
     // ---------------------------------------------------------------- trampolines
@@ -340,12 +410,13 @@ internal class ChicoryComponentInstance(
         when (val t = plan.trampolines[index] ?: error("Unknown trampoline $index")) {
             is Trampoline.LowerImport -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 checkMayLeave("host import '${plan.imports.getValue(t.import).dispatchKey}'")
-                callHost(t, args)
+                if (plan.options.getValue(t.options).async) async.callHostAsync(t, args) else callHost(t, args)
             }
             is Trampoline.ResourceNew -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 checkMayLeave("resource.new")
                 longArrayOf(table(t.table).insert(args[0].toInt()).toLong())
             }
+            is Trampoline.Async -> async.trampoline(t)
             is Trampoline.ResourceRep -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 longArrayOf(table(t.table).rep(args[0].toInt()).toLong())
             }
@@ -377,6 +448,8 @@ internal class ChicoryComponentInstance(
         val dispatcher = imports ?: throw IllegalStateException("Component imports '$key' but no host imports were provided")
         dispatcher.hostFunction(key) ?: throw IllegalStateException("Unknown host import: $key")
     }
+
+    internal fun hostImport(import: Int): WitHostFunction = hostFunction(plan.imports.getValue(import).dispatchKey)
 
     /** A guest calling a host import: lift the guest's arguments, call the host, lower the results. */
     private fun callHost(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray? {
@@ -419,16 +492,24 @@ internal class ChicoryComponentInstance(
 
     // ---------------------------------------------------------------- resources
 
-    private fun table(index: Int): ResourceTable = guestTables.getOrPut(index) { ResourceTable() }
+    /** The resource table [index]: a typed view of its component instance's handle table. */
+    internal fun table(index: Int): ResourceTable =
+        ResourceTable(async.state(plan.resourceTables[index]?.instance ?: 0).handles, index)
 
-    private fun dropGuestHandle(tableIndex: Int, guestHandle: Int) {
-        val slot = table(tableIndex).remove(guestHandle)
-        if (!slot.own) return // dropping a borrow handle only ends the borrow
+    internal fun dropGuestHandle(tableIndex: Int, guestHandle: Int) {
+        val slot = table(tableIndex).slotOrNull(guestHandle) ?: trap("Unknown resource handle $guestHandle")
+        if (slot.numLends != 0) trap("Cannot drop resource handle $guestHandle while it is lent to a call in progress")
+        table(tableIndex).remove(guestHandle)
+        if (!slot.own) {
+            // Dropping a borrow handle only ends the borrow.
+            slot.borrowScope?.let { it.numBorrows-- }
+            return
+        }
         destroy(tableIndex, slot.rep)
     }
 
     /** The last owning handle of [rep] is gone: run its destructor, or tell the host that defined it. */
-    private fun destroy(tableIndex: Int, rep: Int) {
+    internal fun destroy(tableIndex: Int, rep: Int) {
         val info = plan.resourceTables[tableIndex] ?: return
         if (info.imported) {
             // The host defined this resource: tell it the component dropped its owning handle.
@@ -441,14 +522,25 @@ internal class ChicoryComponentInstance(
 
     private fun isDefinedHere(tableIndex: Int): Boolean = plan.resourceTables[tableIndex]?.imported == false
 
-    private fun isImported(tableIndex: Int): Boolean = plan.resourceTables[tableIndex]?.imported == true
+    internal fun isImported(tableIndex: Int): Boolean = plan.resourceTables[tableIndex]?.imported == true
 
     private fun hasDestructor(tableIndex: Int): Boolean =
         plan.resourceTables[tableIndex]?.let { !it.imported && it.resource?.let(resourceDtors::containsKey) == true } == true
 
-    private enum class Direction { HOST_TO_GUEST, GUEST_TO_HOST }
+    internal enum class Direction { HOST_TO_GUEST, GUEST_TO_HOST }
 
-    private inner class Context(private val opts: CanonOptions, private val direction: Direction) : AbiContext {
+    internal fun context(opts: CanonOptions, direction: Direction, borrowScope: (() -> Task)? = null) = Context(opts, direction, borrowScope)
+
+    /**
+     * Lifting and lowering at the host boundary. [borrowScope] is the task borrows of host resources
+     * are lent to, for calls that run as Component Model tasks (#16); otherwise the call checks
+     * itself that the borrows were dropped ([checkBorrowsDropped]).
+     */
+    internal inner class Context(
+        private val opts: CanonOptions,
+        private val direction: Direction,
+        private val borrowScope: (() -> Task)? = null,
+    ) : AbiContext {
         override val memory: Memory
             get() = opts.memory?.let { memories.getValue(it) }
                 ?: throw IllegalStateException("This function needs linear memory but its canonical options declare none")
@@ -461,17 +553,17 @@ internal class ChicoryComponentInstance(
         private val lent = mutableListOf<HostHandle>()
 
         /** Borrow handles of host resources created in the guest for this call: (table, handle, slot). */
-        private val borrowsIn = mutableListOf<Triple<Int, Int, ResourceTable.Slot>>()
+        private val borrowsIn = mutableListOf<Triple<Int, Int, ResourceHandle>>()
 
         /** Handles this call added to the component's tables while lowering: (table, handle). */
         private val inserted = mutableListOf<Pair<Int, Int>>()
 
-        private fun insert(table: Int, rep: Int, own: Boolean): Int =
-            table(table).insert(rep, own).also { inserted += table to it }
+        private fun insert(table: Int, rep: Int, own: Boolean, scope: Task? = null): Int =
+            table(table).insert(rep, own, scope).also { inserted += table to it }
 
         /** Lowering the arguments failed: take back the handles already added for them. */
         fun rollbackLowering() {
-            for ((t, h) in inserted.asReversed()) table(t).remove(h)
+            for ((t, h) in inserted.asReversed()) table(t).remove(h).borrowScope?.let { it.numBorrows-- }
             inserted.clear()
             borrowsIn.clear()
             moves.clear()
@@ -519,8 +611,10 @@ internal class ChicoryComponentInstance(
         override fun lowerBorrow(table: Int, id: Int): Int {
             if (isImported(table)) {
                 check(direction == Direction.HOST_TO_GUEST) { "Host imports cannot return borrow<T>" }
-                val handle = insert(table, id, own = false)
-                borrowsIn += Triple(table, handle, checkNotNull(table(table).slotOrNull(handle)))
+                val scope = borrowScope?.invoke()
+                val handle = insert(table, id, own = false, scope = scope)
+                if (scope != null) scope.numBorrows++
+                else borrowsIn += Triple(table, handle, checkNotNull(table(table).slotOrNull(handle)))
                 return handle
             }
             requireDefinedResource(table)
@@ -542,7 +636,9 @@ internal class ChicoryComponentInstance(
             if (isImported(table)) {
                 // The component hands a host resource back: the host owns its rep again.
                 val t = table(table)
-                if (t.slotOrNull(handle)?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
+                val slot = t.slotOrNull(handle)
+                if (slot?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
+                if (slot != null && slot.numLends != 0) trap("Cannot pass resource handle $handle as own while it is lent")
                 return t.remove(handle).rep
             }
             requireDefinedResource(table)
@@ -550,12 +646,21 @@ internal class ChicoryComponentInstance(
             // The spec's lift_own: the handle leaves the component's table (trapping if it is
             // unknown or a borrow), so the component can no longer use or drop it.
             val t = table(table)
-            if (t.slotOrNull(handle)?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
+            val slot = t.slotOrNull(handle)
+            if (slot?.own == false) trap("Cannot pass borrowed resource handle $handle as own")
+            if (slot != null && slot.numLends != 0) trap("Cannot pass resource handle $handle as own while it is lent")
             val rep = t.remove(handle).rep
             val hostHandle = nextHostHandle++
             hostHandles[hostHandle] = HostHandle(table, rep)
             return hostHandle
         }
+
+        override fun liftStream(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = true)
+        override fun lowerStream(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = true)
+        override fun liftFuture(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = false)
+        override fun lowerFuture(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = false)
+        override fun liftErrorContext(handle: Int): Int = async.liftErrorContextToHost(opts.instance, handle)
+        override fun lowerErrorContext(id: Int): Int = async.lowerErrorContextFromHost(opts.instance, id)
 
         override fun liftBorrow(table: Int, handle: Int): Int {
             if (isImported(table)) return table(table).rep(handle)
@@ -604,30 +709,20 @@ internal class ChicoryComponentInstance(
 }
 
 /**
- * A component-level resource table: guest handles (starting at 1) mapped to representations.
- * Handles of host resources lent for one call are `borrow` handles ([Slot.own] = false).
- * Freed handles are reused most-recently-freed first, like the spec's `Table.free` list.
+ * A resource table of the plan, as a view of its component instance's [HandleTable], which also
+ * holds that instance's waitables, waitable sets and error contexts (the spec's `inst.handles`).
+ * A handle of another resource type, or one that is not a resource, is reported as unknown.
  */
-internal class ResourceTable {
-    class Slot(val rep: Int, val own: Boolean)
+internal class ResourceTable(private val handles: HandleTable, private val table: Int) {
+    fun insert(rep: Int, own: Boolean = true, scope: Task? = null): Int = handles.add(ResourceHandle(table, rep, own, scope))
 
-    private val slots = HashMap<Int, Slot>()
-    private val free = ArrayDeque<Int>()
-    private var next = 1
+    fun rep(handle: Int): Int = (slotOrNull(handle) ?: trap("Unknown resource handle $handle")).rep
 
-    fun insert(rep: Int, own: Boolean = true): Int {
-        val h = free.removeLastOrNull() ?: next++
-        slots[h] = Slot(rep, own)
-        return h
-    }
+    fun slotOrNull(handle: Int): ResourceHandle? = (handles.getOrNull(handle) as? ResourceHandle)?.takeIf { it.table == table }
 
-    fun rep(handle: Int): Int = (slots[handle] ?: trap("Unknown resource handle $handle")).rep
-
-    fun slotOrNull(handle: Int): Slot? = slots[handle]
-
-    fun remove(handle: Int): Slot {
-        val slot = slots.remove(handle) ?: trap("Unknown resource handle $handle")
-        free.addLast(handle)
+    fun remove(handle: Int): ResourceHandle {
+        val slot = slotOrNull(handle) ?: trap("Unknown resource handle $handle")
+        handles.remove(handle)
         return slot
     }
 }

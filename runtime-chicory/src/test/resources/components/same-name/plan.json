@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "modules": [
     {
       "index": 0,
@@ -354,43 +354,58 @@
   "options": [
     {
       "index": 0,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": 0,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 1,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": null,
       "realloc": null,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 2,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": null,
       "postReturn": 0,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 3,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 4,
+      "instance": 0,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     }
   ],
   "imports": [
@@ -446,6 +461,9 @@
       "import": null
     }
   ],
+  "streamTables": [],
+  "futureTables": [],
+  "errorContextTables": [],
   "exports": [
     {
       "instance": "example:fs/types@0.1.0",

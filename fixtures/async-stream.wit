@@ -1,0 +1,9 @@
+package root:component;
+
+world root {
+  export double: async func(x: u32) -> u32;
+  export count-up: async func(n: u32) -> stream<u32>;
+  export sum: async func(s: stream<u32>) -> u32;
+  export later: async func(x: u32) -> future<u32>;
+  export times-ten: async func(f: future<u32>) -> u32;
+}

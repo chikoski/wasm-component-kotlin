@@ -27,14 +27,14 @@ WIT・Canonical ABI・Component Model の各機能について、バックエン
 | 機能 | Chicory | Wasmtime | 備考 |
 | :--- | :--- | :--- | :--- |
 | メモリを持つ子コンポーネント同士の合成（文字列・`list` の transcode、`trap`） | 対応 | 対応 | 12 種類の文字列 transcoder に対応（[#47](https://github.com/chikoski/wasm-component-kotlin/issues/47)、[ADR-0013](../adr/0013-multi-memory-adapters.md)） |
-| 合成した子コンポーネント間での `resource` の受け渡し（`resource.transfer-own` 等） | 未対応 | 対応 | [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70)。ビルド時に `PlanCheck` が警告 |
-| Component Model Async（`async func`, `future<T>`, `stream<T>`） | 未対応（予定: [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16)） | 対応予定なし（[ADR-0005](../adr/0005-async-and-wasi03-chicory-only.md)） | ビルド時に `PlanCheck` が警告 |
+| 合成した子コンポーネント間での `resource` の受け渡し（`resource.transfer-own` 等） | 一部対応 | 対応 | fused adapter の `resource-transfer-own` / `-borrow` と `enter-sync-call` / `exit-sync-call` に対応（[#16](https://github.com/chikoski/wasm-component-kotlin/issues/16)）。公式テストの 2 コマンドは、まだ通らない（[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70)） |
+| Component Model Async（`async func`, `future<T>`, `stream<T>`, `error-context`、callback 形式と stackful 形式、協調スレッドの組み込み関数） | 対応 | 対応予定なし（[ADR-0005](../adr/0005-async-and-wasi03-chicory-only.md)） | [ADR-0018](../adr/0018-async-abi-on-chicory.md)。ホストからの呼び出しは、結果が返るまでブロックする。ホストが受け渡せる stream / future は、export の引数と結果のトップレベルだけで、要素に resource / stream / future を含まないもの。async のホスト import は同期の関数として実装する |
 | WASI 0.3 ホスト実装 | 未対応（予定: [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13)） | 対応予定なし（[ADR-0005](../adr/0005-async-and-wasi03-chicory-only.md)） | 現時点では import された WASI インターフェースはホスト側で実装する必要がある |
 | 実行時間・メモリの上限と強制中断 | 未対応 | 未対応 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77)。信頼できるコンポーネントのみを実行する前提 |
 
 ## 4. 公式テストスイート（Conformance）
 
-Component Model の公式リファレンステストスイート（`values/`、`resources/`）を `conformance/component-model/` に取り込み、`ConformanceTest` で Chicory バックエンドに対して実行しています（[ADR-0017](../adr/0017-component-model-conformance-suite.md)、[#30](https://github.com/chikoski/wasm-component-kotlin/issues/30)）。
+Component Model の公式リファレンステストスイート（`values/`、`resources/`、`async/`）を `conformance/component-model/` に取り込み、`ConformanceTest` で Chicory バックエンドに対して実行しています（[ADR-0017](../adr/0017-component-model-conformance-suite.md)、[#30](https://github.com/chikoski/wasm-component-kotlin/issues/30)）。
 
-* 191 コマンド中 **168 コマンドが成功**しています
-* 残りの 23 コマンドは、上記の未対応機能（[#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) async、[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) 合成コンポーネント間の resource、[#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) `map`）に該当し、`conformance/skip.txt` に理由付きで記録しています
+* `values/` と `resources/` は 191 コマンド中 **188**、`async/` は 514 コマンド中 **480** が成功しています（仕様の `nyi.txt` に載ったファイルは、1 つと数えています）
+* 残りは、Wasmtime 48 LTS の制約（同じインスタンスや祖先のインスタンスへの再入がアダプターでトラップになる、wasmparser 0.254 が `task.return` の `borrow` を拒否しない）と、上記の未対応機能（[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) 合成コンポーネント間の resource、[#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) `map`）に該当し、`conformance/skip.txt` に理由付きで記録しています

@@ -1,6 +1,5 @@
-;; Two nested components passing a resource between them: wasmtime-environ fuses an adapter
-;; that needs component intrinsics (resource transfer, sync call enter/exit) the Chicory backend
-;; does not implement yet. Used to check that builds report them up front (#39).
+;; Two nested components passing a resource between them: wasmtime-environ fuses an adapter that
+;; uses component intrinsics (resource transfer, sync call enter/exit; #70).
 (component
   (component $a
     (type $r (resource (rep i32)))

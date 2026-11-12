@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "modules": [
     {
       "index": 0,
@@ -1021,55 +1021,76 @@
   "options": [
     {
       "index": 0,
+      "instance": 2,
       "stringEncoding": "latin1+utf16",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 1,
+      "instance": 2,
       "stringEncoding": "utf16",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 2,
+      "instance": 2,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 3,
+      "instance": 2,
       "stringEncoding": "latin1+utf16",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 4,
+      "instance": 2,
       "stringEncoding": "utf8",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     },
     {
       "index": 5,
+      "instance": 2,
       "stringEncoding": "utf16",
       "memory": 0,
       "realloc": 0,
       "postReturn": null,
-      "async": false
+      "async": false,
+      "callback": null,
+      "cancellable": false
     }
   ],
   "imports": [],
   "resourceTables": [],
+  "streamTables": [],
+  "futureTables": [],
+  "errorContextTables": [],
   "exports": [
     {
       "instance": null,

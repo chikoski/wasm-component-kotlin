@@ -148,4 +148,42 @@ class ChicoryGeneratedBindingsTest {
         )
         assertEquals("scaled=42,tag=ERR#404,count=15,prio=HIGH,even=42:-7,ping=true:true,opt=true,true,true,u64Max=true", out)
     }
+
+    /** The async ABI (#16): `async func` is a `suspend fun`, `stream<T>` a `Flow<T>`, `future<T>` a `Deferred<T>` (ADR-0006). */
+    @Test
+    fun `async functions, streams and futures run on Chicory`(@TempDir tempDir: Path) {
+        val out = generateCompileRun(
+            tempDir, "async-stream", "com.example.chicory.asyncstream", "RootWorld.kt",
+            """
+            import kotlinx.coroutines.CompletableDeferred
+            import kotlinx.coroutines.flow.asFlow
+            import kotlinx.coroutines.flow.flowOf
+            import kotlinx.coroutines.flow.take
+            import kotlinx.coroutines.flow.toList
+            import kotlinx.coroutines.runBlocking
+
+            fun run(component: ComponentBackendFactory): String =
+                withSession(component) {
+                    runBlocking {
+                        val doubled = double(21u)
+                        val counted = countUp(5u).toList()
+                        val summed = sum((1u..10u).asFlow())
+                        val empty = sum(flowOf())
+                        val roundTrip = sum(countUp(4u))
+                        val firstTwo = countUp(100u).take(2).toList()
+                        val later = later(41u).await()
+                        val tenfold = timesTen(CompletableDeferred(7u))
+                        val once = countUp(1u).let { s -> s.toList(); runCatching { s.toList() }.isFailure }
+                        "doubled=${'$'}doubled,counted=${'$'}counted,summed=${'$'}summed,empty=${'$'}empty,roundTrip=${'$'}roundTrip," +
+                            "firstTwo=${'$'}firstTwo,later=${'$'}later,tenfold=${'$'}tenfold,once=${'$'}once,after=${'$'}{double(1u)}"
+                    }
+                }
+            """,
+            component("async-stream"),
+        )
+        assertEquals(
+            "doubled=42,counted=[0, 1, 2, 3, 4],summed=55,empty=0,roundTrip=6,firstTwo=[0, 1],later=42,tenfold=70,once=true,after=2",
+            out,
+        )
+    }
 }

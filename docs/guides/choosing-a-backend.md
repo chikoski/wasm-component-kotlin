@@ -15,7 +15,7 @@
 | **64 KiB の `list<u8>` 往復** | JVM 約 12〜27 µs / ART 約 0.3 ms | JVM 約 3.4〜5.7 ms | JVM 約 29 µs |
 | **計算性能（小さな関数）** | Wasmtime の約 1.1〜3 倍 | 基準（1x） | 基準（1x） |
 | **大きな wasm 関数（例: regex）** | HotSpot の JIT 上限や 64 KB メソッド上限により遅くなることがある（最大約 50 倍） | 影響なし | 影響なし |
-| **今後の async / WASI 0.3 対応** | 対応予定（[#16](https://github.com/chikoski/wasm-component-kotlin/issues/16)、[#13](https://github.com/chikoski/wasm-component-kotlin/issues/13)） | 予定なし（同期の参照実装として維持。[ADR-0005](../adr/0005-async-and-wasi03-chicory-only.md)） | 予定なし |
+| **async / WASI 0.3** | async は対応（[ADR-0018](../adr/0018-async-abi-on-chicory.md)）。WASI 0.3 は予定（[#13](https://github.com/chikoski/wasm-component-kotlin/issues/13)） | 予定なし（同期の参照実装として維持。[ADR-0005](../adr/0005-async-and-wasi03-chicory-only.md)） | 予定なし |
 
 数値の計測条件と内訳は [性能とサイズ](../explanation/performance.md) にあります。
 

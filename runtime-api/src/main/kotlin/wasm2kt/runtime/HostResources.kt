@@ -135,6 +135,19 @@ class HostResourceTable : AutoCloseable {
     companion object {
         private val CURRENT = ThreadLocal<HostResourceTable?>()
 
+        /**
+         * The table bound on this thread, or null. For a backend that runs guest code on threads of
+         * its own (the Chicory backend's async ABI, ADR-0018), to carry the binding over with [setCurrent].
+         */
+        @JvmStatic
+        fun currentOrNull(): HostResourceTable? = CURRENT.get()
+
+        /** Binds [table] on this thread (null unbinds), without opening a lend scope; see [currentOrNull]. */
+        @JvmStatic
+        fun setCurrent(table: HostResourceTable?) {
+            if (table == null) CURRENT.remove() else CURRENT.set(table)
+        }
+
         /** The table of the session whose call is in progress on this thread. */
         @JvmStatic
         fun current(): HostResourceTable = CURRENT.get()

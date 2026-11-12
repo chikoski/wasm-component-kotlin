@@ -56,7 +56,7 @@
 
 ### ビルド時に `uses features the Chicory backend does not support yet` と警告が出る
 
-* **原因**: コンポーネントが Chicory バックエンドの未対応機能（async、子コンポーネント間のリソース転送など）を含んでいます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)）
+* **原因**: コンポーネントが Chicory バックエンドの未対応機能（`map<K, V>` などの型、未対応の組み込み関数）を含んでいます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)）
 * **対処**: 該当するコード経路を実行時に呼ばなければ動作しますが、呼ぶと例外になります。ビルド時点で失敗させたい場合は `wasm2kt { failOnUnsupportedFeatures.set(true) }` を設定してください
 
 ### ビルド時に `are too large for a JVM method and will be interpreted` と警告が出る / 大きな wasm 関数を含むコンポーネントが遅い

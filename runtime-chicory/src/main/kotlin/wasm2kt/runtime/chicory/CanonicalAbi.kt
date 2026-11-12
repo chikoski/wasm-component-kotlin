@@ -17,6 +17,9 @@ import wasm2kt.runtime.WitWriter
 internal object CanonicalAbi {
     const val MAX_FLAT_PARAMS = 16
     const val MAX_FLAT_RESULTS = 1
+
+    /** Parameters of an async-lowered import beyond this many flat values are passed by pointer. */
+    const val MAX_FLAT_ASYNC_PARAMS = 4
     const val MAX_STRING_BYTE_LENGTH = (1L shl 28) - 1
     const val MAX_LIST_BYTE_LENGTH = (1L shl 28) - 1
     const val CANONICAL_FLOAT32_NAN = 0x7fc00000
@@ -34,7 +37,7 @@ internal object CanonicalAbi {
         is WitType.Tuple -> t.types.maxOfOrNull { alignOf(it) } ?: 1
         is WitType.Variant -> maxOf(discriminantSize(t.cases.size), maxCaseAlign(t))
         is WitType.Flags -> flagsSize(t.names.size).coerceAtMost(4)
-        is WitType.Own, is WitType.Borrow -> 4
+        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> 4
         is WitType.Unsupported -> unsupported(t)
     }
 
@@ -52,7 +55,7 @@ internal object CanonicalAbi {
             alignTo(s, alignOf(t))
         }
         is WitType.Flags -> flagsSize(t.names.size)
-        is WitType.Own, is WitType.Borrow -> 4
+        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> 4
         is WitType.Unsupported -> unsupported(t)
     }
 
@@ -74,7 +77,7 @@ internal object CanonicalAbi {
             listOf(CoreType.I32) + joined
         }
         is WitType.Flags -> List((t.names.size + 31) / 32) { CoreType.I32 }
-        is WitType.Own, is WitType.Borrow -> listOf(CoreType.I32)
+        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> listOf(CoreType.I32)
         is WitType.Unsupported -> unsupported(t)
     }
 
@@ -128,7 +131,22 @@ internal interface AbiContext {
     fun lowerBorrow(table: Int, id: Int): Int
     fun liftOwn(table: Int, handle: Int): Int
     fun liftBorrow(table: Int, handle: Int): Int
+
+    /**
+     * Streams, futures and error contexts (#16): `lift*` takes the guest's handle in [table] (a
+     * stream or future table of the plan) and returns the id the other side of the copy uses;
+     * `lower*` does the reverse. The host sees them as integer handles.
+     */
+    fun liftStream(table: Int, handle: Int): Int = unsupportedAsync("stream")
+    fun lowerStream(table: Int, id: Int): Int = unsupportedAsync("stream")
+    fun liftFuture(table: Int, handle: Int): Int = unsupportedAsync("future")
+    fun lowerFuture(table: Int, id: Int): Int = unsupportedAsync("future")
+    fun liftErrorContext(handle: Int): Int = unsupportedAsync("error-context")
+    fun lowerErrorContext(id: Int): Int = unsupportedAsync("error-context")
 }
+
+private fun unsupportedAsync(what: String): Nothing =
+    throw UnsupportedOperationException("Passing a $what here is not supported by the Chicory backend")
 
 /**
  * Reads host values from [r] (the binary format) into core wasm values / linear memory. Values that
@@ -172,6 +190,9 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             }
             is WitType.Own -> out += cx.lowerOwn(t.table, r.int()).toLong()
             is WitType.Borrow -> out += cx.lowerBorrow(t.table, r.int()).toLong()
+            is WitType.Stream -> out += cx.lowerStream(t.table, r.int()).toLong()
+            is WitType.Future -> out += cx.lowerFuture(t.table, r.int()).toLong()
+            WitType.ErrorContext -> out += cx.lowerErrorContext(r.int()).toLong()
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
@@ -221,6 +242,9 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             }
             is WitType.Own -> m.writeI32(ptr, cx.lowerOwn(t.table, r.int()))
             is WitType.Borrow -> m.writeI32(ptr, cx.lowerBorrow(t.table, r.int()))
+            is WitType.Stream -> m.writeI32(ptr, cx.lowerStream(t.table, r.int()))
+            is WitType.Future -> m.writeI32(ptr, cx.lowerFuture(t.table, r.int()))
+            WitType.ErrorContext -> m.writeI32(ptr, cx.lowerErrorContext(r.int()))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
@@ -401,6 +425,9 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             }
             is WitType.Own -> w.int(cx.liftOwn(t.table, r.next().toInt()))
             is WitType.Borrow -> w.int(cx.liftBorrow(t.table, r.next().toInt()))
+            is WitType.Stream -> w.int(cx.liftStream(t.table, r.next().toInt()))
+            is WitType.Future -> w.int(cx.liftFuture(t.table, r.next().toInt()))
+            WitType.ErrorContext -> w.int(cx.liftErrorContext(r.next().toInt()))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
@@ -443,6 +470,9 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             }
             is WitType.Own -> w.int(cx.liftOwn(t.table, m.readInt(ptr)))
             is WitType.Borrow -> w.int(cx.liftBorrow(t.table, m.readInt(ptr)))
+            is WitType.Stream -> w.int(cx.liftStream(t.table, m.readInt(ptr)))
+            is WitType.Future -> w.int(cx.liftFuture(t.table, m.readInt(ptr)))
+            WitType.ErrorContext -> w.int(cx.liftErrorContext(m.readInt(ptr)))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }

@@ -1,0 +1,681 @@
+{
+  "version": 5,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": [
+        {
+          "module": "",
+          "name": "mem",
+          "kind": "memory"
+        },
+        {
+          "module": "",
+          "name": "task.return.u32",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "task.return.stream",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "task.return.future",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "stream.new",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "stream.write",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "stream.read",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "stream.drop-writable",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "stream.drop-readable",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "future.new",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "future.write",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "future.read",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "future.drop-writable",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "future.drop-readable",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable-set.new",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable-set.drop",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable.join",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "context.get",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "context.set",
+          "kind": "func"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 0,
+        "name": "mem"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 1,
+      "args": [
+        {
+          "module": "",
+          "name": "mem",
+          "def": {
+            "instance": 0,
+            "name": "mem",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "",
+          "name": "task.return.u32",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "",
+          "name": "task.return.stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "",
+          "name": "task.return.future",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "",
+          "name": "stream.new",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "",
+          "name": "stream.write",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        },
+        {
+          "module": "",
+          "name": "stream.read",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "",
+          "name": "stream.drop-writable",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "",
+          "name": "stream.drop-readable",
+          "def": {
+            "kind": "trampoline",
+            "index": 7
+          }
+        },
+        {
+          "module": "",
+          "name": "future.new",
+          "def": {
+            "kind": "trampoline",
+            "index": 8
+          }
+        },
+        {
+          "module": "",
+          "name": "future.write",
+          "def": {
+            "kind": "trampoline",
+            "index": 9
+          }
+        },
+        {
+          "module": "",
+          "name": "future.read",
+          "def": {
+            "kind": "trampoline",
+            "index": 10
+          }
+        },
+        {
+          "module": "",
+          "name": "future.drop-writable",
+          "def": {
+            "kind": "trampoline",
+            "index": 11
+          }
+        },
+        {
+          "module": "",
+          "name": "future.drop-readable",
+          "def": {
+            "kind": "trampoline",
+            "index": 12
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable-set.new",
+          "def": {
+            "kind": "trampoline",
+            "index": 13
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable-set.drop",
+          "def": {
+            "kind": "trampoline",
+            "index": 14
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable.join",
+          "def": {
+            "kind": "trampoline",
+            "index": 15
+          }
+        },
+        {
+          "module": "",
+          "name": "context.get",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-get-i32-0"
+          }
+        },
+        {
+          "module": "",
+          "name": "context.set",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-set-i32-0"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-callback",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "double-cb",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-callback",
+      "index": 1,
+      "def": {
+        "instance": 1,
+        "name": "count-up-cb",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "extract-callback",
+      "index": 2,
+      "def": {
+        "instance": 1,
+        "name": "later-cb",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "task-return",
+      "instance": 0,
+      "results": [
+        {
+          "k": "u32"
+        }
+      ],
+      "resultsIndex": 0,
+      "options": 4,
+      "index": 0
+    },
+    {
+      "kind": "task-return",
+      "instance": 0,
+      "results": [
+        {
+          "k": "stream",
+          "table": 0
+        }
+      ],
+      "resultsIndex": 1,
+      "options": 4,
+      "index": 1
+    },
+    {
+      "kind": "task-return",
+      "instance": 0,
+      "results": [
+        {
+          "k": "future",
+          "table": 0
+        }
+      ],
+      "resultsIndex": 2,
+      "options": 4,
+      "index": 2
+    },
+    {
+      "kind": "stream-new",
+      "table": 0,
+      "index": 3
+    },
+    {
+      "kind": "stream-write",
+      "table": 0,
+      "options": 5,
+      "index": 4
+    },
+    {
+      "kind": "stream-read",
+      "table": 0,
+      "options": 6,
+      "index": 5
+    },
+    {
+      "kind": "stream-drop-writable",
+      "table": 0,
+      "index": 6
+    },
+    {
+      "kind": "stream-drop-readable",
+      "table": 0,
+      "index": 7
+    },
+    {
+      "kind": "future-new",
+      "table": 0,
+      "index": 8
+    },
+    {
+      "kind": "future-write",
+      "table": 0,
+      "options": 7,
+      "index": 9
+    },
+    {
+      "kind": "future-read",
+      "table": 0,
+      "options": 8,
+      "index": 10
+    },
+    {
+      "kind": "future-drop-writable",
+      "table": 0,
+      "index": 11
+    },
+    {
+      "kind": "future-drop-readable",
+      "table": 0,
+      "index": 12
+    },
+    {
+      "kind": "waitable-set-new",
+      "instance": 0,
+      "index": 13
+    },
+    {
+      "kind": "waitable-set-drop",
+      "instance": 0,
+      "index": 14
+    },
+    {
+      "kind": "waitable-join",
+      "instance": 0,
+      "index": 15
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": 1,
+      "cancellable": false
+    },
+    {
+      "index": 1,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": 0,
+      "cancellable": false
+    },
+    {
+      "index": 2,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": 2,
+      "cancellable": false
+    },
+    {
+      "index": 3,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 4,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 5,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 6,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 7,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 8,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    }
+  ],
+  "imports": [],
+  "resourceTables": [],
+  "streamTables": [
+    {
+      "index": 0,
+      "instance": 0,
+      "element": {
+        "k": "u32"
+      }
+    }
+  ],
+  "futureTables": [
+    {
+      "index": 0,
+      "instance": 0,
+      "element": {
+        "k": "u32"
+      }
+    }
+  ],
+  "errorContextTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "count-up",
+      "func": {
+        "instance": 1,
+        "name": "count-up",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "n",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "stream",
+            "table": 0
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "double",
+      "func": {
+        "instance": 1,
+        "name": "double",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "later",
+      "func": {
+        "instance": 1,
+        "name": "later",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "future",
+            "table": 0
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "sum",
+      "func": {
+        "instance": 1,
+        "name": "sum",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "s",
+            "type": {
+              "k": "stream",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "times-ten",
+      "func": {
+        "instance": 1,
+        "name": "times-ten",
+        "kind": "export"
+      },
+      "options": 3,
+      "type": {
+        "params": [
+          {
+            "name": "f",
+            "type": {
+              "k": "future",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    }
+  ]
+}

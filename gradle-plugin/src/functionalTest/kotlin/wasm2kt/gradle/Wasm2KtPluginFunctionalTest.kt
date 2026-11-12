@@ -111,7 +111,7 @@ class Wasm2KtPluginFunctionalTest {
 
     @Test
     fun `unsupported features are reported at build time`(@TempDir dir: File) {
-        Files.copy(fixtures.resolve("composed-res.wasm"), dir.resolve("composed.wasm").toPath())
+        Files.copy(fixtures.resolve("map-type.wasm"), dir.resolve("composed.wasm").toPath())
         dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n$ISOLATED_BUILD_CACHE")
         fun buildScript(fail: Boolean) = dir.resolve("build.gradle.kts").writeText(
             """
@@ -136,7 +136,7 @@ class Wasm2KtPluginFunctionalTest {
         buildScript(fail = false)
         val warned = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
         assertTrue("composed.wasm uses features the Chicory backend does not support yet" in warned.output, warned.output)
-        assertTrue("ResourceTransferOwn" in warned.output, warned.output)
+        assertTrue("Map(TypeMapIndex(0))" in warned.output, warned.output)
         // The warning comes again when decomposing is UP-TO-DATE, and when it comes FROM-CACHE (#78).
         val again = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
         assertEquals(TaskOutcome.UP_TO_DATE, again.task(":wasm2ktDecomposeComposed")?.outcome)
@@ -149,7 +149,7 @@ class Wasm2KtPluginFunctionalTest {
         // Opted in: the same check fails the build.
         buildScript(fail = true)
         val failed = runner(dir, "wasm2ktDecomposeComposed").buildAndFail()
-        assertTrue("ResourceTransferOwn" in failed.output, failed.output)
+        assertTrue("Map(TypeMapIndex(0))" in failed.output, failed.output)
         assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktDecomposeComposed")?.outcome)
     }
 

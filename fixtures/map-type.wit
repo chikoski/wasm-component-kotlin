@@ -1,0 +1,6 @@
+package root:component;
+
+world root {
+  export size: func(m: map<string, u32>) -> u32;
+  export answer: func() -> u32;
+}

@@ -23,7 +23,11 @@
 | `record` / `variant` / `enum` / `flags` | `data class` / `sealed interface` / `enum class` / `@JvmInline value class` |
 | `resource`（コンポーネントが export） | `AutoCloseable` なクラス（ホストはハンドルを持つ） |
 | `resource`（コンポーネントが import。world 直下か import した interface） | ホストが実装する `interface`（`WitHostResource`）。constructor / static は、その interface（world 直下なら `Imports`）のメンバー |
-| `async func` / `future<T>` / `stream<T>` | `suspend fun` / `Deferred<T>` / `Flow<T>`（予定。Chicory のみ。[#16](https://github.com/chikoski/wasm-component-kotlin/issues/16)） |
+| `async func`（export） | `suspend fun`（Chicory のみ。呼び出しは、コンポーネントが返るまでスレッドをブロックする。[ADR-0018](../adr/0018-async-abi-on-chicory.md)） |
+| `future<T>` | `kotlinx.coroutines.Deferred<T>`。返された future は `await()` したときに読む。引数に渡す future は、呼び出しの前に `await()` する（async でない関数には完了したものを渡す） |
+| `stream<T>` | `kotlinx.coroutines.flow.Flow<T>`（`stream<u8>` は `Flow<ByteArray>`）。返された stream は 1 回だけ collect でき、途中でやめるとコンポーネント側に drop が伝わる。引数に渡す stream は、呼び出しの前に最後まで collect する |
+
+`future<T>` / `stream<T>` を使う world の生成コードは、`org.jetbrains.kotlinx:kotlinx-coroutines-core` に依存します。stream / future は export の引数と結果のトップレベルでだけ使えます（record などの中にあると、実行時に `UnsupportedOperationException`）。
 
 生成される関数の KDoc には、元の WIT の定義（例: ``WIT: `lookup: func(k: string) -> option<option<s32>>` ``）が書き出されます。
 
