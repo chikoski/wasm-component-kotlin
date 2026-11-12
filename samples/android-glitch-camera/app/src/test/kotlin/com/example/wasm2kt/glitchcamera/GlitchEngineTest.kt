@@ -74,6 +74,16 @@ class GlitchEngineTest {
             // Verify PNG signature: 89 50 4E 47 0D 0A 1A 0A
             val expectedSig = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
             assertTrue(pngBytes.sliceArray(0 until 8).contentEquals(expectedSig))
+
+            val recipes = mapOf(
+                "preset_0" to RecipePresets.curated.first().yaml,
+                "invert" to "filters:\n  - type: Invert",
+            )
+            val thumbs = engine.generateThumbnails(width, height, frame1, recipes)
+            assertEquals(2, thumbs.size)
+            assertEquals(width * height * 4, thumbs.getValue("preset_0").size)
+            assertEquals(width * height * 4, thumbs.getValue("invert").size)
+            assertFalse(thumbs.getValue("invert").contentEquals(frame1))
         }
     }
 }

@@ -31,7 +31,7 @@ class BaselineProfileGenerator {
             startActivityAndWait { intent ->
                 intent.putExtra("com.example.wasm2kt.glitchcamera.BENCHMARK_WARMUP", true)
             }
-            device.wait(Until.hasObject(By.textContains("ms/frame")), 10_000)
+            device.wait(Until.hasObject(By.descContains("ms/frame")), 10_000)
             device.waitForIdle()
         }
     }

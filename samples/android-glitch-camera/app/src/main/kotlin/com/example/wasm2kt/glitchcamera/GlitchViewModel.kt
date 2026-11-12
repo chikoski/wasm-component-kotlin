@@ -2,6 +2,7 @@ package com.example.wasm2kt.glitchcamera
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageProxy
 import androidx.lifecycle.ViewModel
@@ -24,18 +25,30 @@ enum class CameraResolutionOption(
     val width: Int,
     val height: Int,
 ) {
-    VGA_640X480("640x480", 640, 480),
-    HD_1280X720("1280x720", 1280, 720),
+    HD_720P("720p", 640, 480),
+    FHD_1080P("1080p", 1280, 720),
+    UHD_4K("4K", 1280, 960),
+}
+
+enum class CameraZoomOption(
+    val unselectedLabel: String,
+    val selectedLabel: String,
+    val ratio: Float,
+) {
+    ULTRA_WIDE("0.5", "0.5×", 0.5f),
+    WIDE("1", "1×", 1.0f),
+    TELE("2", "2×", 2.0f),
 }
 
 enum class ControlMode(val label: String) {
-    PRESETS("Presets"),
-    SINGLE_FILTER("Single Filter"),
+    PRESETS("プリセット"),
+    SINGLE_FILTER("シングル"),
 }
 
 data class GlitchUiState(
     val lensFacing: Int = CameraSelector.LENS_FACING_BACK,
-    val resolution: CameraResolutionOption = CameraResolutionOption.VGA_640X480,
+    val resolution: CameraResolutionOption = CameraResolutionOption.FHD_1080P,
+    val zoomOption: CameraZoomOption = CameraZoomOption.WIDE,
     val controlMode: ControlMode = ControlMode.PRESETS,
     val selectedPreset: RecipePreset = RecipePresets.curated.first(),
     val availableFilters: List<FilterInfo> = emptyList(),
@@ -46,6 +59,9 @@ data class GlitchUiState(
     val pngFilterOption: PngFilterOption = PngFilterOption.ADAPTIVE_FAST,
     val activeRecipeYaml: String = RecipePresets.curated.first().yaml,
     val previewBitmap: Bitmap? = null,
+    val fallbackPreviewBitmap: Bitmap? = null,
+    val presetThumbnails: Map<String, Bitmap> = emptyMap(),
+    val filterThumbnails: Map<String, Bitmap> = emptyMap(),
     val frameNumber: Long = 0L,
     val processingTimeMs: Double = 0.0,
     val frameWidth: Int = 0,
@@ -62,6 +78,7 @@ class GlitchViewModel : ViewModel() {
     }
     private val scratchHolder = RgbaBufferHolder()
     private val processingFrame = AtomicBoolean(false)
+    private val baseAssetsLoaded = AtomicBoolean(false)
 
     // Double-buffered bitmaps so the UI thread reads one while the worker thread writes the other.
     private var bitmapPool: Array<Bitmap?> = arrayOfNulls(2)
@@ -85,6 +102,65 @@ class GlitchViewModel : ViewModel() {
                     filterParams = defaultParams,
                 )
             }
+        }
+    }
+
+    fun ensureBaseAssetsLoaded(context: Context) {
+        if (!baseAssetsLoaded.compareAndSet(false, true)) return
+        val appContext = context.applicationContext
+        analysisExecutor.execute {
+            val decoded = runCatching {
+                BitmapFactory.decodeResource(appContext.resources, R.drawable.sample_preview_base)
+            }.getOrNull() ?: return@execute
+
+            val argbBitmap = if (decoded.config == Bitmap.Config.ARGB_8888) {
+                decoded
+            } else {
+                decoded.copy(Bitmap.Config.ARGB_8888, false)
+            }
+            _uiState.update { it.copy(fallbackPreviewBitmap = argbBitmap) }
+
+            val thumbWidth = 84
+            val thumbHeight = 84
+            val scaledThumb = Bitmap.createScaledBitmap(argbBitmap, thumbWidth, thumbHeight, true)
+            val baseRgba = ByteArray(thumbWidth * thumbHeight * 4)
+            scaledThumb.copyPixelsToBuffer(ByteBuffer.wrap(baseRgba))
+
+            val presetRecipeMap = LinkedHashMap<String, String>()
+            for (preset in RecipePresets.curated) {
+                presetRecipeMap[preset.id] = preset.yaml
+            }
+            val presetRgbaMap = runCatching {
+                engine.generateThumbnails(thumbWidth, thumbHeight, baseRgba, presetRecipeMap)
+            }.getOrDefault(emptyMap())
+
+            val presetBitmaps = LinkedHashMap<String, Bitmap>(presetRgbaMap.size)
+            for ((id, rgba) in presetRgbaMap) {
+                val bmp = Bitmap.createBitmap(thumbWidth, thumbHeight, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
+                presetBitmaps[id] = bmp
+            }
+            _uiState.update { it.copy(presetThumbnails = presetBitmaps) }
+
+            val filters = _uiState.value.availableFilters.ifEmpty {
+                runCatching { engine.availablePngFilters() }.getOrDefault(emptyList())
+            }
+            val filterRecipeMap = LinkedHashMap<String, String>()
+            for (filter in filters) {
+                val defaultParams = RecipePresets.defaultParamsFor(filter)
+                filterRecipeMap[filter.name] = RecipePresets.buildSingleFilterYaml(filter, defaultParams)
+            }
+            val filterRgbaMap = runCatching {
+                engine.generateThumbnails(thumbWidth, thumbHeight, baseRgba, filterRecipeMap)
+            }.getOrDefault(emptyMap())
+
+            val filterBitmaps = LinkedHashMap<String, Bitmap>(filterRgbaMap.size)
+            for ((name, rgba) in filterRgbaMap) {
+                val bmp = Bitmap.createBitmap(thumbWidth, thumbHeight, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
+                filterBitmaps[name] = bmp
+            }
+            _uiState.update { it.copy(filterThumbnails = filterBitmaps) }
         }
     }
 
@@ -197,6 +273,10 @@ class GlitchViewModel : ViewModel() {
         _uiState.update { state -> state.copy(resolution = option) }
     }
 
+    fun selectZoom(option: CameraZoomOption) {
+        _uiState.update { state -> state.copy(zoomOption = option) }
+    }
+
     fun selectControlMode(mode: ControlMode) {
         _uiState.update { state ->
             val yaml = when (mode) {
@@ -270,6 +350,24 @@ class GlitchViewModel : ViewModel() {
             )
             state.copy(
                 filterParams = updatedParams,
+                activeRecipeYaml = yaml,
+            )
+        }
+    }
+
+    fun resetFilterParams() {
+        _uiState.update { state ->
+            val filter = state.selectedFilter ?: return@update state
+            val defaults = RecipePresets.defaultParamsFor(filter)
+            val yaml = RecipePresets.buildSingleFilterYaml(filter, defaults)
+            pushConfigToEngine(
+                yaml = yaml,
+                seed = state.seed,
+                seedMode = state.seedMode,
+                filterOption = state.pngFilterOption,
+            )
+            state.copy(
+                filterParams = defaults,
                 activeRecipeYaml = yaml,
             )
         }
