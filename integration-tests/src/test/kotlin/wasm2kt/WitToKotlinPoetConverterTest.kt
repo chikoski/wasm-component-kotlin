@@ -1258,7 +1258,7 @@ class WitToKotlinPoetConverterTest {
             import java.nio.file.Path
 
             fun runJniScenario(roundtripWasmPath: Path, cwasmBytes: ByteArray, counterWasmPath: Path): String {
-                // Switch WasmtimeSession to JNI backend (Android ART compatible, zero java.lang.foreign usage)
+                // Switch WasmtimeSession to JNI backend (zero java.lang.foreign usage)
                 WasmtimeSession.useJniBackend()
 
                 val imports = imports(

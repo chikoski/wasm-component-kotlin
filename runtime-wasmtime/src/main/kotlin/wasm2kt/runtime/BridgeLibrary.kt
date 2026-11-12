@@ -14,7 +14,7 @@ import java.nio.file.StandardCopyOption
  *    --resources-output` writes a typed bridge there
  * 3. `rust-bridge/target/{release,debug}/` from the working directory or its parent (this repository)
  *
- * `null` when none is found; the JNI bridge then falls back to `System.loadLibrary` (Android's `jniLibs`).
+ * `null` when none is found; the JNI bridge then falls back to `System.loadLibrary` (`java.library.path`).
  */
 object BridgeLibrary {
     const val NAME = "wasm2kt_wasmtime_bridge"

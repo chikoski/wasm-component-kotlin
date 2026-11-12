@@ -26,8 +26,8 @@ class JniHostCallback(private val imports: WitHostImportDispatcher) {
 }
 
 /**
- * JNI-based Wasmtime Component Model runtime bridge compatible with Android ART (`arm64-v8a`, `x86_64`)
- * as well as desktop/server JVMs without requiring `java.lang.foreign.*` (FFM).
+ * JNI-based Wasmtime Component Model runtime bridge for desktop/server JVMs, without requiring
+ * `java.lang.foreign.*` (FFM). Android is not supported: use the Chicory backend there (ADR-0001, #60).
  */
 object JniWasmtimeBridge {
     @Volatile
@@ -46,7 +46,7 @@ object JniWasmtimeBridge {
             if (candidateFile != null) {
                 System.load(candidateFile.absolutePath)
             } else {
-                // Standard Android APK/AAB path: loads `libwasm2kt_wasmtime_bridge.so` from `jniLibs/<abi>/`
+                // Falls back to `java.library.path` (e.g. `-Djava.library.path=...`)
                 System.loadLibrary(BridgeLibrary.NAME)
             }
             loaded = true
