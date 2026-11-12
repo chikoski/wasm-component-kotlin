@@ -132,6 +132,50 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
+    fun generateThumbnails(
+        width: Int,
+        height: Int,
+        baseRgba: ByteArray,
+        recipes: Map<String, String>,
+        seed: ULong = 42uL,
+    ): Map<String, ByteArray> = synchronized(lock) {
+        val expectedBytes = width * height * 4
+        if (baseRgba.size != expectedBytes || recipes.isEmpty()) {
+            return emptyMap()
+        }
+        val encoding = Encoding(
+            colorType = ColorType.RGBA,
+            bitDepth = 8u,
+            filter = FilterStrategy.AdaptiveFast,
+        )
+        val created = context(ensureWorldSessionLocked()) {
+            LiveSession.fromPixels(width.toUInt(), height.toUInt(), baseRgba, encoding)
+        }
+        val thumbSession = when (created) {
+            is WitResult.Ok -> created.value
+            is WitResult.Err -> return emptyMap()
+        }
+        val results = LinkedHashMap<String, ByteArray>(recipes.size)
+        try {
+            var isFirst = true
+            for ((key, yaml) in recipes) {
+                if (!isFirst) {
+                    if (thumbSession.reloadPixels(baseRgba) is WitResult.Err) continue
+                }
+                isFirst = false
+                if (thumbSession.setRecipe(yaml, seed, SeedMode.FIXED) is WitResult.Err) continue
+                if (thumbSession.apply() is WitResult.Err) continue
+                when (val rendered = thumbSession.renderRgba()) {
+                    is WitResult.Ok -> results[key] = rendered.value
+                    is WitResult.Err -> continue
+                }
+            }
+        } finally {
+            thumbSession.close()
+        }
+        results
+    }
+
     private fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
         val existing = liveSession
         if (existing != null && !existing.isClosed && currentWidth == width && currentHeight == height) {
