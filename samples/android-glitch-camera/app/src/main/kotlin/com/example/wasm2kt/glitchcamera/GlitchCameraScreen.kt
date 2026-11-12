@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -345,19 +346,26 @@ private fun LiveCameraSection(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.background(ColorCameraSurface),
+        modifier = modifier
+            .clipToBounds()
+            .background(ColorCameraSurface),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .clipToBounds()
                 .background(ColorCameraSurface),
         ) {
             val activeBitmap = state.previewBitmap ?: state.fallbackPreviewBitmap
             // Observe frameNumber so Canvas redraws when pooled Bitmap pixels are updated.
             val currentFrame = state.frameNumber
             if (activeBitmap != null && currentFrame >= 0L) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds(),
+                ) {
                     val imageBitmap = activeBitmap.asImageBitmap()
                     val scale = max(
                         size.width / imageBitmap.width.toFloat(),
@@ -961,7 +969,11 @@ private fun FilterThumbnailCard(
                 ),
         ) {
             if (thumbnail != null) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds(),
+                ) {
                     val img = thumbnail.asImageBitmap()
                     val scale = max(
                         size.width / img.width.toFloat(),
