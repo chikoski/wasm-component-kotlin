@@ -101,16 +101,19 @@ class GlitchEngine : AutoCloseable {
         val startNanos = System.nanoTime()
         val session = ensureLiveSessionLocked(width, height, rgba).getOrElse { return Result.failure(it) }
         if (recipeDirty) {
-            when (val setRes = session.setRecipe(currentRecipeYaml, currentSeed, currentSeedMode)) {
+            val setRes = FrameTrace.asyncSection(FrameTrace.SET_RECIPE) {
+                session.setRecipe(currentRecipeYaml, currentSeed, currentSeedMode)
+            }
+            when (setRes) {
                 is WitResult.Ok -> recipeDirty = false
                 is WitResult.Err -> return Result.failure(IllegalStateException(formatError(setRes.error)))
             }
         }
-        when (val applyRes = session.apply()) {
+        when (val applyRes = FrameTrace.asyncSection(FrameTrace.APPLY) { session.apply() }) {
             is WitResult.Ok -> Unit
             is WitResult.Err -> return Result.failure(IllegalStateException(formatError(applyRes.error)))
         }
-        val outRgba = when (val renderRes = session.renderRgba()) {
+        val outRgba = when (val renderRes = FrameTrace.asyncSection(FrameTrace.RENDER_RGBA) { session.renderRgba() }) {
             is WitResult.Ok -> renderRes.value
             is WitResult.Err -> return Result.failure(IllegalStateException(formatError(renderRes.error)))
         }
@@ -181,7 +184,7 @@ class GlitchEngine : AutoCloseable {
     private suspend fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
         val existing = liveSession
         if (existing != null && !existing.isClosed && currentWidth == width && currentHeight == height) {
-            return when (val reloadRes = existing.reloadPixels(rgba)) {
+            return when (val reloadRes = FrameTrace.asyncSection(FrameTrace.RELOAD_PIXELS) { existing.reloadPixels(rgba) }) {
                 is WitResult.Ok -> Result.success(existing)
                 is WitResult.Err -> Result.failure(IllegalStateException(formatError(reloadRes.error)))
             }
@@ -193,8 +196,10 @@ class GlitchEngine : AutoCloseable {
             bitDepth = 8u,
             filter = currentFilterOption.strategy,
         )
-        val created = context(ensureWorldSessionLocked()) {
-            LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
+        val created = FrameTrace.asyncSection(FrameTrace.FROM_PIXELS) {
+            context(ensureWorldSessionLocked()) {
+                LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
+            }
         }
         return when (created) {
             is WitResult.Ok -> {

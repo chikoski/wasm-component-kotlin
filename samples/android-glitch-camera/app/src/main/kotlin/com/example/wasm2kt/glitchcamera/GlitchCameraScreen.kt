@@ -12,6 +12,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.compose.foundation.AndroidExternalSurface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -47,6 +48,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -61,6 +63,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -113,6 +116,9 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.uiState.collectAsState()
+    // Not delegated: reading `previewFrame.value` here would recompose the whole screen on every
+    // camera frame. Only the FPS badge and the frame statistics read it.
+    val previewFrame = viewModel.previewFrame.collectAsState()
 
     var showSettingsSheet by remember { mutableStateOf(false) }
     var boundCamera by remember { mutableStateOf<Camera?>(null) }
@@ -151,7 +157,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 val resolutionSelector = ResolutionSelector.Builder()
                     .setResolutionStrategy(
                         ResolutionStrategy(
-                            Size(state.resolution.width, state.resolution.height),
+                            Size(state.resolution.longSide, state.resolution.shortSide),
                             ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
                         ),
                     )
@@ -219,6 +225,8 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 ) {
                     LiveCameraSection(
                         state = state,
+                        previewFrame = previewFrame,
+                        previewRenderer = viewModel.previewRenderer,
                         isFoldable = true,
                         hasCameraPermission = hasCameraPermission,
                         onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -250,6 +258,8 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
             } else {
                 LiveCameraSection(
                     state = state,
+                    previewFrame = previewFrame,
+                    previewRenderer = viewModel.previewRenderer,
                     isFoldable = false,
                     hasCameraPermission = hasCameraPermission,
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -287,6 +297,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
             ) {
                 EngineSettingsSheetContent(
                     state = state,
+                    previewFrame = previewFrame,
                     onSelectPngFilter = viewModel::selectPngFilterOption,
                     onSelectSeedMode = viewModel::selectSeedMode,
                     onRandomizeSeed = viewModel::randomizeSeed,
@@ -335,6 +346,8 @@ private fun PixelfrayAppBar(
 @Composable
 private fun LiveCameraSection(
     state: GlitchUiState,
+    previewFrame: State<PreviewFrame>,
+    previewRenderer: PreviewRenderer,
     isFoldable: Boolean,
     hasCameraPermission: Boolean,
     onRequestPermission: () -> Unit,
@@ -357,29 +370,18 @@ private fun LiveCameraSection(
                 .clipToBounds()
                 .background(ColorCameraSurface),
         ) {
-            val activeBitmap = state.previewBitmap ?: state.fallbackPreviewBitmap
-            // Observe frameNumber so Canvas redraws when pooled Bitmap pixels are updated.
-            val currentFrame = state.frameNumber
-            if (activeBitmap != null && currentFrame >= 0L) {
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clipToBounds(),
-                ) {
-                    val imageBitmap = activeBitmap.asImageBitmap()
-                    val scale = max(
-                        size.width / imageBitmap.width.toFloat(),
-                        size.height / imageBitmap.height.toFloat(),
-                    )
-                    val dstW = (imageBitmap.width * scale).roundToInt()
-                    val dstH = (imageBitmap.height * scale).roundToInt()
-                    val offsetX = ((size.width - dstW) / 2f).roundToInt()
-                    val offsetY = ((size.height - dstH) / 2f).roundToInt()
-                    drawImage(
-                        image = imageBitmap,
-                        dstOffset = IntOffset(offsetX, offsetY),
-                        dstSize = IntSize(dstW, dstH),
-                    )
+            // Frames are drawn into this surface by PreviewRenderer on the analysis worker
+            // thread, so a new frame involves neither recomposition nor a Compose draw pass.
+            AndroidExternalSurface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
+            ) {
+                previewRenderer.backgroundColor = ColorCameraSurface.toArgb()
+                onSurface { surface, width, height ->
+                    previewRenderer.attach(surface, width, height)
+                    surface.onChanged { newWidth, newHeight -> previewRenderer.resize(this, newWidth, newHeight) }
+                    surface.onDestroyed { previewRenderer.detach(this) }
                 }
             }
 
@@ -438,7 +440,7 @@ private fun LiveCameraSection(
 
             // FPS badge pill (node 5:9 / 5:18)
             FpsBadgePill(
-                state = state,
+                previewFrame = previewFrame,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(bottom = 15.dp, end = 16.dp),
@@ -531,10 +533,9 @@ private fun ResolutionSelectorPill(
         )
         CameraResolutionOption.entries.forEach { option ->
             val isSelected = option == selected
-            val pillWidth = if (option == CameraResolutionOption.FHD_1080P) 76.dp else 60.dp
             Box(
                 modifier = Modifier
-                    .width(pillWidth)
+                    .width(60.dp)
                     .height(36.dp)
                     .clip(RoundedCornerShape(18.dp))
                     .background(if (isSelected) ColorAccentLime else ColorOverlayPill)
@@ -592,25 +593,27 @@ private fun LensZoomSelectorPill(
 
 @Composable
 private fun FpsBadgePill(
-    state: GlitchUiState,
+    previewFrame: State<PreviewFrame>,
     modifier: Modifier = Modifier,
 ) {
-    val fpsValue = if (state.processingTimeMs > 0.0) {
-        (1000.0 / state.processingTimeMs).roundToInt().coerceIn(1, 120)
+    // Reading the frame here limits per-frame recomposition to this badge.
+    val frame = previewFrame.value
+    val fpsText = if (frame.displayFps > 0.0) {
+        "${frame.displayFps.roundToInt().coerceIn(1, 120)} fps"
     } else {
-        30
+        "-- fps"
     }
-    val perfDesc = if (state.frameWidth > 0) {
+    val perfDesc = if (frame.width > 0) {
         String.format(
             Locale.US,
-            "%dx%d %.1f ms/frame (%d fps)",
-            state.frameWidth,
-            state.frameHeight,
-            state.processingTimeMs,
-            fpsValue,
+            "%dx%d %.1f ms/frame in engine (%s)",
+            frame.width,
+            frame.height,
+            frame.processingTimeMs,
+            fpsText,
         )
     } else {
-        "30 fps"
+        fpsText
     }
 
     Box(
@@ -623,7 +626,7 @@ private fun FpsBadgePill(
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "$fpsValue fps",
+            text = fpsText,
             color = ColorTextPrimary,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -1209,6 +1212,7 @@ private fun PixelfraySliderRow(
 @Composable
 private fun EngineSettingsSheetContent(
     state: GlitchUiState,
+    previewFrame: State<PreviewFrame>,
     onSelectPngFilter: (PngFilterOption) -> Unit,
     onSelectSeedMode: (SeedMode) -> Unit,
     onRandomizeSeed: () -> Unit,
@@ -1330,20 +1334,28 @@ private fun EngineSettingsSheetContent(
             }
         }
 
-        if (state.frameWidth > 0) {
-            Text(
-                text = String.format(
-                    Locale.US,
-                    "Frame: %dx%d  ·  %.1f ms/frame",
-                    state.frameWidth,
-                    state.frameHeight,
-                    state.processingTimeMs,
-                ),
-                color = ColorTextNote,
-                fontSize = 11.sp,
-            )
-        }
+        FrameStatsText(previewFrame = previewFrame)
 
         Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+/** Frame statistics; reads [previewFrame] itself so that only this text recomposes per frame. */
+@Composable
+private fun FrameStatsText(previewFrame: State<PreviewFrame>) {
+    val frame = previewFrame.value
+    if (frame.width > 0) {
+        Text(
+            text = String.format(
+                Locale.US,
+                "Frame: %dx%d  ·  %.1f ms/frame in engine  ·  %.1f fps",
+                frame.width,
+                frame.height,
+                frame.processingTimeMs,
+                frame.displayFps,
+            ),
+            color = ColorTextNote,
+            fontSize = 11.sp,
+        )
     }
 }
