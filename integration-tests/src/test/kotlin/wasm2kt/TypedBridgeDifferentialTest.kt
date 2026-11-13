@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import wasm2kt.ast.WitResolve
 import wasm2kt.runtime.FfmWasmtimeBridge
+import wasm2kt.runtime.chicory.ComponentPlan
 import wasm2kt.tooling.TypedBridge
 import java.nio.file.Files
 import java.nio.file.Path
@@ -77,7 +78,12 @@ object TypedBridgeFixtures {
 
     /** Built once per JVM; Cargo's target directory is shared with rust-bridge so Wasmtime is compiled once. */
     private val library: Path by lazy {
-        val fixtures = components.listDirectoryEntries().filter { Files.exists(it.resolve("wit.json")) }.sortedBy { it.name }
+        // Components that use the async ABI run on Chicory only (ADR-0005): the Wasmtime bridge has no
+        // typed calls for async functions, streams and futures.
+        val fixtures = components.listDirectoryEntries()
+            .filter { Files.exists(it.resolve("wit.json")) }
+            .filterNot { ComponentPlan.parse(Files.readString(it.resolve("plan.json"))).usesAsync }
+            .sortedBy { it.name }
         TypedBridge.generateCrate(
             fixtures.map { TypedBridge.Component(it.name, WitResolve.parse(Files.readString(it.resolve("wit.json")))) },
             crate,
