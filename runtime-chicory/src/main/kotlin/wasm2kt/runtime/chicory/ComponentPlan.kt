@@ -23,9 +23,27 @@ class ComponentPlan(
     val imports: Map<Int, PlanImport>,
     val resourceTables: Map<Int, ResourceTableInfo>,
     val exports: List<PlanExport>,
+    val streamTables: Map<Int, TransmitTableInfo> = emptyMap(),
+    val futureTables: Map<Int, TransmitTableInfo> = emptyMap(),
+    /** Error-context table -> its component instance (plan v5). */
+    val errorContextTables: Map<Int, Int> = emptyMap(),
 ) {
+    /**
+     * Whether the component uses the async ABI (#16): then every call runs as a Component Model task
+     * on the scheduler ([AsyncStore]); otherwise calls run directly on the caller's thread.
+     */
+    val usesAsync: Boolean by lazy {
+        trampolines.values.any { it is Trampoline.Async && it.kind !in SYNC_ADAPTER_KINDS } ||
+            options.values.any { it.async || it.callback != null } ||
+            exports.any { it.type.async } ||
+            initializers.any { it is Initializer.ExtractCallback }
+    }
+
     companion object {
-        const val SUPPORTED_VERSION = 4
+        const val SUPPORTED_VERSION = 5
+
+        /** Intrinsics fused adapters use for synchronous calls too (moving resources between child components). */
+        private val SYNC_ADAPTER_KINDS = setOf("resource-transfer-own", "resource-transfer-borrow", "enter-sync-call", "exit-sync-call")
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
@@ -59,6 +77,9 @@ class ComponentPlan(
                         realloc = o.optInt("realloc"),
                         postReturn = o.optInt("postReturn"),
                         async = o["async"]?.jsonPrimitive?.boolean ?: false,
+                        instance = o.optInt("instance") ?: 0,
+                        callback = o.optInt("callback"),
+                        cancellable = o["cancellable"]?.jsonPrimitive?.boolean ?: false,
                     )
                 },
                 imports = root.array("imports").associate { imp ->
@@ -73,7 +94,14 @@ class ComponentPlan(
                         imported = o["imported"]?.jsonPrimitive?.boolean ?: false,
                         abstract = o["abstract"]?.jsonPrimitive?.boolean ?: false,
                         import = o.optInt("import"),
+                        instance = o.optInt("instance") ?: 0,
                     )
+                },
+                streamTables = parseTransmitTables(root, "streamTables"),
+                futureTables = parseTransmitTables(root, "futureTables"),
+                errorContextTables = root.array("errorContextTables").associate { t ->
+                    val o = t.jsonObject
+                    o.int("index") to o.int("instance")
                 },
                 exports = root.array("exports").map { e ->
                     val o = e.jsonObject
@@ -88,6 +116,16 @@ class ComponentPlan(
             )
         }
 
+        private fun parseTransmitTables(root: JsonObject, key: String): Map<Int, TransmitTableInfo> =
+            root.array(key).associate { t ->
+                val o = t.jsonObject
+                o.int("index") to TransmitTableInfo(
+                    index = o.int("index"),
+                    instance = o.int("instance"),
+                    element = o["element"]?.takeUnless { it is JsonNull }?.let { WitType.fromJson(it.jsonObject) },
+                )
+            }
+
         private fun parseInitializer(o: JsonObject): Initializer = when (val op = o.str("op")) {
             "instantiate" -> Initializer.Instantiate(
                 instance = o.int("instance"),
@@ -101,9 +139,11 @@ class ComponentPlan(
             "extract-realloc" -> Initializer.ExtractRealloc(o.int("index"), parseDef(o.getValue("def").jsonObject))
             "extract-post-return" -> Initializer.ExtractPostReturn(o.int("index"), parseDef(o.getValue("def").jsonObject))
             "extract-table" -> Initializer.ExtractTable(o.int("index"), parseExport(o.getValue("export").jsonObject))
+            "extract-callback" -> Initializer.ExtractCallback(o.int("index"), parseDef(o.getValue("def").jsonObject))
             "resource" -> Initializer.Resource(
                 resource = o.int("resource"),
                 dtor = o["dtor"]?.takeUnless { it is JsonNull }?.let { parseDef(it.jsonObject) },
+                instance = o.optInt("instance") ?: 0,
             )
             else -> error("Unknown plan initializer '$op'")
         }
@@ -123,7 +163,20 @@ class ComponentPlan(
                 TranscodeOp.fromPlan(op)?.let { Trampoline.Transcode(it, o.int("from"), o.int("to")) }
                     ?: Trampoline.Unsupported("transcode $op")
             }
-            else -> Trampoline.Unsupported(o["detail"]?.jsonPrimitive?.content ?: kind)
+            "unsupported" -> Trampoline.Unsupported(o["detail"]?.jsonPrimitive?.content ?: kind)
+            else -> Trampoline.Async(
+                kind = kind,
+                instance = o.optInt("instance"),
+                table = o.optInt("table"),
+                options = o.optInt("options"),
+                async = o["async"]?.jsonPrimitive?.boolean ?: false,
+                cancellable = o["cancellable"]?.jsonPrimitive?.boolean ?: false,
+                results = o["results"]?.jsonArray?.map { WitType.fromJson(it.jsonObject) },
+                resultsIndex = o.optInt("resultsIndex"),
+                memory = o.optInt("memory"),
+                callback = o.optInt("callback"),
+                postReturn = o.optInt("postReturn"),
+            )
         }
 
         private fun parseExport(o: JsonObject) = CoreExportRef(o.int("instance"), o.str("name"))
@@ -133,6 +186,7 @@ class ComponentPlan(
             "trampoline" -> CoreDef.Trampoline(o.int("index"))
             "instance-flags" -> CoreDef.InstanceFlags(o.int("index"))
             "task-may-block" -> CoreDef.TaskMayBlock
+            "intrinsic" -> CoreDef.Intrinsic(o.str("name"))
             else -> error("Unknown core definition kind '$kind'")
         }
     }
@@ -165,16 +219,36 @@ class PlanExport(
     val type: FuncType,
 )
 
+/**
+ * Canonical options. [instance] is the component instance they belong to (whose handle table the
+ * call uses), [callback] the `callback` of an async lift (an [Initializer.ExtractCallback] index).
+ */
 class CanonOptions(
     val stringEncoding: StringEncoding,
     val memory: Int?,
     val realloc: Int?,
     val postReturn: Int?,
     val async: Boolean,
+    val instance: Int = 0,
+    val callback: Int? = null,
+    val cancellable: Boolean = false,
 )
 
-/** [import] names the runtime import of an imported (host-defined) resource. */
-class ResourceTableInfo(val index: Int, val resource: Int?, val imported: Boolean, val abstract: Boolean, val import: Int? = null)
+/**
+ * [import] names the runtime import of an imported (host-defined) resource; [instance] is the
+ * component instance whose handle table holds the handles of this table.
+ */
+class ResourceTableInfo(
+    val index: Int,
+    val resource: Int?,
+    val imported: Boolean,
+    val abstract: Boolean,
+    val import: Int? = null,
+    val instance: Int = 0,
+)
+
+/** A stream or future table (plan v5): its component instance and element type (null for `stream`). */
+class TransmitTableInfo(val index: Int, val instance: Int, val element: WitType?)
 
 class CoreExportRef(val instance: Int, val name: String)
 
@@ -185,6 +259,9 @@ sealed interface CoreDef {
 
     /** The current task's "may block" flag, an i32 global (plan v3; imported by fused adapters). */
     data object TaskMayBlock : CoreDef
+
+    /** A fused adapter's access to the current thread's context slots, e.g. `context-get-i32-0` (plan v5). */
+    data class Intrinsic(val name: String) : CoreDef
 }
 
 class InstantiateArg(val module: String, val name: String, val def: CoreDef)
@@ -195,7 +272,11 @@ sealed interface Initializer {
     class ExtractRealloc(val index: Int, val def: CoreDef) : Initializer
     class ExtractPostReturn(val index: Int, val def: CoreDef) : Initializer
     class ExtractTable(val index: Int, val export: CoreExportRef) : Initializer
-    class Resource(val resource: Int, val dtor: CoreDef?) : Initializer
+    /** A resource defined by the component instance [instance]. */
+    class Resource(val resource: Int, val dtor: CoreDef?, val instance: Int = 0) : Initializer
+
+    /** The `callback` of an async lift (plan v5). */
+    class ExtractCallback(val index: Int, val def: CoreDef) : Initializer
 }
 
 sealed interface Trampoline {
@@ -210,6 +291,25 @@ sealed interface Trampoline {
     /** Copies a string between two memories of the component (plan v4; #47). */
     class Transcode(val op: TranscodeOp, val from: Int, val to: Int) : Trampoline
     class Unsupported(val detail: String) : Trampoline
+
+    /**
+     * An async built-in (`task.return`, `waitable-set.wait`, `stream.read`, `thread.yield`, ...) or
+     * a fused adapter's async intrinsic (`prepare-call`, `stream-transfer`, ...), named by [kind] as
+     * in the plan (plan v5, #16). The other fields are set for the kinds that have them.
+     */
+    class Async(
+        val kind: String,
+        val instance: Int?,
+        val table: Int?,
+        val options: Int?,
+        val async: Boolean,
+        val cancellable: Boolean,
+        val results: List<WitType>?,
+        val resultsIndex: Int?,
+        val memory: Int?,
+        val callback: Int?,
+        val postReturn: Int?,
+    ) : Trampoline
 }
 
 /** A string transcode a fused adapter performs, named as in wasmtime-environ (`Transcode::desc`). */

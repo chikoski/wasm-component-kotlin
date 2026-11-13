@@ -10,8 +10,10 @@ Chicory バックエンドが仕様に適合しているかを、Wasmtime との
 ```
 
 * `ConformanceTest` が、`.wast` を `wasm-tools json-from-wast` で変換し、コンポーネントを同梱の decomposer で分解して、Chicory（インタプリタ）で実行します。テストは、コマンドごとに 1 つです（`values/strings.wast:23 assert_return f1` のような名前）
-* 対象のディレクトリは、今は `values/` と `resources/` です。async（`async/`）は #16 で加えます。`validation/`、`linking/`、`binary/` は、まだ対象にしていません
+* 対象のディレクトリは、今は `values/`、`resources/`、`async/` です（`async/` は #16）。`validation/`、`linking/`、`binary/` は、まだ対象にしていません
 * `assert_trap` は、`ComponentTrapException`（ADR-0007）になることを確かめます。メッセージは比べません
+* `assert_invalid` は分解が失敗すること、`assert_uninstantiable` はインスタンス化が `ComponentTrapException` になることを確かめます
+* コマンドごとに 20 秒の制限があります。async の task が終わらないときに、実行全体が止まらないようにするためです
 
 ## 失敗を管理する
 

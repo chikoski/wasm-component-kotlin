@@ -1,6 +1,9 @@
 package wasm2kt.runtime
 
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
 import java.util.IdentityHashMap
+import kotlin.coroutines.CoroutineContext
 
 /**
  * A Kotlin object backing a resource that the component imports (a host-defined resource).
@@ -27,8 +30,9 @@ interface WitHostResource : AutoCloseable {
  * Generated code finds the table of the call in progress through [current]: sessions [bind] it
  * around instantiation and every call into the component, so host imports the component calls
  * meanwhile (synchronously, on the same thread) see it too. *
- * Not thread-safe: it tracks the lends of the one call in progress. The generated session serializes
- * every call that binds it, so one session can still be used from several threads (#75).
+ * Synchronous calls bind it on their thread ([bind]); suspending calls (ADR-0019) carry it in their
+ * coroutine context ([bindSuspending]), each with its own lends, so several can be in progress at
+ * once. Its methods are synchronized; the generated session also serializes synchronous calls (#75).
  */
 class HostResourceTable : AutoCloseable {
     private class Entry(val resource: WitHostResource, var owned: Boolean)
@@ -38,6 +42,9 @@ class HostResourceTable : AutoCloseable {
     private var nextRep = 1
     private val lendScopes = ArrayDeque<MutableList<Int>>()
 
+    /** The lends of the suspending calls in progress. */
+    private val suspendedScopes = ArrayList<MutableList<Int>>()
+
     /**
      * Moves [resource] to the component and returns its rep.
      *
@@ -46,11 +53,14 @@ class HostResourceTable : AutoCloseable {
      * (`trap_if(h.num_lends != 0)`). Both are host errors and fail here, before the component
      * could end up with two owning handles for one object.
      */
+    @Synchronized
     fun lower(resource: WitHostResource): Int {
         val rep = repOf(resource)
         val entry = entries.getValue(rep)
         check(!entry.owned) { "${describe(resource)} was already moved to the component and cannot be passed as own again" }
-        check(lendScopes.none { rep in it }) { "${describe(resource)} is lent to a call in progress and cannot be moved" }
+        check(lendScopes.none { rep in it } && suspendedScopes.none { rep in it }) {
+            "${describe(resource)} is lent to a call in progress and cannot be moved"
+        }
         entry.owned = true
         return rep
     }
@@ -59,6 +69,7 @@ class HostResourceTable : AutoCloseable {
      * Lends [resource] to the component for the current call. Lending the same object twice in a
      * call is fine; lending one the component already owns is a host error.
      */
+    @Synchronized
     fun lend(resource: WitHostResource): Int {
         val known = reps[resource]
         if (known != null) {
@@ -66,14 +77,16 @@ class HostResourceTable : AutoCloseable {
             return known
         }
         val rep = repOf(resource)
-        lendScopes.lastOrNull()?.add(rep)
+        (SUSPENDED_SCOPE.get() ?: lendScopes.lastOrNull())?.add(rep)
         return rep
     }
 
     /** The object behind a `borrow` the component passed to the host. */
+    @Synchronized
     fun <T : WitHostResource> borrow(rep: Int, type: Class<T>): T = cast(entry(rep).resource, type, rep)
 
     /** The object behind an `own` the component handed back; the host owns it again. */
+    @Synchronized
     fun <T : WitHostResource> take(rep: Int, type: Class<T>): T {
         val e = entry(rep)
         val resource = cast(e.resource, type, rep)
@@ -83,19 +96,23 @@ class HostResourceTable : AutoCloseable {
 
     /** The component dropped its owning handle: forget [rep] and close the object. */
     fun drop(rep: Int) {
-        val e = entry(rep)
-        forget(rep)
+        val e = synchronized(this) {
+            entry(rep).also { forget(rep) }
+        }
         e.resource.close()
     }
 
     /** Number of objects currently held for the component. */
-    val size: Int get() = entries.size
+    val size: Int @Synchronized get() = entries.size
 
     /** Closes every object the component still owns. */
     override fun close() {
-        val owned = entries.values.filter { it.owned }.map { it.resource }
-        entries.clear()
-        reps.clear()
+        val owned = synchronized(this) {
+            entries.values.filter { it.owned }.map { it.resource }.also {
+                entries.clear()
+                reps.clear()
+            }
+        }
         owned.forEach { runCatching { it.close() } }
     }
 
@@ -108,10 +125,36 @@ class HostResourceTable : AutoCloseable {
         try {
             return block()
         } finally {
-            lendScopes.removeLast()
-            for (rep in lends) if (entries[rep]?.owned == false) forget(rep)
+            synchronized(this) {
+                lendScopes.removeLast()
+                endLends(lends)
+            }
             if (previous == null) CURRENT.remove() else CURRENT.set(previous)
         }
+    }
+
+    /**
+     * Runs the suspending [block] with this table as [current] wherever the coroutine runs; lends
+     * made inside end with it (ADR-0019). Other calls may be in progress meanwhile.
+     */
+    suspend fun <R> bindSuspending(block: suspend () -> R): R {
+        val lends = mutableListOf<Int>()
+        synchronized(this) { suspendedScopes += lends }
+        try {
+            return withContext(asContextElement() + SUSPENDED_SCOPE.asContextElement(lends)) { block() }
+        } finally {
+            synchronized(this) {
+                suspendedScopes.remove(lends)
+                endLends(lends)
+            }
+        }
+    }
+
+    /** Makes this table [current] in a coroutine wherever it runs, e.g. a host import's (ADR-0019). */
+    fun asContextElement(): CoroutineContext.Element = CURRENT.asContextElement(this)
+
+    private fun endLends(lends: List<Int>) {
+        for (rep in lends) if (entries[rep]?.owned == false) forget(rep)
     }
 
     private fun repOf(resource: WitHostResource): Int = reps.getOrPut(resource) {
@@ -134,6 +177,22 @@ class HostResourceTable : AutoCloseable {
 
     companion object {
         private val CURRENT = ThreadLocal<HostResourceTable?>()
+
+        /** The lends of the suspending call whose coroutine runs on this thread. */
+        private val SUSPENDED_SCOPE = ThreadLocal<MutableList<Int>?>()
+
+        /**
+         * The table bound on this thread, or null. For a backend that runs guest code on threads of
+         * its own (the Chicory backend's async ABI, ADR-0018), to carry the binding over with [setCurrent].
+         */
+        @JvmStatic
+        fun currentOrNull(): HostResourceTable? = CURRENT.get()
+
+        /** Binds [table] on this thread (null unbinds), without opening a lend scope; see [currentOrNull]. */
+        @JvmStatic
+        fun setCurrent(table: HostResourceTable?) {
+            if (table == null) CURRENT.remove() else CURRENT.set(table)
+        }
 
         /** The table of the session whose call is in progress on this thread. */
         @JvmStatic

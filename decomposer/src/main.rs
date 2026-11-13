@@ -25,7 +25,7 @@ use wasmtime_environ::wasmparser::{Validator, WasmFeatures};
 use wasmtime_environ::{EntityIndex, EntityType, ModuleTranslation, PrimaryMap, ScopeVec, Tunables};
 
 /// Bump whenever the plan.json schema changes incompatibly.
-const PLAN_VERSION: u32 = 4;
+const PLAN_VERSION: u32 = 5;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -71,16 +71,17 @@ type ModuleFiles = Vec<(String, Vec<u8>)>;
 pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
     let scope = ScopeVec::new();
     let mut tunables = Tunables::default_u32();
-    // Chicory runs every call synchronously (async is #16). Without this, wasmtime-environ's
-    // fused adapters save and restore the async task's `context.get`/`context.set` slots and its
-    // "may block" flag around even synchronous calls, through intrinsics Chicory does not have.
-    tunables.concurrency_support = false;
+    // Only a component that uses the async ABI (#16) gets wasmtime-environ's concurrency support.
+    // With it, the fused adapters between child components also save and restore the task's
+    // `context.get`/`context.set` slots and push a task for every synchronous call, so a
+    // synchronous component keeps the simpler adapters (and its plan) it had before plan v5.
+    tunables.concurrency_support = uses_async(component_bytes)?;
     // Chicory executes plain core wasm; keep exceptions off so wasmtime's
     // generated adapters don't emit `try_table` barriers it can't run.
     // Multi-memory is on because wasmtime-environ validates the adapters it fuses
     // between two child components with this validator, and an adapter that
     // copies a string or list imports both components' memories (#47).
-    let features = (WasmFeatures::WASM2 | WasmFeatures::COMPONENT_MODEL | WasmFeatures::MULTI_MEMORY)
+    let features = (WasmFeatures::WASM2 | WasmFeatures::COMPONENT_MODEL | WasmFeatures::MULTI_MEMORY | async_features())
         .difference(WasmFeatures::EXCEPTIONS);
     let mut validator = Validator::new_with_features(features);
     let mut types = ComponentTypesBuilder::new(&validator);
@@ -89,8 +90,77 @@ pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
         .map_err(|e| anyhow!(e).context("failed to translate component"))?;
     let (types, _) = types.finish(&translation.component);
 
-    let ctx = Ctx { component: &translation.component, types: &types, modules: &modules, instance_modules: Vec::new(), tables: RefCell::default() };
+    let ctx = Ctx {
+        component: &translation.component,
+        types: &types,
+        modules: &modules,
+        instance_modules: Vec::new(),
+        tables: RefCell::default(),
+        stream_tables: RefCell::default(),
+        future_tables: RefCell::default(),
+        error_context_tables: RefCell::default(),
+    };
     ctx.build(&translation)
+}
+
+/// The Component Model async features (#16): the async ABI with streams and futures, the stackful
+/// ABI, the cooperative threads built-ins and `error-context`. Also `map<K, V>`, which the runtime
+/// does not support (#71) but which should be reported as such rather than fail to decompose.
+fn async_features() -> WasmFeatures {
+    WasmFeatures::CM_MAP
+        | WasmFeatures::CM_ASYNC
+        | WasmFeatures::CM_ASYNC_STACKFUL
+        | WasmFeatures::CM_MORE_ASYNC_BUILTINS
+        | WasmFeatures::CM_THREADING
+        | WasmFeatures::CM_ERROR_CONTEXT
+}
+
+/// Whether the component, or one nested in it, uses the async ABI: an async lift or lower, an async
+/// built-in (`task.return`, `stream.new`, ...), or an `async` function type.
+fn uses_async(component_bytes: &[u8]) -> Result<bool> {
+    use wasmtime_environ::wasmparser::{
+        CanonicalFunction, CanonicalOption, ComponentType, ComponentTypeDeclaration, InstanceTypeDeclaration, Parser, Payload,
+    };
+    let async_options = |options: &[CanonicalOption]| options.iter().any(|o| matches!(o, CanonicalOption::Async | CanonicalOption::Callback(_)));
+    fn async_type(t: &ComponentType) -> bool {
+        match t {
+            ComponentType::Func(f) => f.async_,
+            ComponentType::Component(decls) => decls.iter().any(|d| match d {
+                ComponentTypeDeclaration::Type(t) => async_type(t),
+                _ => false,
+            }),
+            ComponentType::Instance(decls) => decls.iter().any(|d| match d {
+                InstanceTypeDeclaration::Type(t) => async_type(t),
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+    for payload in Parser::new(0).parse_all(component_bytes) {
+        match payload? {
+            Payload::ComponentCanonicalSection(reader) => {
+                for f in reader {
+                    let uses = match f? {
+                        CanonicalFunction::Lift { options, .. } | CanonicalFunction::Lower { options, .. } => async_options(&options),
+                        CanonicalFunction::ResourceNew { .. } | CanonicalFunction::ResourceDrop { .. } | CanonicalFunction::ResourceRep { .. } => false,
+                        _ => true,
+                    };
+                    if uses {
+                        return Ok(true);
+                    }
+                }
+            }
+            Payload::ComponentTypeSection(reader) => {
+                for t in reader {
+                    if async_type(&t?) {
+                        return Ok(true);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
 }
 
 struct Ctx<'a, 'data> {
@@ -101,6 +171,10 @@ struct Ctx<'a, 'data> {
     instance_modules: Vec<StaticModuleIndex>,
     /// Resource tables referenced anywhere in the plan.
     tables: RefCell<BTreeSet<u32>>,
+    /// Stream and future tables referenced anywhere in the plan (plan v5).
+    stream_tables: RefCell<BTreeSet<u32>>,
+    future_tables: RefCell<BTreeSet<u32>>,
+    error_context_tables: RefCell<BTreeSet<u32>>,
 }
 
 impl Ctx<'_, '_> {
@@ -150,7 +224,9 @@ impl Ctx<'_, '_> {
                 GlobalInitializer::ExtractTable(t) => inits.push(json!({
                     "op": "extract-table", "index": t.index.as_u32(), "export": self.core_export(&t.export.clone().map_index(EntityIndex::Table))?,
                 })),
-                GlobalInitializer::ExtractCallback(_) => bail!("async callbacks are not supported yet"),
+                GlobalInitializer::ExtractCallback(c) => inits.push(json!({
+                    "op": "extract-callback", "index": c.index.as_u32(), "def": self.core_def(&c.def)?,
+                })),
                 GlobalInitializer::Resource(r) => inits.push(json!({
                     "op": "resource",
                     "resource": self.component.resource_index(r.index).as_u32(),
@@ -186,7 +262,7 @@ impl Ctx<'_, '_> {
                 Trampoline::Transcoder { op, from, from64: false, to, to64: false } => json!({
                     "kind": "transcode", "op": op.desc(), "from": from.as_u32(), "to": to.as_u32(),
                 }),
-                other => json!({ "kind": "unsupported", "detail": format!("{other:?}") }),
+                other => self.async_trampoline(other).unwrap_or_else(|| json!({ "kind": "unsupported", "detail": format!("{other:?}") })),
             };
             j.as_object_mut().unwrap().insert("index".into(), json!(idx.as_u32()));
             trampolines.push(j);
@@ -203,6 +279,7 @@ impl Ctx<'_, '_> {
                 };
                 json!({
                     "index": idx.as_u32(),
+                    "instance": o.instance.as_u32(),
                     "stringEncoding": match o.string_encoding {
                         StringEncoding::Utf8 => "utf8", StringEncoding::Utf16 => "utf16", StringEncoding::CompactUtf16 => "latin1+utf16",
                     },
@@ -210,6 +287,8 @@ impl Ctx<'_, '_> {
                     "realloc": realloc,
                     "postReturn": o.post_return.map(|p| p.as_u32()),
                     "async": o.async_,
+                    "callback": o.callback.map(|c| c.as_u32()),
+                    "cancellable": o.cancellable,
                 })
             })
             .collect();
@@ -229,9 +308,168 @@ impl Ctx<'_, '_> {
             self.collect_export(None, &name, export_idx, &mut exports)?;
         }
 
-        // ComponentTypes has no public iterator over resource tables, so we
-        // describe exactly the tables referenced by types and trampolines.
-        let resource_tables: Vec<Value> = self
+        // Fused adapters name stream, future and error-context tables by index at runtime
+        // (`stream-transfer` etc.), so describe all of them, not only those the plan references.
+        // ComponentTypes has no public way to count them; its serialized form does.
+        if translation.trampolines.iter().any(|(_, t)| is_transfer(t)) {
+            let all = serde_json::to_value(self.types)?;
+            // A PrimaryMap serializes as `{"elems": [...]}`.
+            let count = |key: &str| all.get(key).and_then(|m| m.get("elems")).and_then(Value::as_array).map_or(0, |a| a.len() as u32);
+            self.stream_tables.borrow_mut().extend(0..count("stream_tables"));
+            self.future_tables.borrow_mut().extend(0..count("future_tables"));
+            self.error_context_tables.borrow_mut().extend(0..count("error_context_tables"));
+        }
+        // Describing an element type can reference more tables (`stream<future<T>>`).
+        let (stream_tables, future_tables) = self.transmit_tables();
+        // ComponentTypes has no public iterator over resource tables, so we describe exactly the
+        // tables referenced by types and trampolines (after the stream and future element types).
+        let resource_tables = self.resource_tables();
+        let error_context_tables: Vec<Value> = self
+            .error_context_tables
+            .borrow()
+            .iter()
+            .map(|&i| json!({ "index": i, "instance": self.types[TypeComponentLocalErrorContextTableIndex::from_u32(i)].instance.as_u32() }))
+            .collect();
+
+        renumber_options(&mut options, &mut exports, &mut trampolines);
+
+        let plan = json!({
+            "version": PLAN_VERSION,
+            "modules": module_json,
+            "initializers": inits,
+            "trampolines": trampolines,
+            "options": options,
+            "imports": imports,
+            "resourceTables": resource_tables,
+            "streamTables": stream_tables,
+            "futureTables": future_tables,
+            "errorContextTables": error_context_tables,
+            "exports": exports,
+        });
+        Ok((plan, files))
+    }
+
+    /// The stream and future tables referenced in the plan: `{index, instance, element}`.
+    fn transmit_tables(&self) -> (Vec<Value>, Vec<Value>) {
+        let mut streams = std::collections::BTreeMap::new();
+        let mut futures = std::collections::BTreeMap::new();
+        loop {
+            let pending_streams: Vec<u32> = self.stream_tables.borrow().iter().copied().filter(|i| !streams.contains_key(i)).collect();
+            let pending_futures: Vec<u32> = self.future_tables.borrow().iter().copied().filter(|i| !futures.contains_key(i)).collect();
+            if pending_streams.is_empty() && pending_futures.is_empty() {
+                break;
+            }
+            for i in pending_streams {
+                let t = &self.types[TypeStreamTableIndex::from_u32(i)];
+                let element = self.types[t.ty].payload.as_ref().map(|p| self.ty(p));
+                streams.insert(i, json!({ "index": i, "instance": t.instance.as_u32(), "element": element }));
+            }
+            for i in pending_futures {
+                let t = &self.types[TypeFutureTableIndex::from_u32(i)];
+                let element = self.types[t.ty].payload.as_ref().map(|p| self.ty(p));
+                futures.insert(i, json!({ "index": i, "instance": t.instance.as_u32(), "element": element }));
+            }
+        }
+        (streams.into_values().collect(), futures.into_values().collect())
+    }
+
+    /// The async built-ins and the fused adapters' async intrinsics (plan v5, #16).
+    fn async_trampoline(&self, t: &Trampoline) -> Option<Value> {
+        let stream = |kind: &str, ty: &TypeStreamTableIndex| {
+            self.stream_tables.borrow_mut().insert(ty.as_u32());
+            json!({ "kind": kind, "table": ty.as_u32() })
+        };
+        let future = |kind: &str, ty: &TypeFutureTableIndex| {
+            self.future_tables.borrow_mut().insert(ty.as_u32());
+            json!({ "kind": kind, "table": ty.as_u32() })
+        };
+        let with = |mut j: Value, key: &str, v: Value| {
+            j.as_object_mut().unwrap().insert(key.into(), v);
+            j
+        };
+        let simple = |kind: &str, instance: &RuntimeComponentInstanceIndex| json!({ "kind": kind, "instance": instance.as_u32() });
+        Some(match t {
+            Trampoline::BackpressureInc { instance } => simple("backpressure-inc", instance),
+            Trampoline::BackpressureDec { instance } => simple("backpressure-dec", instance),
+            Trampoline::TaskReturn { instance, results, options } => json!({
+                "kind": "task-return", "instance": instance.as_u32(),
+                "results": self.types[*results].types.iter().map(|t| self.ty(t)).collect::<Vec<_>>(),
+                // The fused adapters name a task's result type by this index (`prepare-call`).
+                "resultsIndex": results.as_u32(),
+                "options": options.as_u32(),
+            }),
+            Trampoline::TaskCancel { instance } => simple("task-cancel", instance),
+            Trampoline::WaitableSetNew { instance } => simple("waitable-set-new", instance),
+            Trampoline::WaitableSetWait { instance, options } => with(simple("waitable-set-wait", instance), "options", json!(options.as_u32())),
+            Trampoline::WaitableSetPoll { instance, options } => with(simple("waitable-set-poll", instance), "options", json!(options.as_u32())),
+            Trampoline::WaitableSetDrop { instance } => simple("waitable-set-drop", instance),
+            Trampoline::WaitableJoin { instance } => simple("waitable-join", instance),
+            Trampoline::SubtaskDrop { instance } => simple("subtask-drop", instance),
+            Trampoline::SubtaskCancel { instance, async_ } => with(simple("subtask-cancel", instance), "async", json!(async_)),
+            Trampoline::StreamNew { ty, .. } => stream("stream-new", ty),
+            Trampoline::StreamRead { ty, options, .. } => with(stream("stream-read", ty), "options", json!(options.as_u32())),
+            Trampoline::StreamWrite { ty, options, .. } => with(stream("stream-write", ty), "options", json!(options.as_u32())),
+            Trampoline::StreamCancelRead { ty, async_, .. } => with(stream("stream-cancel-read", ty), "async", json!(async_)),
+            Trampoline::StreamCancelWrite { ty, async_, .. } => with(stream("stream-cancel-write", ty), "async", json!(async_)),
+            Trampoline::StreamDropReadable { ty, .. } => stream("stream-drop-readable", ty),
+            Trampoline::StreamDropWritable { ty, .. } => stream("stream-drop-writable", ty),
+            Trampoline::FutureNew { ty, .. } => future("future-new", ty),
+            Trampoline::FutureRead { ty, options, .. } => with(future("future-read", ty), "options", json!(options.as_u32())),
+            Trampoline::FutureWrite { ty, options, .. } => with(future("future-write", ty), "options", json!(options.as_u32())),
+            Trampoline::FutureCancelRead { ty, async_, .. } => with(future("future-cancel-read", ty), "async", json!(async_)),
+            Trampoline::FutureCancelWrite { ty, async_, .. } => with(future("future-cancel-write", ty), "async", json!(async_)),
+            Trampoline::FutureDropReadable { ty, .. } => future("future-drop-readable", ty),
+            Trampoline::FutureDropWritable { ty, .. } => future("future-drop-writable", ty),
+            Trampoline::ErrorContextNew { instance, options, ty } => {
+                self.error_context_tables.borrow_mut().insert(ty.as_u32());
+                with(simple("error-context-new", instance), "options", json!(options.as_u32()))
+            }
+            Trampoline::ErrorContextDebugMessage { instance, options, ty } => {
+                self.error_context_tables.borrow_mut().insert(ty.as_u32());
+                with(simple("error-context-debug-message", instance), "options", json!(options.as_u32()))
+            }
+            Trampoline::ErrorContextDrop { instance, ty } => {
+                self.error_context_tables.borrow_mut().insert(ty.as_u32());
+                simple("error-context-drop", instance)
+            }
+            // Fused adapters move resources between child components (#70).
+            Trampoline::ResourceTransferOwn => json!({ "kind": "resource-transfer-own" }),
+            Trampoline::ResourceTransferBorrow => json!({ "kind": "resource-transfer-borrow" }),
+            Trampoline::PrepareCall { memory } => json!({ "kind": "prepare-call", "memory": memory.map(|m| m.as_u32()) }),
+            Trampoline::SyncStartCall { callback } => json!({ "kind": "sync-start-call", "callback": callback.map(|c| c.as_u32()) }),
+            Trampoline::AsyncStartCall { callback, post_return } => json!({
+                "kind": "async-start-call", "callback": callback.map(|c| c.as_u32()), "postReturn": post_return.map(|p| p.as_u32()),
+            }),
+            Trampoline::FutureTransfer => json!({ "kind": "future-transfer" }),
+            Trampoline::StreamTransfer => json!({ "kind": "stream-transfer" }),
+            Trampoline::ErrorContextTransfer => json!({ "kind": "error-context-transfer" }),
+            Trampoline::EnterSyncCall => json!({ "kind": "enter-sync-call" }),
+            Trampoline::ExitSyncCall => json!({ "kind": "exit-sync-call" }),
+            Trampoline::ThreadIndex { instance } => simple("thread-index", instance),
+            Trampoline::ThreadNewIndirect { instance, start_func_table_idx, .. } => {
+                with(simple("thread-new-indirect", instance), "table", json!(start_func_table_idx.as_u32()))
+            }
+            Trampoline::ThreadResumeLater { instance } => simple("thread-resume-later", instance),
+            Trampoline::ThreadSuspend { instance, cancellable } => with(simple("thread-suspend", instance), "cancellable", json!(cancellable)),
+            Trampoline::ThreadYield { instance, cancellable } => with(simple("thread-yield", instance), "cancellable", json!(cancellable)),
+            Trampoline::ThreadSuspendThenResume { instance, cancellable } => {
+                with(simple("thread-suspend-then-resume", instance), "cancellable", json!(cancellable))
+            }
+            Trampoline::ThreadYieldThenResume { instance, cancellable } => {
+                with(simple("thread-yield-then-resume", instance), "cancellable", json!(cancellable))
+            }
+            Trampoline::ThreadSuspendThenPromote { instance, cancellable } => {
+                with(simple("thread-suspend-then-promote", instance), "cancellable", json!(cancellable))
+            }
+            Trampoline::ThreadYieldThenPromote { instance, cancellable } => {
+                with(simple("thread-yield-then-promote", instance), "cancellable", json!(cancellable))
+            }
+            _ => return None,
+        })
+    }
+
+    fn resource_tables(&self) -> Vec<Value> {
+        self
             .tables
             .borrow()
             .iter()
@@ -251,21 +489,7 @@ impl Ctx<'_, '_> {
                     TypeResourceTable::Abstract(_) => json!({ "index": i, "abstract": true }),
                 }
             })
-            .collect();
-
-        renumber_options(&mut options, &mut exports, &mut trampolines);
-
-        let plan = json!({
-            "version": PLAN_VERSION,
-            "modules": module_json,
-            "initializers": inits,
-            "trampolines": trampolines,
-            "options": options,
-            "imports": imports,
-            "resourceTables": resource_tables,
-            "exports": exports,
-        });
-        Ok((plan, files))
+            .collect()
     }
 
     fn collect_export(&self, instance: Option<&str>, name: &str, idx: ExportIndex, out: &mut Vec<Value>) -> Result<()> {
@@ -300,8 +524,10 @@ impl Ctx<'_, '_> {
             }
             CoreDef::Trampoline(t) => json!({ "kind": "trampoline", "index": t.as_u32() }),
             CoreDef::InstanceFlags(i) => json!({ "kind": "instance-flags", "index": i.as_u32() }),
+            // The fused adapters' access to the current thread's `context.get`/`context.set` slots
+            // (plan v5); other unsafe intrinsics are for Wasmtime's own compile-time builtins.
+            CoreDef::UnsafeIntrinsic(u) if u.name().starts_with("context-") => json!({ "kind": "intrinsic", "name": u.name() }),
             CoreDef::UnsafeIntrinsic(u) => bail!("unsafe intrinsic {u:?} is not supported"),
-            // The task-may-block global only exists for async lifts/lowers (#16).
             // The per-task "may block" flag (an i32 global). Wasmtime 48's fused adapters import
             // it even for synchronous component-to-component calls.
             CoreDef::TaskMayBlock => json!({ "kind": "task-may-block" }),
@@ -388,9 +614,25 @@ impl Ctx<'_, '_> {
                 self.tables.borrow_mut().insert(i.as_u32());
                 json!({ "k": "borrow", "table": i.as_u32() })
             }
+            InterfaceType::Stream(i) => {
+                self.stream_tables.borrow_mut().insert(i.as_u32());
+                json!({ "k": "stream", "table": i.as_u32() })
+            }
+            InterfaceType::Future(i) => {
+                self.future_tables.borrow_mut().insert(i.as_u32());
+                json!({ "k": "future", "table": i.as_u32() })
+            }
+            InterfaceType::ErrorContext(i) => {
+                self.error_context_tables.borrow_mut().insert(i.as_u32());
+                json!({ "k": "error-context", "table": i.as_u32() })
+            }
             other => json!({ "k": "unsupported", "detail": format!("{other:?}") }),
         }
     }
+}
+
+fn is_transfer(t: &Trampoline) -> bool {
+    matches!(t, Trampoline::StreamTransfer | Trampoline::FutureTransfer | Trampoline::ErrorContextTransfer)
 }
 
 fn entity_kind(ty: &EntityType) -> &'static str {
@@ -470,7 +712,7 @@ mod tests {
     /// plan.json must not depend on hash iteration order (committed fixtures, Gradle build cache).
     #[test]
     fn plans_are_deterministic() {
-        for name in ["res-edge.wasm", "roundtrip.wasm", "host-res.wasm", "types.wasm", "composed-str.wasm"] {
+        for name in ["res-edge.wasm", "roundtrip.wasm", "host-res.wasm", "types.wasm", "composed-str.wasm", "async-stream.wasm"] {
             let bytes = fixture(name);
             let first = decompose(&bytes).unwrap().0;
             for _ in 0..5 {
@@ -493,6 +735,23 @@ mod tests {
         let memories = |m: &Value| m["imports"].as_array().unwrap().iter().filter(|i| i["kind"] == "memory").count();
         assert!(plan["modules"].as_array().unwrap().iter().any(|m| memories(m) == 2));
         assert_eq!(modules.len(), plan["modules"].as_array().unwrap().len());
+    }
+
+    /// An async component (#16): its callbacks, async built-ins and stream / future tables are in the plan.
+    #[test]
+    fn async_components_decompose() {
+        assert!(uses_async(&fixture("async-stream.wasm")).unwrap());
+        assert!(!uses_async(&fixture("composed-str.wasm")).unwrap());
+        let (plan, _) = decompose(&fixture("async-stream.wasm")).unwrap();
+        let kinds: BTreeSet<&str> = plan["trampolines"].as_array().unwrap().iter().map(|t| t["kind"].as_str().unwrap()).collect();
+        for k in ["task-return", "stream-new", "stream-write", "future-read", "waitable-set-new", "waitable-join"] {
+            assert!(kinds.contains(k), "{k} missing from {kinds:?}");
+        }
+        assert!(!kinds.contains("unsupported"), "{kinds:?}");
+        let callbacks = plan["initializers"].as_array().unwrap().iter().filter(|i| i["op"] == "extract-callback").count();
+        assert_eq!(callbacks, 3);
+        assert_eq!(plan["streamTables"].as_array().unwrap().len(), 1);
+        assert_eq!(plan["futureTables"].as_array().unwrap().len(), 1);
     }
 
     #[test]

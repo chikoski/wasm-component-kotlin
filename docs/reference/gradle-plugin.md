@@ -32,7 +32,7 @@ wasm2kt {
 | プロパティ | 型 | 既定値 | 説明 |
 | :--- | :--- | :--- | :--- |
 | `addRuntimeDependency` | `Property<Boolean>` | `true` | プラグインと同じバージョンの `io.github.wasm2kt:runtime-chicory` を `implementation` に追加します。自分で依存関係を管理する場合は `false` にします |
-| `failOnUnsupportedFeatures` | `Property<Boolean>` | `false` | コンポーネントが Chicory バックエンドの未対応機能（未対応の組み込み関数、型、async）を使っている場合に、分解タスクでビルドを失敗させます。`false` の場合はビルド時に警告のみを表示し、実行時に該当箇所が呼ばれた時点で例外を投げます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)） |
+| `failOnUnsupportedFeatures` | `Property<Boolean>` | `false` | コンポーネントが Chicory バックエンドの未対応機能（未対応の組み込み関数、型）を使っている場合に、分解タスクでビルドを失敗させます。`false` の場合はビルド時に警告のみを表示し、実行時に該当箇所が呼ばれた時点で例外を投げます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)） |
 | `useLibraryInterfaces` | `Property<Boolean>` | `true` | コンパイルクラスパス上の依存 jar に `META-INF/wasm2kt/interfaces/*.json` マニフェストが含まれている場合、コンポーネントが同じバージョンの interface を import していればコード生成を省略し、ライブラリのパッケージを利用します（[ADR-0014](../adr/0014-interface-mappings.md)） |
 | `components` | `NamedDomainObjectContainer<Wasm2KtComponent>` | 空 | ビルド対象のコンポーネント定義のコンテナです |
 

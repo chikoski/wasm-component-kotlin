@@ -1,5 +1,7 @@
 package wasm2kt.runtime
 
+import kotlinx.coroutines.runBlocking
+
 /**
  * Host imports, registered one interface at a time (ADR-0011).
  *
@@ -15,6 +17,7 @@ package wasm2kt.runtime
  */
 class Linker : WitHostImportDispatcher, ImportsFactory {
     private val handlers = LinkedHashMap<String, HostFunction>()
+    private val asyncHandlers = HashMap<String, AsyncHostFunction>()
 
     /** The keys defined so far, in definition order. */
     val keys: Set<String>
@@ -28,6 +31,15 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
     fun define(key: String, handler: HostFunction) {
         require(key !in handlers) { "Host import '$key' is already defined" }
         handlers[key] = handler
+    }
+
+    /**
+     * Defines the suspending handler for [key], an imported `async func` (ADR-0019). A backend
+     * without the async ABI calls it as a blocking [HostFunction].
+     */
+    fun defineAsync(key: String, handler: AsyncHostFunction) {
+        define(key) { args, results -> runBlocking { handler.call(args, results) } }
+        asyncHandlers[key] = handler
     }
 
     fun isDefined(key: String): Boolean = key in handlers
@@ -52,6 +64,8 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
     override fun newLinker(): Linker = this
 
     override fun hostFunction(key: String): HostFunction? = handlers[key]
+
+    override fun asyncHostFunction(key: String): AsyncHostFunction? = asyncHandlers[key]
 
     /**
      * Calls the handler of [key] directly, as a backend would (for tests and mocks).

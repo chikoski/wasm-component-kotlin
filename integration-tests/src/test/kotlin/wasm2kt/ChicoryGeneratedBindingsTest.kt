@@ -148,4 +148,95 @@ class ChicoryGeneratedBindingsTest {
         )
         assertEquals("scaled=42,tag=ERR#404,count=15,prio=HIGH,even=42:-7,ping=true:true,opt=true,true,true,u64Max=true", out)
     }
+
+    /** The async ABI (#16): `async func` is a `suspend fun`, `stream<T>` a `Flow<T>`, `future<T>` a `Deferred<T>` (ADR-0006). */
+    @Test
+    fun `async functions, streams and futures run on Chicory`(@TempDir tempDir: Path) {
+        val out = generateCompileRun(
+            tempDir, "async-stream", "com.example.chicory.asyncstream", "RootWorld.kt",
+            """
+            import kotlinx.coroutines.CompletableDeferred
+            import kotlinx.coroutines.flow.asFlow
+            import kotlinx.coroutines.flow.flowOf
+            import kotlinx.coroutines.flow.take
+            import kotlinx.coroutines.flow.toList
+            import kotlinx.coroutines.runBlocking
+
+            fun run(component: ComponentBackendFactory): String =
+                withSession(component) {
+                    runBlocking {
+                        val doubled = double(21u)
+                        val counted = countUp(5u).toList()
+                        val summed = sum((1u..10u).asFlow())
+                        val empty = sum(flowOf())
+                        val roundTrip = sum(countUp(4u))
+                        val firstTwo = countUp(100u).take(2).toList()
+                        val later = later(41u).await()
+                        val tenfold = timesTen(CompletableDeferred(7u))
+                        val once = countUp(1u).let { s -> s.toList(); runCatching { s.toList() }.isFailure }
+                        "doubled=${'$'}doubled,counted=${'$'}counted,summed=${'$'}summed,empty=${'$'}empty,roundTrip=${'$'}roundTrip," +
+                            "firstTwo=${'$'}firstTwo,later=${'$'}later,tenfold=${'$'}tenfold,once=${'$'}once,after=${'$'}{double(1u)}"
+                    }
+                }
+            """,
+            component("async-stream"),
+        )
+        assertEquals(
+            "doubled=42,counted=[0, 1, 2, 3, 4],summed=55,empty=0,roundTrip=6,firstTwo=[0, 1],later=42,tenfold=70,once=true,after=2",
+            out,
+        )
+    }
+
+    /**
+     * A host `async func` import is a `suspend fun`, and the component's async exports suspend while
+     * it runs (ADR-0019): calls overlap, and cancelling one cancels the host import it waits for.
+     */
+    @Test
+    fun `suspending host imports, overlapping calls and cancellation run on Chicory`(@TempDir tempDir: Path) {
+        val out = generateCompileRun(
+            tempDir, "async-import", "com.example.chicory.asyncimport", "RootWorld.kt",
+            """
+            import kotlinx.coroutines.CompletableDeferred
+            import kotlinx.coroutines.async
+            import kotlinx.coroutines.awaitAll
+            import kotlinx.coroutines.awaitCancellation
+            import kotlinx.coroutines.delay
+            import kotlinx.coroutines.runBlocking
+            import kotlinx.coroutines.withTimeoutOrNull
+            import java.util.concurrent.atomic.AtomicInteger
+
+            fun run(component: ComponentBackendFactory): String {
+                val inFlight = AtomicInteger()
+                var maxInFlight = 0
+                val cancelled = CompletableDeferred<Unit>()
+                val host = object : Imports {
+                    override suspend fun fetch(x: UInt): UInt {
+                        if (x == 999u) {
+                            try { awaitCancellation() } finally { cancelled.complete(Unit) }
+                        }
+                        maxInFlight = maxOf(maxInFlight, inFlight.incrementAndGet())
+                        delay(20)
+                        inFlight.decrementAndGet()
+                        return x * 10u
+                    }
+                }
+                return withSession(component, imports { host }) {
+                    runBlocking {
+                        val one = fetchPlusOne(4u)
+                        val two = fetchSyncPlusTwo(4u)
+                        val three = blockingFetch(4u)
+                        val overlapping = (1u..3u).map { async { fetchPlusOne(it) } }.awaitAll()
+                        val timedOut = withTimeoutOrNull(100) { cancellable(999u) }
+                        cancelled.await()
+                        val after = cancellable(5u)
+                        "one=${'$'}one,two=${'$'}two,three=${'$'}three,overlapping=${'$'}overlapping,maxInFlight=${'$'}maxInFlight," +
+                            "timedOut=${'$'}timedOut,after=${'$'}after"
+                    }
+                }
+            }
+            """,
+            component("async-import"),
+        )
+        assertEquals("one=41,two=42,three=43,overlapping=[11, 21, 31],maxInFlight=3,timedOut=null,after=50", out)
+    }
 }

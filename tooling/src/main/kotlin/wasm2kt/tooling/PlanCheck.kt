@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -19,7 +18,7 @@ import java.nio.file.Path
  * report it instead of the app failing on the device the first time the feature is used (#39).
  *
  * The runtime fails on the same entries: an `unsupported` trampoline throws when called, an
- * `unsupported` type when a value of it is lifted or lowered, and async options are not honoured.
+ * `unsupported` type when a value of it is lifted or lowered. The async ABI is supported (#16).
  */
 object PlanCheck {
     /** One human-readable line per problem, in plan order; empty when everything is supported. */
@@ -27,16 +26,10 @@ object PlanCheck {
         val plan = Json.parseToJsonElement(Files.readString(decomposedDir.resolve("plan.json"))).jsonObject
         val problems = mutableListOf<String>()
 
-        val asyncOptions = plan.array("options")
-            .filter { it.jsonObject["async"]?.jsonPrimitive?.booleanOrNull == true }
-            .mapNotNull { it.jsonObject["index"]?.jsonPrimitive?.intOrNull }
-            .toSet()
-
         for (e in plan.array("exports")) {
             val o = e.jsonObject
             val name = o.str("instance")?.let { "$it#${o.str("name")}" } ?: o.str("name")
             unsupportedTypes(o["type"]).distinct().forEach { problems += "export '$name' uses a type the Chicory backend does not support: $it" }
-            if (o["options"]?.jsonPrimitive?.intOrNull in asyncOptions) problems += "export '$name' is async, which the Chicory backend does not support yet"
         }
 
         val imports = plan.array("imports").associate { i ->
@@ -51,7 +44,6 @@ object PlanCheck {
                 "lower-import" -> {
                     val name = imports[o["import"]?.jsonPrimitive?.intOrNull] ?: "import"
                     unsupportedTypes(o["type"]).distinct().forEach { problems += "import '$name' uses a type the Chicory backend does not support: $it" }
-                    if (o["options"]?.jsonPrimitive?.intOrNull in asyncOptions) problems += "import '$name' is lowered as async, which the Chicory backend does not support yet"
                 }
             }
         }

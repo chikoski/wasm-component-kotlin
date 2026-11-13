@@ -35,6 +35,7 @@ import kotlin.io.path.name
 class ConformanceTest {
     private companion object {
         val CREATES = setOf("module", "module_definition", "module_instance")
+        const val TIMEOUT_MILLIS = 20_000L
     }
 
     private val root: Path = Paths.get("conformance").toAbsolutePath()
@@ -44,8 +45,8 @@ class ConformanceTest {
         ?: Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools").takeIf { Files.isExecutable(it) }?.toString()
         ?: "wasm-tools"
 
-    /** The directories of the suite run so far; async joins with #16, validation and linking later. */
-    private val directories = listOf("values", "resources")
+    /** The directories of the suite run so far; validation and linking later. */
+    private val directories = listOf("values", "resources", "async")
 
     private val skips: Map<String, String> = buildMap {
         Files.readAllLines(suite.resolve("nyi.txt")).map { it.trim() }.filter { it.startsWith("./") }
@@ -93,7 +94,7 @@ class ConformanceTest {
                 val type = c.getValue("type").jsonPrimitive.content
                 DynamicTest.dynamicTest("$rel:$line $type ${c["action"]?.jsonObject?.get("field")?.jsonPrimitive?.content.orEmpty()}") {
                     val skip = skips["$rel:$line"]
-                    val failure = runCatching { run(c) }.exceptionOrNull()
+                    val failure = runCatching { withTimeout { run(c) } }.exceptionOrNull()
                         .also { if (it != null && type in CREATES) broken = "$rel:$line" else if (type in CREATES) broken = null }
                     when {
                         failure is TestAbortedException -> throw failure
@@ -103,6 +104,36 @@ class ConformanceTest {
                     }
                 }
             }
+        }
+
+        /**
+         * Runs a command on its own thread, failing it if it takes too long: a task that waits
+         * forever must fail its test, not hang the run (async, #16).
+         */
+        private fun withTimeout(block: () -> Unit) {
+            var failure: Throwable? = null
+            val t = Thread {
+                try {
+                    block()
+                } catch (e: Throwable) {
+                    failure = e
+                }
+            }
+            t.isDaemon = true
+            t.start()
+            t.join(TIMEOUT_MILLIS)
+            if (t.isAlive) {
+                current = null
+                throw AssertionError("timed out after ${TIMEOUT_MILLIS / 1000} s")
+            }
+            failure?.let { throw it }
+        }
+
+        /** Closes the instance being replaced, unless a named instance still refers to it. */
+        private fun replaceCurrent(next: Instance?) {
+            val previous = current
+            current = next
+            if (previous != null && previous !in instances.values) runCatching { previous.close() }
         }
 
         private fun convert(): List<JsonObject> {
@@ -125,8 +156,8 @@ class ConformanceTest {
         private fun run(c: JsonObject) {
             when (val type = c.getValue("type").jsonPrimitive.content) {
                 "module" -> {
-                    current = null
-                    current = Instance(decompose(c.getValue("filename").jsonPrimitive.content))
+                    replaceCurrent(null)
+                    replaceCurrent(Instance(decompose(c.getValue("filename").jsonPrimitive.content)))
                 }
                 "module_definition" -> {
                     val name = c.getValue("name").jsonPrimitive.content
@@ -135,12 +166,12 @@ class ConformanceTest {
                     failedDefinitions.remove(name)
                 }
                 "module_instance" -> {
-                    current = null
+                    replaceCurrent(null)
                     val name = c.getValue("module").jsonPrimitive.content
                     val def = definitions[name]
                         ?: failedDefinitions[name]?.let { throw TestAbortedException("its component could not be created ($it)") }
                         ?: error("Unknown definition in $c")
-                    current = Instance(def).also { i -> c["instance"]?.jsonPrimitive?.content?.let { instances[it] = i } }
+                    replaceCurrent(Instance(def).also { i -> c["instance"]?.jsonPrimitive?.content?.let { instances[it] = i } })
                 }
                 "assert_return" -> {
                     val actual = invoke(c.getValue("action").jsonObject)
@@ -156,6 +187,19 @@ class ConformanceTest {
                     }
                 }
                 "action" -> invoke(c.getValue("action").jsonObject)
+                "assert_invalid" -> {
+                    val file = c.getValue("filename").jsonPrimitive.content
+                    val e = runCatching { decompose(file) }.exceptionOrNull()
+                        ?: throw AssertionError("Expected an invalid component (${c["text"]?.jsonPrimitive?.content}), but it decomposed")
+                    check(e !is TestAbortedException) { "$e" }
+                }
+                "assert_uninstantiable" -> {
+                    val dir = decompose(c.getValue("filename").jsonPrimitive.content)
+                    val e = runCatching { Instance(dir).close() }.exceptionOrNull()
+                    if (generateSequence(e) { it.cause }.none { it is ComponentTrapException }) {
+                        throw AssertionError("Expected instantiation to trap (${c["text"]?.jsonPrimitive?.content}), got " + (e?.let { "$it" } ?: "an instance"), e)
+                    }
+                }
                 else -> throw UnsupportedOperationException("Command '$type' is not supported by the conformance harness")
             }
         }

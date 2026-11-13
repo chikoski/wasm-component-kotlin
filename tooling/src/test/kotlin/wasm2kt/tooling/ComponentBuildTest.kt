@@ -59,27 +59,40 @@ class ComponentBuildTest {
         Decomposer.decompose(fixtures.resolve("roundtrip.wasm"), dir.resolve("rt"))
         assertEquals(emptyList(), PlanCheck.unsupportedFeatures(dir.resolve("rt")))
 
-        // Two nested components passing a resource: the fused adapter needs intrinsics Chicory lacks.
+        // Nested components passing a resource: the fused adapter's intrinsics are supported (#70).
         Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir.resolve("composed"))
-        val problems = PlanCheck.unsupportedFeatures(dir.resolve("composed"))
-        assertTrue(problems.any { "ResourceTransferOwn" in it }, "got $problems")
-        assertTrue(problems.all { it.startsWith("component intrinsic not supported by the Chicory backend: ") }, "got $problems")
-        assertEquals(problems.distinct(), problems)
+        assertEquals(emptyList(), PlanCheck.unsupportedFeatures(dir.resolve("composed")))
+
+        // A map<K, V> (#71) is not.
+        Decomposer.decompose(fixtures.resolve("map-type.wasm"), dir.resolve("map"))
+        assertEquals(
+            listOf("export 'size' uses a type the Chicory backend does not support: Map(TypeMapIndex(0))"),
+            PlanCheck.unsupportedFeatures(dir.resolve("map")),
+        )
     }
 
     @Test
-    fun `a component with unsupported intrinsics still instantiates and fails only when they are used`(@TempDir dir: Path) {
-        // Wasmtime 48's fused adapters import the task-may-block global (plan v3) next to the
-        // unsupported intrinsics; instantiation must not fail on it, so the build-time warning holds.
-        Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir)
+    fun `a component with an unsupported type still instantiates and fails only when it is used`(@TempDir dir: Path) {
+        Decomposer.decompose(fixtures.resolve("map-type.wasm"), dir)
         wasm2kt.runtime.chicory.ChicoryComponent.fromDirectory(dir).instantiate(null).use { c ->
-            val e = runCatching { c.invoke(c.resolve("g"), wasm2kt.runtime.WitWriter().toReader()) }.exceptionOrNull()
+            assertEquals(42, c.invoke(c.resolve("answer"), wasm2kt.runtime.WitWriter().toReader()).int())
+            val e = runCatching { c.invoke(c.resolve("size"), wasm2kt.runtime.WitWriter().apply { length(0) }.toReader()) }.exceptionOrNull()
             assertTrue(e is UnsupportedOperationException && "not supported by the Chicory backend" in e.message!!, "got $e")
+            assertEquals(42, c.invoke(c.resolve("answer"), wasm2kt.runtime.WitWriter().toReader()).int(), "the instance stays usable")
         }
     }
 
     @Test
-    fun `unsupported types and async options are reported with the function that uses them`(@TempDir dir: Path) {
+    fun `nested components pass resources through the fused adapters`(@TempDir dir: Path) {
+        // Wasmtime 48's adapters move the resource between the children's handle tables (#70).
+        Decomposer.decompose(fixtures.resolve("composed-res.wasm"), dir)
+        wasm2kt.runtime.chicory.ChicoryComponent.fromDirectory(dir).instantiate(null).use { c ->
+            assertEquals(1, c.invoke(c.resolve("g"), wasm2kt.runtime.WitWriter().toReader()).int())
+        }
+    }
+
+    @Test
+    fun `unsupported types are reported with the function that uses them`(@TempDir dir: Path) {
         Files.writeString(
             dir.resolve("plan.json"),
             """
@@ -99,7 +112,6 @@ class ComponentBuildTest {
         )
         assertEquals(
             listOf(
-                "export 'run' is async, which the Chicory backend does not support yet",
                 "export 'my:pkg/api#stream' uses a type the Chicory backend does not support: Stream(0)",
                 "import 'my:pkg/io#read' uses a type the Chicory backend does not support: Future(0)",
             ),

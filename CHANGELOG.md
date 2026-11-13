@@ -6,6 +6,16 @@
 
 ### 破壊的変更 (Breaking Changes)
 
+* **Component Model の async に対応し、`plan.json` を v5 へ更新** ([#16](https://github.com/chikoski/wasm-component-kotlin/issues/16), [ADR-0018](docs/adr/0018-async-abi-on-chicory.md))
+  * Chicory バックエンドで、async lift（callback 形式と stackful 形式）、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しを実行できるようにしました
+  * 生成コードでは、export の `async func` を `suspend fun`、`future<T>` を `Deferred<T>`、`stream<T>` を `Flow<T>`（`stream<u8>` は `Flow<ByteArray>`）にしました（ADR-0006）。これらを使う world の生成コードは `kotlinx-coroutines-core` に依存します
+  * 子コンポーネントの間で resource を受け渡す合成コンポーネントも動くようになりました（#70 の一部）
+  * 古い `plan.json`（v4 以前）は読み込めません。再分解が必要です。`ComponentBackend` には stream / future のメソッドが加わりました（既定の実装は `UnsupportedOperationException`）
+* **async の境界をコルーチンに** ([ADR-0019](docs/adr/0019-suspending-async-boundary.md))
+  * export の `async func` は、呼び出し元のスレッドをブロックせずに中断する `suspend fun` になりました。同じセッションへの呼び出しを並行に進められ、コルーチンを取り消すとコンポーネントの task が取り消されます
+  * ホストが実装する import の `async func` は `suspend fun` になりました（ホストの実装の変更が必要です）
+  * `runtime-api` が `kotlinx-coroutines-core` に依存するようになりました。`ComponentBackend` に `invokeSuspending` などの suspending なメソッド、`WitHostImportDispatcher` に `asyncHostFunction`、`Linker` に `defineAsync` が加わりました
+
 * **値の境界を JSON からバイナリ形式（`WitWriter` / `WitReader`）へ変更** ([#62](https://github.com/chikoski/wasm-component-kotlin/pull/62), [ADR-0015](docs/adr/0015-binary-value-boundary.md))
   * 生成コードとバックエンド（`runtime-chicory` / `runtime-wasmtime`）の間の値の受け渡しを、`kotlinx.serialization` の `JsonElement` から型に沿ったバイナリ形式に置き換えました
   * `runtime-api` から `FfmJsonCodec` と `kotlinx-serialization-json` への依存を削除しました。古いバージョンの生成コードやネイティブブリッジとは互換性がありません

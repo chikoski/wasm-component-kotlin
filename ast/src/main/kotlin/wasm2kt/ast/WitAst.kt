@@ -92,14 +92,22 @@ data class WitFunction(
 ) {
     val results: List<WitResultItem>
         get() = if (result != null) listOf(WitResultItem(type = result)) else legacyResults
+
+    /** Whether this is an `async func` (#16). */
+    val isAsync: Boolean get() = kind.isAsync
 }
 
+/** [isAsync]: an `async func` (`async-freestanding`, `async-method`, `async-static` in the JSON; #16). */
 @Serializable(with = WitFunctionKindSerializer::class)
 sealed interface WitFunctionKind {
-    data object Freestanding : WitFunctionKind
-    data class Method(val resourceId: Int) : WitFunctionKind
-    data class Static(val resourceId: Int) : WitFunctionKind
-    data class Constructor(val resourceId: Int) : WitFunctionKind
+    val isAsync: Boolean
+
+    data class Freestanding(override val isAsync: Boolean = false) : WitFunctionKind
+    data class Method(val resourceId: Int, override val isAsync: Boolean = false) : WitFunctionKind
+    data class Static(val resourceId: Int, override val isAsync: Boolean = false) : WitFunctionKind
+    data class Constructor(val resourceId: Int) : WitFunctionKind {
+        override val isAsync: Boolean get() = false
+    }
 }
 
 @Serializable
@@ -260,16 +268,16 @@ object WitFunctionKindSerializer : KSerializer<WitFunctionKind> {
         val jsonDecoder = decoder as? JsonDecoder
             ?: throw SerializationException("WitFunctionKindSerializer requires JsonDecoder")
         return when (val elem = jsonDecoder.decodeJsonElement()) {
-            is JsonPrimitive -> {
-                if (elem.content == "freestanding") {
-                    WitFunctionKind.Freestanding
-                } else {
-                    throw SerializationException("Unknown WitFunctionKind primitive: ${elem.content}")
-                }
+            is JsonPrimitive -> when (elem.content) {
+                "freestanding" -> WitFunctionKind.Freestanding()
+                "async-freestanding" -> WitFunctionKind.Freestanding(isAsync = true)
+                else -> throw SerializationException("Unknown WitFunctionKind primitive: ${elem.content}")
             }
             is JsonObject -> when {
                 "method" in elem -> WitFunctionKind.Method(elem.getValue("method").jsonPrimitive.int)
                 "static" in elem -> WitFunctionKind.Static(elem.getValue("static").jsonPrimitive.int)
+                "async-method" in elem -> WitFunctionKind.Method(elem.getValue("async-method").jsonPrimitive.int, isAsync = true)
+                "async-static" in elem -> WitFunctionKind.Static(elem.getValue("async-static").jsonPrimitive.int, isAsync = true)
                 "constructor" in elem -> WitFunctionKind.Constructor(elem.getValue("constructor").jsonPrimitive.int)
                 else -> throw SerializationException("Unknown WitFunctionKind object: $elem")
             }
@@ -358,11 +366,17 @@ object WitTypeDefKindSerializer : KSerializer<WitTypeDefKind> {
                     val inner = if (fElem is JsonNull) null else json.decodeFromJsonElement<WitTypeRef>(fElem)
                     WitTypeDefKind.FutureType(inner)
                 }
-                "stream" in elem -> {
-                    val sObj = elem.getValue("stream").jsonObject
-                    val elementRef = sObj["element"]?.takeUnless { it is JsonNull }?.let { json.decodeFromJsonElement<WitTypeRef>(it) }
-                    val endRef = sObj["end"]?.takeUnless { it is JsonNull }?.let { json.decodeFromJsonElement<WitTypeRef>(it) }
-                    WitTypeDefKind.StreamType(elementRef, endRef)
+                "stream" in elem -> when (val sElem = elem.getValue("stream")) {
+                    // wit-parser >= 0.220: `{"stream": T}` (or null for a stream without values).
+                    is JsonNull -> WitTypeDefKind.StreamType(null, null)
+                    is JsonPrimitive -> WitTypeDefKind.StreamType(json.decodeFromJsonElement<WitTypeRef>(sElem), null)
+                    is JsonObject -> {
+                        // Older form: `{"stream": {"element": T, "end": E}}`.
+                        val elementRef = sElem["element"]?.takeUnless { it is JsonNull }?.let { json.decodeFromJsonElement<WitTypeRef>(it) }
+                        val endRef = sElem["end"]?.takeUnless { it is JsonNull }?.let { json.decodeFromJsonElement<WitTypeRef>(it) }
+                        WitTypeDefKind.StreamType(elementRef, endRef)
+                    }
+                    else -> throw SerializationException("Unexpected JSON for a stream type: $sElem")
                 }
                 else -> throw SerializationException("Unknown WitTypeDefKind keys: ${elem.keys}")
             }

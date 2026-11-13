@@ -1,0 +1,102 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {},
+      "exports": {
+        "double": {
+          "function": {
+            "name": "double",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "count-up": {
+          "function": {
+            "name": "count-up",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "n",
+                "type": "u32"
+              }
+            ],
+            "result": 0
+          }
+        },
+        "sum": {
+          "function": {
+            "name": "sum",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "s",
+                "type": 0
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "later": {
+          "function": {
+            "name": "later",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": 1
+          }
+        },
+        "times-ten": {
+          "function": {
+            "name": "times-ten",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "f",
+                "type": 1
+              }
+            ],
+            "result": "u32"
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "stream": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": "u32"
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

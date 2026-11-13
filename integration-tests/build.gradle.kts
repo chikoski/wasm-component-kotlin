@@ -14,6 +14,7 @@ dependencies {
     testImplementation(project(":test-support"))
     testImplementation(project(":tooling"))
     testImplementation(libs.clikt)
+    testImplementation(libs.kotlinx.coroutines.core)
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))
     testImplementation(libs.junit.jupiter)

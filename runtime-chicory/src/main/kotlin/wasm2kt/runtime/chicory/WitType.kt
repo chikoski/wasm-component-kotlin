@@ -30,6 +30,14 @@ sealed interface WitType {
     data class Variant(val kind: VariantKind, val cases: List<Pair<String, WitType?>>) : WitType
     data class Own(val table: Int) : WitType
     data class Borrow(val table: Int) : WitType
+
+    /** The readable end of a `stream<T>`, whose element type is in the plan's stream table [table] (plan v5, #16). */
+    data class Stream(val table: Int) : WitType
+
+    /** The readable end of a `future<T>`, whose element type is in the plan's future table [table] (plan v5, #16). */
+    data class Future(val table: Int) : WitType
+
+    data object ErrorContext : WitType
     /** A type the Chicory backend cannot handle yet; using it fails, merely declaring it does not. */
     data class Unsupported(val detail: String) : WitType
 
@@ -66,6 +74,9 @@ sealed interface WitType {
             "result" -> Variant(VariantKind.RESULT, listOf("ok" to o.optType("ok"), "err" to o.optType("err")))
             "own" -> Own(o.getValue("table").jsonPrimitive.int)
             "borrow" -> Borrow(o.getValue("table").jsonPrimitive.int)
+            "stream" -> Stream(o.getValue("table").jsonPrimitive.int)
+            "future" -> Future(o.getValue("table").jsonPrimitive.int)
+            "error-context" -> ErrorContext
             else -> Unsupported(listOfNotNull(k, o["detail"]?.jsonPrimitive?.content).joinToString(": "))
         }
 
@@ -74,7 +85,8 @@ sealed interface WitType {
     }
 }
 
-class FuncType(val params: List<Pair<String, WitType>>, val results: List<WitType>) {
+/** [async] is the function type's `async` (plan v5, #16), not the canonical option. */
+class FuncType(val params: List<Pair<String, WitType>>, val results: List<WitType>, val async: Boolean = false) {
     companion object {
         fun fromJson(o: JsonObject): FuncType = FuncType(
             params = o.getValue("params").jsonArray.map {
@@ -82,6 +94,7 @@ class FuncType(val params: List<Pair<String, WitType>>, val results: List<WitTyp
                 p.getValue("name").jsonPrimitive.content to WitType.fromJson(p.getValue("type").jsonObject)
             },
             results = o.getValue("results").jsonArray.map { WitType.fromJson(it.jsonObject) },
+            async = (o["async"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
         )
     }
 }

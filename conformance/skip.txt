@@ -2,17 +2,45 @@
 # `<file>` skips a whole file, `<file>:<line>` one command (the line of the command in the .wast).
 # A listed command that passes fails ConformanceTest, so remove it once fixed.
 
-# map<K, V> (the component model map feature) is not supported (#71).
-values/concat.wast:463  # map<K, V> is not supported (#71)
+# Resources passed between nested components (#70): the adapter intrinsics work, but these
+# components call the destructor through a funcref table shared between core instances, where
+# Chicory reports an indirect call type mismatch.
+resources/borrows.wast:159  # destructor through a shared table: indirect call type mismatch (#70)
+resources/multiple-resources.wast:170  # destructor through a shared table: indirect call type mismatch (#70)
 
-# async lifts (task.return) are Chicory's next feature (#16).
-values/variants.wast:83  # async: task.return (#16)
+# wasmtime-environ 48 (ADR-0010) compiles a call from a component instance into itself or an ancestor
+# to an unconditional trap ("cannot enter component instance"); newer Component Model versions allow it.
+async/cancel-delivery.wast:515  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-resumed-callback-switch.wast:151  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-resumed-callback-switch.wast:331  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-subtask.wast:261  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:97  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:281  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:460  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:607  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:699  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/dtor-context-is-zero.wast:53  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:239  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:240  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:241  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:242  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:243  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:244  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:245  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:246  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:247  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:42  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:60  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:99  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:100  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:151  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:198  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:237  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:346  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:521  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:658  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:786  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
 
-# Resources passed between nested components need adapter intrinsics Chicory lacks (#70).
-resources/borrows.wast:159  # ResourceTransferOwn (#70)
-resources/borrows.wast:162  # ResourceTransferOwn (#70)
-resources/handle-table.wast:106  # ResourceTransferOwn (#70)
-resources/handle-table.wast:211  # ResourceTransferOwn (#70)
-resources/handle-table.wast:213  # EnterSyncCall (#70)
-resources/handle-table.wast:260  # ResourceTransferOwn (#70)
-resources/multiple-resources.wast:170  # ResourceTransferOwn (#70)
+# wasmparser 0.254 (wasmtime-environ 48) does not reject a `borrow` in a `task.return` result yet.
+async/validate-task-return.wast:4  # wasmparser 0.254 accepts it
+async/validate-task-return.wast:9  # wasmparser 0.254 accepts it

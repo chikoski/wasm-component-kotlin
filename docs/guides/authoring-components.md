@@ -47,7 +47,7 @@ wasm-tools component new embedded.wasm -o my-component.wasm
 
 ## 3. 未対応機能の事前検査（`failOnUnsupportedFeatures`）
 
-Gradle プラグインでビルドする際、`wasm2ktDecompose<Name>` タスクは分解後の `plan.json` を検査し、Chicory バックエンドが未対応の機能（async、未対応の組み込み関数など）が含まれていれば警告を出します（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)、[#78](https://github.com/chikoski/wasm-component-kotlin/issues/78)）。
+Gradle プラグインでビルドする際、`wasm2ktDecompose<Name>` タスクは分解後の `plan.json` を検査し、Chicory バックエンドが未対応の機能（`map<K, V>` などの型、未対応の組み込み関数）が含まれていれば警告を出します（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)、[#78](https://github.com/chikoski/wasm-component-kotlin/issues/78)）。
 
 CI などで未対応機能の使用をビルドエラーにしたい場合は、`build.gradle.kts` で `failOnUnsupportedFeatures.set(true)` を設定します。
 

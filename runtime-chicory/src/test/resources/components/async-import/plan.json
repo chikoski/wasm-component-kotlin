@@ -1,0 +1,498 @@
+{
+  "version": 5,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": []
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": [
+        {
+          "module": "",
+          "name": "mem",
+          "kind": "memory"
+        },
+        {
+          "module": "",
+          "name": "fetch-async",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "fetch-sync",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "task.return",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "task.cancel",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "subtask.cancel",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "subtask.drop",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable-set.new",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable-set.wait",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable-set.drop",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "waitable.join",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "context.get",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "context.set",
+          "kind": "func"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 0,
+      "args": []
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 0,
+        "name": "mem"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 1,
+      "args": [
+        {
+          "module": "",
+          "name": "mem",
+          "def": {
+            "instance": 0,
+            "name": "mem",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "",
+          "name": "fetch-async",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "",
+          "name": "fetch-sync",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "",
+          "name": "task.return",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "",
+          "name": "task.cancel",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "",
+          "name": "subtask.cancel",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        },
+        {
+          "module": "",
+          "name": "subtask.drop",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable-set.new",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable-set.wait",
+          "def": {
+            "kind": "trampoline",
+            "index": 7
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable-set.drop",
+          "def": {
+            "kind": "trampoline",
+            "index": 8
+          }
+        },
+        {
+          "module": "",
+          "name": "waitable.join",
+          "def": {
+            "kind": "trampoline",
+            "index": 9
+          }
+        },
+        {
+          "module": "",
+          "name": "context.get",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-get-i32-0"
+          }
+        },
+        {
+          "module": "",
+          "name": "context.set",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-set-i32-0"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-callback",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cancellable-cb",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "lower-import",
+      "import": 0,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      },
+      "options": 3,
+      "index": 0
+    },
+    {
+      "kind": "lower-import",
+      "import": 0,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      },
+      "options": 0,
+      "index": 1
+    },
+    {
+      "kind": "task-return",
+      "instance": 0,
+      "results": [
+        {
+          "k": "u32"
+        }
+      ],
+      "resultsIndex": 0,
+      "options": 4,
+      "index": 2
+    },
+    {
+      "kind": "task-cancel",
+      "instance": 0,
+      "index": 3
+    },
+    {
+      "kind": "subtask-cancel",
+      "instance": 0,
+      "async": false,
+      "index": 4
+    },
+    {
+      "kind": "subtask-drop",
+      "instance": 0,
+      "index": 5
+    },
+    {
+      "kind": "waitable-set-new",
+      "instance": 0,
+      "index": 6
+    },
+    {
+      "kind": "waitable-set-wait",
+      "instance": 0,
+      "options": 5,
+      "index": 7
+    },
+    {
+      "kind": "waitable-set-drop",
+      "instance": 0,
+      "index": 8
+    },
+    {
+      "kind": "waitable-join",
+      "instance": 0,
+      "index": 9
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 1,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": 0,
+      "cancellable": false
+    },
+    {
+      "index": 2,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 3,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 4,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 5,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "fetch",
+      "path": []
+    }
+  ],
+  "resourceTables": [],
+  "streamTables": [],
+  "futureTables": [],
+  "errorContextTables": [],
+  "exports": [
+    {
+      "instance": null,
+      "name": "blocking-fetch",
+      "func": {
+        "instance": 1,
+        "name": "blocking-fetch",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": false
+      }
+    },
+    {
+      "instance": null,
+      "name": "cancellable",
+      "func": {
+        "instance": 1,
+        "name": "cancellable",
+        "kind": "export"
+      },
+      "options": 1,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "fetch-plus-one",
+      "func": {
+        "instance": 1,
+        "name": "fetch-plus-one",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    },
+    {
+      "instance": null,
+      "name": "fetch-sync-plus-two",
+      "func": {
+        "instance": 1,
+        "name": "fetch-sync-plus-two",
+        "kind": "export"
+      },
+      "options": 2,
+      "type": {
+        "params": [
+          {
+            "name": "x",
+            "type": {
+              "k": "u32"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "u32"
+          }
+        ],
+        "async": true
+      }
+    }
+  ]
+}
