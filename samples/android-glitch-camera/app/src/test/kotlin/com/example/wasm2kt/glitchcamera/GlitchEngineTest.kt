@@ -1,6 +1,7 @@
 package com.example.wasm2kt.glitchcamera
 
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,7 +10,7 @@ import org.junit.Test
 
 class GlitchEngineTest {
     @Test
-    fun `availablePngFilters returns non-deprecated PNG filters and default recipes validate`() {
+    fun `availablePngFilters returns non-deprecated PNG filters and default recipes validate`() = runBlocking {
         GlitchEngine().use { engine ->
             val filters = engine.availablePngFilters()
             assertTrue("Expected at least 15 PNG filters", filters.size >= 15)
@@ -30,7 +31,7 @@ class GlitchEngineTest {
     }
 
     @Test
-    fun `processFrame and captureSnapshotPng execute live session across multiple frames`() {
+    fun `processFrame and captureSnapshotPng execute live session across multiple frames`() = runBlocking {
         val width = 32
         val height = 24
         val frame1 = ByteArray(width * height * 4) { idx ->

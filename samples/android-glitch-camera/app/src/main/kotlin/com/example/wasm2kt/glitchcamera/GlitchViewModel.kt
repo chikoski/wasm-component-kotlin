@@ -10,14 +10,16 @@ import androidx.lifecycle.viewModelScope
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.glitch.FilterInfo
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
-import java.util.concurrent.Executors
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class CameraResolutionOption(
@@ -73,14 +75,12 @@ data class GlitchUiState(
 
 class GlitchViewModel : ViewModel() {
     private val engine = GlitchEngine()
-    val analysisExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "glitch-camera-worker").apply { isDaemon = true }
-    }
+    val analysisExecutor: Executor = Dispatchers.Default.asExecutor()
     private val scratchHolder = RgbaBufferHolder()
     private val processingFrame = AtomicBoolean(false)
     private val baseAssetsLoaded = AtomicBoolean(false)
 
-    // Double-buffered bitmaps so the UI thread reads one while the worker thread writes the other.
+    // Double-buffered bitmaps so the UI thread reads one while the worker coroutine writes the other.
     private var bitmapPool: Array<Bitmap?> = arrayOfNulls(2)
     private var bitmapPoolIndex: Int = 0
 
@@ -91,7 +91,7 @@ class GlitchViewModel : ViewModel() {
     val uiState: StateFlow<GlitchUiState> = _uiState.asStateFlow()
 
     init {
-        analysisExecutor.execute {
+        viewModelScope.launch {
             val filters = runCatching { engine.availablePngFilters() }.getOrDefault(emptyList())
             val defaultFilter = filters.firstOrNull { it.name == "chromatic-aberration" } ?: filters.firstOrNull()
             val defaultParams = defaultFilter?.let { RecipePresets.defaultParamsFor(it) } ?: emptyMap()
@@ -108,10 +108,10 @@ class GlitchViewModel : ViewModel() {
     fun ensureBaseAssetsLoaded(context: Context) {
         if (!baseAssetsLoaded.compareAndSet(false, true)) return
         val appContext = context.applicationContext
-        analysisExecutor.execute {
+        viewModelScope.launch(Dispatchers.Default) {
             val decoded = runCatching {
                 BitmapFactory.decodeResource(appContext.resources, R.drawable.sample_preview_base)
-            }.getOrNull() ?: return@execute
+            }.getOrNull() ?: return@launch
 
             val argbBitmap = if (decoded.config == Bitmap.Config.ARGB_8888) {
                 decoded
@@ -166,12 +166,12 @@ class GlitchViewModel : ViewModel() {
 
     /**
      * Runs a synthetic 160x120 warmup sequence through [GlitchEngine] (`fromPixels`, `reloadPixels`,
-     * `apply`, `renderRgba`, and `snapshot`) on the worker thread so Baseline Profile generation
+     * `apply`, `renderRgba`, and `snapshot`) in a coroutine so Baseline Profile generation
      * captures the AOT-compiled `png-glitch-component` hot path even without a physical camera stream.
      */
     fun runBenchmarkWarmup() {
         _uiState.update { it.copy(isBenchmarkWarmup = true) }
-        analysisExecutor.execute {
+        viewModelScope.launch(Dispatchers.Default) {
             val width = 160
             val height = 120
             val syntheticRgba = ByteArray(width * height * 4) { idx ->
@@ -214,47 +214,49 @@ class GlitchViewModel : ViewModel() {
             image.close()
             return
         }
-        try {
-            val currentState = _uiState.value
-            val mirror = currentState.lensFacing == CameraSelector.LENS_FACING_FRONT
-            val extracted = FrameConverter.extractRgba(image, mirror, scratchHolder)
-            image.close()
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val currentState = _uiState.value
+                val mirror = currentState.lensFacing == CameraSelector.LENS_FACING_FRONT
+                val extracted = FrameConverter.extractRgba(image, mirror, scratchHolder)
+                image.close()
 
-            val glitchResult = engine.processFrame(
-                width = extracted.width,
-                height = extracted.height,
-                rgba = extracted.rgbaBytes,
-            )
-            glitchResult.onSuccess { output ->
-                val targetBitmap = acquireBitmap(output.width, output.height)
-                targetBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(output.rgbaBytes))
-                synchronized(recorderLock) {
-                    val recorder = activeRecorder
-                    if (recorder != null && recorder.width == output.width && recorder.height == output.height) {
-                        runCatching { recorder.submitFrame(targetBitmap) }
+                val glitchResult = engine.processFrame(
+                    width = extracted.width,
+                    height = extracted.height,
+                    rgba = extracted.rgbaBytes,
+                )
+                glitchResult.onSuccess { output ->
+                    val targetBitmap = acquireBitmap(output.width, output.height)
+                    targetBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(output.rgbaBytes))
+                    synchronized(recorderLock) {
+                        val recorder = activeRecorder
+                        if (recorder != null && recorder.width == output.width && recorder.height == output.height) {
+                            runCatching { recorder.submitFrame(targetBitmap) }
+                        }
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            previewBitmap = targetBitmap,
+                            frameNumber = state.frameNumber + 1L,
+                            processingTimeMs = output.processingTimeMs,
+                            frameWidth = output.width,
+                            frameHeight = output.height,
+                        )
+                    }
+                }.onFailure { err ->
+                    _uiState.update { state ->
+                        state.copy(statusMessage = err.message ?: "Glitch failed")
                     }
                 }
+            } catch (t: Throwable) {
+                runCatching { image.close() }
                 _uiState.update { state ->
-                    state.copy(
-                        previewBitmap = targetBitmap,
-                        frameNumber = state.frameNumber + 1L,
-                        processingTimeMs = output.processingTimeMs,
-                        frameWidth = output.width,
-                        frameHeight = output.height,
-                    )
+                    state.copy(statusMessage = t.message ?: "Frame error")
                 }
-            }.onFailure { err ->
-                _uiState.update { state ->
-                    state.copy(statusMessage = err.message ?: "Glitch failed")
-                }
+            } finally {
+                processingFrame.set(false)
             }
-        } catch (t: Throwable) {
-            runCatching { image.close() }
-            _uiState.update { state ->
-                state.copy(statusMessage = t.message ?: "Frame error")
-            }
-        } finally {
-            processingFrame.set(false)
         }
     }
 
@@ -412,19 +414,19 @@ class GlitchViewModel : ViewModel() {
 
     fun captureStillPng(context: Context) {
         val appContext = context.applicationContext
-        analysisExecutor.execute {
+        viewModelScope.launch {
             val snapResult = engine.captureSnapshotPng()
             snapResult.onSuccess { pngBytes ->
-                viewModelScope.launch(Dispatchers.IO) {
-                    val saveResult = MediaStoreHelper.savePngSnapshot(appContext, pngBytes)
-                    _uiState.update { state ->
-                        state.copy(
-                            statusMessage = saveResult.fold(
-                                onSuccess = { "Saved PNG (${pngBytes.size / 1024} KB) to Pictures/GlitchCamera" },
-                                onFailure = { "PNG save failed: ${it.message}" },
-                            ),
-                        )
-                    }
+                val saveResult = withContext(Dispatchers.IO) {
+                    MediaStoreHelper.savePngSnapshot(appContext, pngBytes)
+                }
+                _uiState.update { state ->
+                    state.copy(
+                        statusMessage = saveResult.fold(
+                            onSuccess = { "Saved PNG (${pngBytes.size / 1024} KB) to Pictures/GlitchCamera" },
+                            onFailure = { "PNG save failed: ${it.message}" },
+                        ),
+                    )
                 }
             }.onFailure { err ->
                 _uiState.update { state ->
@@ -495,7 +497,7 @@ class GlitchViewModel : ViewModel() {
         seedMode: SeedMode,
         filterOption: PngFilterOption,
     ) {
-        analysisExecutor.execute {
+        viewModelScope.launch {
             engine.updateConfig(
                 recipeYaml = yaml,
                 seed = seed,
@@ -522,9 +524,6 @@ class GlitchViewModel : ViewModel() {
             activeRecorder?.close()
             activeRecorder = null
         }
-        analysisExecutor.execute {
-            engine.close()
-        }
-        analysisExecutor.shutdown()
+        engine.close()
     }
 }

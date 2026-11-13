@@ -14,6 +14,11 @@ cargo build --manifest-path "$PNG_GLITCH_DIR/Cargo.toml" \
   --release
 
 mkdir -p "$SCRIPT_DIR/app/src/main/wasm"
-"$WASM_TOOLS_BIN" component new \
-  "$PNG_GLITCH_DIR/target/wasm32-unknown-unknown/release/png_glitch_component.wasm" \
-  -o "$SCRIPT_DIR/app/src/main/wasm/png-glitch-component.wasm"
+CORE_WASM="$PNG_GLITCH_DIR/target/wasm32-unknown-unknown/release/png_glitch_component.wasm"
+OUT_WASM="$SCRIPT_DIR/app/src/main/wasm/png-glitch-component.wasm"
+if ! "$WASM_TOOLS_BIN" component new "$CORE_WASM" -o "$OUT_WASM" 2>/dev/null; then
+  cargo run --offline --manifest-path "$PNG_GLITCH_DIR/Cargo.toml" \
+    -p png-glitch-component \
+    --example componentize -- \
+    "$CORE_WASM" "$OUT_WASM"
+fi

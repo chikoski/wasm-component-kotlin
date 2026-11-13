@@ -15,6 +15,8 @@ import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.li
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.Session as LiveSession
 import com.example.wasm2kt.glitchcamera.pngglitch.openSession
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class PngFilterOption(
     val label: String,
@@ -36,7 +38,7 @@ data class GlitchFrameOutput(
 )
 
 class GlitchEngine : AutoCloseable {
-    private val lock = Any()
+    private val mutex = Mutex()
     private var worldSession: WorldSession? = null
     private var liveSession: LiveSession? = null
 
@@ -53,7 +55,7 @@ class GlitchEngine : AutoCloseable {
     private var currentSeedMode: SeedMode = SeedMode.PER_FRAME
     private var recipeDirty: Boolean = true
 
-    fun availablePngFilters(): List<FilterInfo> = synchronized(lock) {
+    suspend fun availablePngFilters(): List<FilterInfo> = mutex.withLock {
         context(ensureWorldSessionLocked()) {
             listFilters().filter { info ->
                 !info.deprecated && info.formats.contains(Format.PNG)
@@ -61,7 +63,7 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    fun validate(recipeYaml: String): GlitchError? = synchronized(lock) {
+    suspend fun validate(recipeYaml: String): GlitchError? = mutex.withLock {
         context(ensureWorldSessionLocked()) {
             when (val res = validateRecipe(recipeYaml)) {
                 is WitResult.Ok -> null
@@ -70,12 +72,12 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    fun updateConfig(
+    suspend fun updateConfig(
         recipeYaml: String = currentRecipeYaml,
         seed: ULong = currentSeed,
         seedMode: SeedMode = currentSeedMode,
         filterOption: PngFilterOption = currentFilterOption,
-    ) = synchronized(lock) {
+    ) = mutex.withLock {
         if (filterOption != currentFilterOption) {
             currentFilterOption = filterOption
             liveSession?.close()
@@ -89,7 +91,7 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    fun processFrame(width: Int, height: Int, rgba: ByteArray): Result<GlitchFrameOutput> = synchronized(lock) {
+    suspend fun processFrame(width: Int, height: Int, rgba: ByteArray): Result<GlitchFrameOutput> = mutex.withLock {
         val expectedBytes = width * height * 4
         if (rgba.size != expectedBytes) {
             return Result.failure(
@@ -123,7 +125,7 @@ class GlitchEngine : AutoCloseable {
         )
     }
 
-    fun captureSnapshotPng(): Result<ByteArray> = synchronized(lock) {
+    suspend fun captureSnapshotPng(): Result<ByteArray> = mutex.withLock {
         val session = liveSession
             ?: return Result.failure(IllegalStateException("No active camera frame in live session"))
         when (val snapRes = session.snapshot()) {
@@ -132,13 +134,13 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    fun generateThumbnails(
+    suspend fun generateThumbnails(
         width: Int,
         height: Int,
         baseRgba: ByteArray,
         recipes: Map<String, String>,
         seed: ULong = 42uL,
-    ): Map<String, ByteArray> = synchronized(lock) {
+    ): Map<String, ByteArray> = mutex.withLock {
         val expectedBytes = width * height * 4
         if (baseRgba.size != expectedBytes || recipes.isEmpty()) {
             return emptyMap()
@@ -176,7 +178,7 @@ class GlitchEngine : AutoCloseable {
         results
     }
 
-    private fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
+    private suspend fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
         val existing = liveSession
         if (existing != null && !existing.isClosed && currentWidth == width && currentHeight == height) {
             return when (val reloadRes = existing.reloadPixels(rgba)) {
@@ -206,7 +208,7 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    override fun close() = synchronized(lock) {
+    override fun close() {
         liveSession?.close()
         liveSession = null
         worldSession?.close()
