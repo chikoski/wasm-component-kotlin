@@ -4,20 +4,39 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import wasm2kt.runtime.Linker
 import wasm2kt.runtime.WitWriter
 import wasm2kt.wasi.wasi.cli.terminal_input.TerminalInput
 import wasm2kt.wasi.wasi.cli.terminal_output.TerminalOutput
 import wasm2kt.wasi.wasi.cli.types.ErrorCode
 import wasm2kt.wasi.wasi.clocks.system_clock.Instant
+import wasm2kt.wasi.wasi.filesystem.types.Advice
+import wasm2kt.wasi.wasi.filesystem.types.Descriptor
+import wasm2kt.wasi.wasi.filesystem.types.DescriptorFlags
+import wasm2kt.wasi.wasi.filesystem.types.DescriptorStat
+import wasm2kt.wasi.wasi.filesystem.types.DescriptorType
+import wasm2kt.wasi.wasi.filesystem.types.DirectoryEntry
+import wasm2kt.wasi.wasi.filesystem.types.ErrorCode as FsErrorCode
+import wasm2kt.wasi.wasi.filesystem.types.Filesize
+import wasm2kt.wasi.wasi.filesystem.types.MetadataHashValue
+import wasm2kt.wasi.wasi.filesystem.types.NewTimestamp
+import wasm2kt.wasi.wasi.filesystem.types.OpenFlags
+import wasm2kt.wasi.wasi.filesystem.types.PathFlags
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.Path
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.Instant as JavaInstant
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -157,6 +176,12 @@ class Wasi03Test {
             "wasi:cli/terminal-stdin@0.3.0#get-terminal-stdin",
             "wasi:cli/terminal-stdout@0.3.0#get-terminal-stdout",
             "wasi:cli/terminal-stderr@0.3.0#get-terminal-stderr",
+            "wasi:filesystem/preopens@0.3.0#get-directories",
+            "wasi:filesystem/types@0.3.0#[method]descriptor.open-at",
+            "wasi:filesystem/types@0.3.0#[method]descriptor.read-via-stream",
+            "wasi:filesystem/types@0.3.0#[method]descriptor.write-via-stream",
+            "wasi:filesystem/types@0.3.0#[method]descriptor.read-directory",
+            "wasi:filesystem/types@0.3.0#[resource-drop]descriptor",
         )
         for (key in expectedKeys) {
             assertTrue(linker.isDefined(key), "Missing WASI 0.3 linker key: $key")
@@ -166,5 +191,167 @@ class Wasi03Test {
         assertEquals(2, count)
         assertEquals("app", envReader.string())
         assertEquals("arg1", envReader.string())
+    }
+
+    @Test
+    fun `default Wasi03 exposes zero preopens`() {
+        val wasi = Wasi03.builder().build()
+        assertTrue(wasi.preopens.getDirectories().isEmpty())
+    }
+
+    @Test
+    fun `declarative mounts DSL configures readOnly, readWrite, mount block, and custom descriptor`(@TempDir tempDir: Path) = runBlocking {
+        val roDir = Files.createDirectories(tempDir.resolve("ro"))
+        val rwDir = Files.createDirectories(tempDir.resolve("rw"))
+        val cfgDir = Files.createDirectories(tempDir.resolve("cfg"))
+        Files.writeString(roDir.resolve("hello.txt"), "readonly-content")
+
+        val customDescriptor = object : Descriptor {
+            override fun readViaStream(offset: Filesize) = Tuple2(
+                flowOf("virtual-bytes".encodeToByteArray()),
+                CompletableDeferred<WitResult<Unit, FsErrorCode>>(WitResult.Ok(Unit)),
+            )
+            override fun writeViaStream(data: Flow<ByteArray>, offset: Filesize) =
+                CompletableDeferred<WitResult<Unit, FsErrorCode>>(WitResult.Err(FsErrorCode.ReadOnly))
+            override fun appendViaStream(data: Flow<ByteArray>) =
+                CompletableDeferred<WitResult<Unit, FsErrorCode>>(WitResult.Err(FsErrorCode.ReadOnly))
+            override suspend fun advise(offset: Filesize, length: Filesize, advice: Advice) = WitResult.Ok(Unit)
+            override suspend fun syncData() = WitResult.Ok(Unit)
+            override suspend fun getFlags() = WitResult.Ok(DescriptorFlags.READ)
+            override suspend fun getType() = WitResult.Ok(DescriptorType.Directory)
+            override suspend fun setSize(size: Filesize) = WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun setTimes(dataAccessTimestamp: NewTimestamp, dataModificationTimestamp: NewTimestamp) =
+                WitResult.Err(FsErrorCode.ReadOnly)
+            override fun readDirectory() = Tuple2(
+                emptyFlow<DirectoryEntry>(),
+                CompletableDeferred<WitResult<Unit, FsErrorCode>>(WitResult.Ok(Unit)),
+            )
+            override suspend fun sync() = WitResult.Ok(Unit)
+            override suspend fun createDirectoryAt(path: String) = WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun stat() = WitResult.Err(FsErrorCode.Unsupported)
+            override suspend fun statAt(pathFlags: PathFlags, path: String) = WitResult.Err(FsErrorCode.Unsupported)
+            override suspend fun setTimesAt(pathFlags: PathFlags, path: String, dataAccessTimestamp: NewTimestamp, dataModificationTimestamp: NewTimestamp) =
+                WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun linkAt(oldPathFlags: PathFlags, oldPath: String, newDescriptor: Descriptor, newPath: String) =
+                WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun openAt(pathFlags: PathFlags, path: String, openFlags: OpenFlags, flags: DescriptorFlags) =
+                WitResult.Err(FsErrorCode.NoEntry)
+            override suspend fun readlinkAt(path: String) = WitResult.Err(FsErrorCode.Unsupported)
+            override suspend fun removeDirectoryAt(path: String) = WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun renameAt(oldPath: String, newDescriptor: Descriptor, newPath: String) =
+                WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun symlinkAt(oldPath: String, newPath: String) = WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun unlinkFileAt(path: String) = WitResult.Err(FsErrorCode.ReadOnly)
+            override suspend fun isSameObject(other: Descriptor) = this === other
+            override suspend fun metadataHash() = WitResult.Ok(MetadataHashValue(1uL, 2uL))
+            override suspend fun metadataHashAt(pathFlags: PathFlags, path: String) = WitResult.Err(FsErrorCode.NoEntry)
+            override fun close() {}
+        }
+
+        val wasi = Wasi03.builder().apply {
+            mounts {
+                readOnly("/ro", roDir)
+                readWrite("/rw", rwDir)
+                mount("/cfg") {
+                    hostPath = cfgDir
+                    readOnly = true
+                }
+                custom("/virtual", customDescriptor)
+            }
+        }.build()
+
+        val dirs = wasi.preopens.getDirectories()
+        assertEquals(listOf("/ro", "/rw", "/cfg", "/virtual"), dirs.map { it.f1 })
+
+        val roRoot = dirs[0].f0
+        val rwRoot = dirs[1].f0
+        val virtualRoot = dirs[3].f0
+        try {
+            val readFile = roRoot.openAt(PathFlags.NONE, "hello.txt", OpenFlags.NONE, DescriptorFlags.READ).getOrThrow()
+            readFile.use { d ->
+                val (stream, future) = d.readViaStream(9uL)
+                val data = stream.toList().fold(ByteArray(0)) { a, b -> a + b }
+                assertEquals(WitResult.Ok(Unit), future.await())
+                assertEquals("content", data.decodeToString())
+            }
+            assertEquals(
+                FsErrorCode.ReadOnly,
+                roRoot.openAt(PathFlags.NONE, "new.txt", OpenFlags.CREATE, DescriptorFlags.WRITE).errorOrNull(),
+            )
+            assertEquals(
+                FsErrorCode.ReadOnly,
+                roRoot.createDirectoryAt("subdir").errorOrNull(),
+            )
+            val created = rwRoot.openAt(PathFlags.NONE, "out.txt", OpenFlags.CREATE or OpenFlags.TRUNCATE, DescriptorFlags.READ or DescriptorFlags.WRITE).getOrThrow()
+            created.use { d ->
+                assertEquals(WitResult.Ok(Unit), d.writeViaStream(flowOf("hello".encodeToByteArray()), 0uL).await())
+                assertEquals(WitResult.Ok(Unit), d.appendViaStream(flowOf(" world".encodeToByteArray())).await())
+            }
+            assertEquals("hello world", Files.readString(rwDir.resolve("out.txt")))
+            assertSame(customDescriptor, virtualRoot)
+            val (vStream, vFuture) = virtualRoot.readViaStream(0uL)
+            assertEquals("virtual-bytes", vStream.toList().fold(ByteArray(0)) { a, b -> a + b }.decodeToString())
+            assertEquals(WitResult.Ok(Unit), vFuture.await())
+        } finally {
+            dirs.forEach { it.f0.close() }
+        }
+    }
+
+    @Test
+    fun `WasiPathDescriptor enforces file and directory operations and rejects sandbox escapes`(@TempDir tempDir: Path) = runBlocking {
+        val outsideSecret = tempDir.resolve("secret.txt")
+        Files.writeString(outsideSecret, "top-secret")
+        val sandboxDir = Files.createDirectories(tempDir.resolve("sandbox"))
+        Files.createSymbolicLink(sandboxDir.resolve("abs-escape"), outsideSecret.toAbsolutePath())
+        Files.createSymbolicLink(sandboxDir.resolve("rel-escape"), Path.of("../secret.txt"))
+        Files.createSymbolicLink(sandboxDir.resolve("good-link"), Path.of("sub/note.txt"))
+
+        val root = WasiPathDescriptor.createRoot(sandboxDir, readOnly = false)
+        try {
+            assertEquals(WitResult.Ok(Unit), root.createDirectoryAt("sub"))
+            val note = root.openAt(PathFlags.NONE, "sub/note.txt", OpenFlags.CREATE, DescriptorFlags.READ or DescriptorFlags.WRITE).getOrThrow()
+            note.use { f ->
+                assertEquals(WitResult.Ok(Unit), f.writeViaStream(flowOf("abcdef".encodeToByteArray()), 0uL).await())
+                assertEquals(WitResult.Ok(Unit), f.setSize(3uL))
+                val st = f.stat().getOrThrow()
+                assertEquals(3uL, st.size)
+                assertEquals(DescriptorType.RegularFile, st.type)
+                assertEquals(WitResult.Ok(Unit), f.setTimes(NewTimestamp.Now, NewTimestamp.Timestamp(Instant(1_700_000_000L, 0u))))
+                assertTrue(f.isSameObject(f))
+                assertTrue(f.metadataHash() is WitResult.Ok)
+            }
+
+            // Read via valid relative symlink inside sandbox
+            val linked = root.openAt(PathFlags.SYMLINK_FOLLOW, "good-link", OpenFlags.NONE, DescriptorFlags.READ).getOrThrow()
+            linked.use { f ->
+                val (stream, future) = f.readViaStream(0uL)
+                assertEquals("abc", stream.toList().fold(ByteArray(0)) { a, b -> a + b }.decodeToString())
+                assertEquals(WitResult.Ok(Unit), future.await())
+            }
+            assertEquals(WitResult.Ok("sub/note.txt"), root.readlinkAt("good-link"))
+
+            // Directory listing
+            val (dirStream, dirFuture) = root.readDirectory()
+            val names = dirStream.toList().map { it.name }.sorted()
+            assertEquals(WitResult.Ok(Unit), dirFuture.await())
+            assertEquals(listOf("abs-escape", "good-link", "rel-escape", "sub"), names)
+
+            // Rename & remove operations
+            assertEquals(WitResult.Ok(Unit), root.renameAt("sub/note.txt", root, "sub/renamed.txt"))
+            assertEquals(WitResult.Ok(Unit), root.unlinkFileAt("sub/renamed.txt"))
+            assertEquals(WitResult.Ok(Unit), root.removeDirectoryAt("sub"))
+
+            // Sandbox escapes MUST fail with NotPermitted / Invalid
+            assertEquals(FsErrorCode.NotPermitted, root.openAt(PathFlags.NONE, "/etc/passwd", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.openAt(PathFlags.NONE, "../secret.txt", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.openAt(PathFlags.NONE, "a\\..\\../secret.txt", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.Invalid, root.openAt(PathFlags.NONE, "bad\u0000name", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.openAt(PathFlags.SYMLINK_FOLLOW, "abs-escape", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.openAt(PathFlags.SYMLINK_FOLLOW, "rel-escape", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.symlinkAt("/etc/passwd", "bad-link").errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.symlinkAt("../secret.txt", "bad-rel-link").errorOrNull())
+        } finally {
+            root.close()
+        }
     }
 }

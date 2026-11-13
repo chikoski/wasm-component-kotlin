@@ -34,10 +34,14 @@ import wasm2kt.wasi.wasi.cli.terminal_stdin.add
 import wasm2kt.wasi.wasi.cli.terminal_stdout.TerminalStdout
 import wasm2kt.wasi.wasi.cli.terminal_stdout.add
 import wasm2kt.wasi.wasi.cli.types.ErrorCode
+import wasm2kt.wasi.wasi.filesystem.preopens.Preopens
+import wasm2kt.wasi.wasi.filesystem.types.Descriptor
+import wasm2kt.wasi.wasi.filesystem.types.Types as FilesystemTypes
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Path
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.ZoneId
@@ -158,7 +162,7 @@ class WasiTerminalStderr(
     override fun getTerminalStderr(): TerminalOutput? = terminal()
 }
 
-/** Configuration bundle for WASI 0.3 core interfaces (`wasi:random`, `wasi:clocks`, `wasi:cli`). */
+/** Configuration bundle for WASI 0.3 core interfaces (`wasi:random`, `wasi:clocks`, `wasi:cli`, `wasi:filesystem`). */
 class Wasi03 private constructor(
     val random: wasm2kt.wasi.wasi.random.random.Random,
     val insecureRandom: wasm2kt.wasi.wasi.random.insecure.Insecure,
@@ -176,6 +180,8 @@ class Wasi03 private constructor(
     val terminalStdin: TerminalStdin,
     val terminalStdout: TerminalStdout,
     val terminalStderr: TerminalStderr,
+    val filesystemTypes: FilesystemTypes,
+    val preopens: Preopens,
 ) {
     /** Registers all configured WASI 0.3 host implementations on [linker]. */
     fun registerOn(linker: Linker): Linker = linker.apply {
@@ -193,6 +199,7 @@ class Wasi03 private constructor(
             terminalStdout = terminalStdout,
             terminalStderr = terminalStderr,
         )
+        addWasiFilesystem(WasiFilesystem(types = filesystemTypes, preopens = preopens))
     }
 
     /** Builder for [Wasi03] host configuration. */
@@ -206,6 +213,9 @@ class Wasi03 private constructor(
         var secureRandom: SecureRandom = SecureRandom()
         var clock: Clock = Clock.systemUTC()
         var zoneSupplier: () -> ZoneId = ZoneId::systemDefault
+        var filesystemTypes: FilesystemTypes? = null
+        var preopens: Preopens? = null
+        private val mounts = mutableListOf<WasiMount>()
 
         fun env(vararg entries: Pair<String, String>) {
             environment = entries.toList()
@@ -221,6 +231,22 @@ class Wasi03 private constructor(
 
         fun stdin(bytes: ByteArray) {
             stdin = { ByteArrayInputStream(bytes) }
+        }
+
+        fun mounts(configure: WasiMountsBuilder.() -> Unit): Builder = apply {
+            mounts.addAll(WasiMountsBuilder().apply(configure).build())
+        }
+
+        fun mount(
+            guestPath: String,
+            hostPath: Path,
+            readOnly: Boolean = false,
+        ): Builder = apply {
+            mounts.add(WasiMount(guestPath, hostPath, readOnly))
+        }
+
+        fun mount(guestPath: String, descriptor: () -> Descriptor): Builder = apply {
+            mounts.add(WasiMount(guestPath, descriptor))
         }
 
         fun build(): Wasi03 = Wasi03(
@@ -240,6 +266,8 @@ class Wasi03 private constructor(
             terminalStdin = WasiTerminalStdin(),
             terminalStdout = WasiTerminalStdout(),
             terminalStderr = WasiTerminalStderr(),
+            filesystemTypes = filesystemTypes ?: WasiFilesystemTypes(),
+            preopens = preopens ?: WasiPreopens(mounts.toList()),
         )
     }
 

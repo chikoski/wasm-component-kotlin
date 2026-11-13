@@ -146,12 +146,14 @@ fun <T> witFuture(backend: ComponentBackend, handle: Int, decode: (WitReader) ->
 /** The stream [handle] on [backend], read in chunks as it is collected; it can be collected once. */
 fun <T> witStream(backend: ComponentBackend, handle: Int, decode: (WitReader) -> List<T>): Flow<T> {
     val collected = AtomicBoolean(false)
+    val dropped = AtomicBoolean(false)
     val resources = HostResourceTable.currentOrNull()
-    return flow {
+    val delegate = flow {
         check(collected.compareAndSet(false, true)) { "A stream returned by the component can be collected only once" }
         var ended = false
         try {
             while (true) {
+                if (dropped.get()) break
                 val r = backend.bindSuspending {
                     if (resources != null) resources.bindSuspending { backend.readStreamSuspending(handle, 64) }
                     else backend.readStreamSuspending(handle, 64)
@@ -167,7 +169,16 @@ fun <T> witStream(backend: ComponentBackend, handle: Int, decode: (WitReader) ->
             }
         } finally {
             // Stopped early: tell the component, which sees its writes fail with DROPPED.
-            if (!ended) runCatching { backend.dropReadable(handle) }
+            if (!ended && dropped.compareAndSet(false, true)) {
+                runCatching { backend.dropReadable(handle) }
+            }
+        }
+    }
+    return object : Flow<T> by delegate, AutoCloseable {
+        override fun close() {
+            if (dropped.compareAndSet(false, true)) {
+                runCatching { backend.dropReadable(handle) }
+            }
         }
     }
 }

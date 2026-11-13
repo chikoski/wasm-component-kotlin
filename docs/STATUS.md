@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-13（#98 / #13、WASI 0.3 コアインターフェース） / 対象ブランチ: `main`
+> 最終更新: 2026-11-13（#99 / #13、WASI 0.3 `wasi:filesystem` ホスト実装） / 対象ブランチ: `main`
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -68,7 +68,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 未検証・既知の制約
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
-* Chicory バックエンドの未対応機能: WASI 0.3 の `filesystem` / `sockets` / `http`（#99〜#101）、`map<K, V>`（#71）。いずれも使用時に例外になる。plan から分かるものは、Gradle プラグインがビルド時に警告する（`failOnUnsupportedFeatures` でエラーにもできる。#39）。WASI 0.3 の `random` / `clocks` / `cli` は `runtime-wasi` で実装済み（#98）
+* Chicory バックエンドの未対応機能: WASI 0.3 の `sockets` / `http`（#100〜#101）、`map<K, V>`（#71）。いずれも使用時に例外になる。plan から分かるものは、Gradle プラグインがビルド時に警告する（`failOnUnsupportedFeatures` でエラーにもできる。#39）。WASI 0.3 の `random` / `clocks` / `cli` / `filesystem` は `runtime-wasi` で実装済み（#98、#99、[ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md)）
 * 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うとエラーになる（Kotlin の package にバージョンを含めないため。[ADR-0011](adr/0011-qualified-interface-keys.md)）
 * 1 回の生成で扱う world は 1 つ（world の API を package のトップレベルに置くため。[ADR-0012](adr/0012-world-at-package-top-level.md)）。複数の world は `--world` で選び、別々の package に生成する。import した interface の型は、`--interfaces-only` と `--with` で world の間で共有できる（[ADR-0014](adr/0014-interface-mappings.md)）
 * 既存の package への対応付け（`with`）は import した interface だけ。export した interface の型は、world ごとに生成される（ADR-0014）
@@ -105,7 +105,7 @@ QC レビュー（2026-11-04）で見つかったものも片付けました（�
 
 | 順 | Issue | ID | 内容 |
 | :--- | :--- | :--- | :--- |
-| 1 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。`random` / `clocks` / `cli` を `runtime-wasi` に実装済み #98。残りは #99〜#102） |
+| 1 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。`random` / `clocks` / `cli` を #98、`filesystem` を #99 で `runtime-wasi` に実装済み。残りは #100〜#102） |
 
 ### P2
 
