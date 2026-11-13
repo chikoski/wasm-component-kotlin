@@ -3,19 +3,9 @@
     {
       "name": "imports",
       "imports": {
-        "interface-7": {
+        "interface-9": {
           "interface": {
-            "id": 7,
-            "stability": {
-              "stable": {
-                "since": "0.3.0"
-              }
-            }
-          }
-        },
-        "interface-8": {
-          "interface": {
-            "id": 8,
+            "id": 9,
             "stability": {
               "stable": {
                 "since": "0.3.0"
@@ -26,16 +16,6 @@
         "interface-10": {
           "interface": {
             "id": 10,
-            "stability": {
-              "stable": {
-                "since": "0.3.0"
-              }
-            }
-          }
-        },
-        "interface-11": {
-          "interface": {
-            "id": 11,
             "stability": {
               "stable": {
                 "since": "0.3.0"
@@ -113,6 +93,26 @@
             }
           }
         },
+        "interface-19": {
+          "interface": {
+            "id": 19,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-20": {
+          "interface": {
+            "id": 20,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
         "interface-0": {
           "interface": {
             "id": 0,
@@ -153,9 +153,9 @@
             }
           }
         },
-        "interface-6": {
+        "interface-4": {
           "interface": {
-            "id": 6,
+            "id": 4,
             "stability": {
               "stable": {
                 "since": "0.3.0"
@@ -173,9 +173,29 @@
             }
           }
         },
-        "interface-4": {
+        "interface-8": {
           "interface": {
-            "id": 4,
+            "id": 8,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-7": {
+          "interface": {
+            "id": 7,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-6": {
+          "interface": {
+            "id": 6,
             "stability": {
               "stable": {
                 "since": "0.3.0"
@@ -185,7 +205,7 @@
         }
       },
       "exports": {},
-      "package": 2,
+      "package": 3,
       "stability": {
         "stable": {
           "since": "0.3.0"
@@ -400,6 +420,733 @@
       "package": 0
     },
     {
+      "name": "types",
+      "types": {
+        "instant": 8,
+        "filesize": 9,
+        "descriptor-type": 11,
+        "descriptor-flags": 12,
+        "path-flags": 13,
+        "open-flags": 14,
+        "link-count": 15,
+        "descriptor-stat": 17,
+        "new-timestamp": 18,
+        "directory-entry": 19,
+        "error-code": 20,
+        "advice": 21,
+        "metadata-hash-value": 22,
+        "descriptor": 23
+      },
+      "functions": {
+        "[method]descriptor.read-via-stream": {
+          "name": "[method]descriptor.read-via-stream",
+          "kind": {
+            "method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "offset",
+              "type": 9
+            }
+          ],
+          "result": 28,
+          "docs": {
+            "contents": "Return a stream for reading from a file.\n\nMultiple read, write, and append streams may be active on the same open\nfile and they do not interfere with each other.\n\nThis function returns a `stream` which provides the data received from the\nfile, and a `future` providing additional error information in case an\nerror is encountered.\n\nIf no error is encountered, `stream.read` on the `stream` will return\n`read-status::closed` with no `error-context` and the future resolves to\nthe value `ok`. If an error is encountered, `stream.read` on the\n`stream` returns `read-status::closed` with an `error-context` and the future\nresolves to `err` with an `error-code`.\n\nNote: This is similar to `pread` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.write-via-stream": {
+          "name": "[method]descriptor.write-via-stream",
+          "kind": {
+            "method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "data",
+              "type": 25
+            },
+            {
+              "name": "offset",
+              "type": 9
+            }
+          ],
+          "result": 27,
+          "docs": {
+            "contents": "Return a stream for writing to a file, if available.\n\nMay fail with an error-code describing why the file cannot be written.\n\nIt is valid to write past the end of a file; the file is extended to the\nextent of the write, with bytes between the previous end and the start of\nthe write set to zero.\n\nThis function returns once either full contents of the stream are\nwritten or an error is encountered.\n\nNote: This is similar to `pwrite` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.append-via-stream": {
+          "name": "[method]descriptor.append-via-stream",
+          "kind": {
+            "method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "data",
+              "type": 25
+            }
+          ],
+          "result": 27,
+          "docs": {
+            "contents": "Return a stream for appending to a file, if available.\n\nMay fail with an error-code describing why the file cannot be appended.\n\nThis function returns once either full contents of the stream are\nwritten or an error is encountered.\n\nNote: This is similar to `write` with `O_APPEND` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.advise": {
+          "name": "[method]descriptor.advise",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "offset",
+              "type": 9
+            },
+            {
+              "name": "length",
+              "type": 9
+            },
+            {
+              "name": "advice",
+              "type": 21
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Provide file advisory information on a descriptor.\n\nThis is similar to `posix_fadvise` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.sync-data": {
+          "name": "[method]descriptor.sync-data",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Synchronize the data of a file to disk.\n\nThis function succeeds with no effect if the file descriptor is not\nopened for writing.\n\nNote: This is similar to `fdatasync` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.get-flags": {
+          "name": "[method]descriptor.get-flags",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 29,
+          "docs": {
+            "contents": "Get flags associated with a descriptor.\n\nNote: This returns similar flags to `fcntl(fd, F_GETFL)` in POSIX.\n\nNote: This returns the value that was the `fs_flags` value returned\nfrom `fdstat_get` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.get-type": {
+          "name": "[method]descriptor.get-type",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 30,
+          "docs": {
+            "contents": "Get the dynamic type of a descriptor.\n\nNote: This returns the same value as the `type` field of the `fd-stat`\nreturned by `stat`, `stat-at` and similar.\n\nNote: This returns similar flags to the `st_mode & S_IFMT` value provided\nby `fstat` in POSIX.\n\nNote: This returns the value that was the `fs_filetype` value returned\nfrom `fdstat_get` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.set-size": {
+          "name": "[method]descriptor.set-size",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "size",
+              "type": 9
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Adjust the size of an open file. If this increases the file's size, the\nextra bytes are filled with zeros.\n\nNote: This was called `fd_filestat_set_size` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.set-times": {
+          "name": "[method]descriptor.set-times",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "data-access-timestamp",
+              "type": 18
+            },
+            {
+              "name": "data-modification-timestamp",
+              "type": 18
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Adjust the timestamps of an open file or directory.\n\nNote: This is similar to `futimens` in POSIX.\n\nNote: This was called `fd_filestat_set_times` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.read-directory": {
+          "name": "[method]descriptor.read-directory",
+          "kind": {
+            "method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 32,
+          "docs": {
+            "contents": "Read directory entries from a directory.\n\nOn filesystems where directories contain entries referring to themselves\nand their parents, often named `.` and `..` respectively, these entries\nare omitted.\n\nThis always returns a new stream which starts at the beginning of the\ndirectory. Multiple streams may be active on the same directory, and they\ndo not interfere with each other.\n\nThis function returns a future, which will resolve to an error code if\nreading full contents of the directory fails."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.sync": {
+          "name": "[method]descriptor.sync",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Synchronize the data and metadata of a file to disk.\n\nThis function succeeds with no effect if the file descriptor is not\nopened for writing.\n\nNote: This is similar to `fsync` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.create-directory-at": {
+          "name": "[method]descriptor.create-directory-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Create a directory.\n\nNote: This is similar to `mkdirat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.stat": {
+          "name": "[method]descriptor.stat",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 33,
+          "docs": {
+            "contents": "Return the attributes of an open file or directory.\n\nNote: This is similar to `fstat` in POSIX, except that it does not return\ndevice and inode information. For testing whether two descriptors refer to\nthe same underlying filesystem object, use `is-same-object`. To obtain\nadditional data that can be used do determine whether a file has been\nmodified, use `metadata-hash`.\n\nNote: This was called `fd_filestat_get` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.stat-at": {
+          "name": "[method]descriptor.stat-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path-flags",
+              "type": 13
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 33,
+          "docs": {
+            "contents": "Return the attributes of a file or directory.\n\nNote: This is similar to `fstatat` in POSIX, except that it does not\nreturn device and inode information. See the `stat` description for a\ndiscussion of alternatives.\n\nNote: This was called `path_filestat_get` in earlier versions of WASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.set-times-at": {
+          "name": "[method]descriptor.set-times-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path-flags",
+              "type": 13
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "data-access-timestamp",
+              "type": 18
+            },
+            {
+              "name": "data-modification-timestamp",
+              "type": 18
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Adjust the timestamps of a file or directory.\n\nNote: This is similar to `utimensat` in POSIX.\n\nNote: This was called `path_filestat_set_times` in earlier versions of\nWASI."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.link-at": {
+          "name": "[method]descriptor.link-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "old-path-flags",
+              "type": 13
+            },
+            {
+              "name": "old-path",
+              "type": "string"
+            },
+            {
+              "name": "new-descriptor",
+              "type": 24
+            },
+            {
+              "name": "new-path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Create a hard link.\n\nFails with `error-code::no-entry` if the old path does not exist,\nwith `error-code::exist` if the new path already exists, and\n`error-code::not-permitted` if the old path is not a file.\n\nNote: This is similar to `linkat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.open-at": {
+          "name": "[method]descriptor.open-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path-flags",
+              "type": 13
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "open-flags",
+              "type": 14
+            },
+            {
+              "name": "flags",
+              "type": 12
+            }
+          ],
+          "result": 35,
+          "docs": {
+            "contents": "Open a file or directory.\n\nIf `flags` contains `descriptor-flags::mutate-directory`, and the base\ndescriptor doesn't have `descriptor-flags::mutate-directory` set,\n`open-at` fails with `error-code::read-only`.\n\nIf `flags` contains `write` or `mutate-directory`, or `open-flags`\ncontains `truncate` or `create`, and the base descriptor doesn't have\n`descriptor-flags::mutate-directory` set, `open-at` fails with\n`error-code::read-only`.\n\nNote: This is similar to `openat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.readlink-at": {
+          "name": "[method]descriptor.readlink-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 36,
+          "docs": {
+            "contents": "Read the contents of a symbolic link.\n\nIf the contents contain an absolute or rooted path in the underlying\nfilesystem, this function fails with `error-code::not-permitted`.\n\nNote: This is similar to `readlinkat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.remove-directory-at": {
+          "name": "[method]descriptor.remove-directory-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Remove a directory.\n\nReturn `error-code::not-empty` if the directory is not empty.\n\nNote: This is similar to `unlinkat(fd, path, AT_REMOVEDIR)` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.rename-at": {
+          "name": "[method]descriptor.rename-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "old-path",
+              "type": "string"
+            },
+            {
+              "name": "new-descriptor",
+              "type": 24
+            },
+            {
+              "name": "new-path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Rename a filesystem object.\n\nNote: This is similar to `renameat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.symlink-at": {
+          "name": "[method]descriptor.symlink-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "old-path",
+              "type": "string"
+            },
+            {
+              "name": "new-path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Create a symbolic link (also known as a \"symlink\").\n\nIf `old-path` starts with `/`, the function fails with\n`error-code::not-permitted`.\n\nNote: This is similar to `symlinkat` in POSIX."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.unlink-file-at": {
+          "name": "[method]descriptor.unlink-file-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Unlink a filesystem object that is not a directory.\n\nThis is similar to `unlinkat(fd, path, 0)` in POSIX.\n\nError returns are as specified by POSIX.\n\nIf the filesystem object is a directory, `error-code::access` or\n`error-code::is-directory` may be returned instead of the\nPOSIX-specified `error-code::not-permitted`."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.is-same-object": {
+          "name": "[method]descriptor.is-same-object",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "other",
+              "type": 24
+            }
+          ],
+          "result": "bool",
+          "docs": {
+            "contents": "Test whether two descriptors refer to the same filesystem object.\n\nIn POSIX, this corresponds to testing whether the two descriptors have the\nsame device (`st_dev`) and inode (`st_ino` or `d_ino`) numbers.\nwasi-filesystem does not expose device and inode numbers, so this function\nmay be used instead."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.metadata-hash": {
+          "name": "[method]descriptor.metadata-hash",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            }
+          ],
+          "result": 37,
+          "docs": {
+            "contents": "Return a hash of the metadata associated with a filesystem object referred\nto by a descriptor.\n\nThis returns a hash of the last-modification timestamp and file size, and\nmay also include the inode number, device number, birth timestamp, and\nother metadata fields that may change when the file is modified or\nreplaced. It may also include a secret value chosen by the\nimplementation and not otherwise exposed.\n\nImplementations are encouraged to provide the following properties:\n\n - If the file is not modified or replaced, the computed hash value should\n   usually not change.\n - If the object is modified or replaced, the computed hash value should\n   usually change.\n - The inputs to the hash should not be easily computable from the\n   computed hash.\n\nHowever, none of these is required."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "[method]descriptor.metadata-hash-at": {
+          "name": "[method]descriptor.metadata-hash-at",
+          "kind": {
+            "async-method": 23
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path-flags",
+              "type": 13
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ],
+          "result": 37,
+          "docs": {
+            "contents": "Return a hash of the metadata associated with a filesystem object referred\nto by a directory descriptor and a relative path.\n\nThis performs the same hash computation as `metadata-hash`."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "WASI filesystem is a filesystem API primarily intended to let users run WASI\nprograms that access their files on their existing filesystems, without\nsignificant overhead.\n\nPaths are passed as interface-type `string`s, meaning they must consist of\na sequence of Unicode Scalar Values (USVs). Some filesystems may contain\npaths which are not accessible by this API.\n\nThe directory separator in WASI is always the forward-slash (`/`).\n\nAll paths in WASI are relative paths, and are interpreted relative to a\n`descriptor` referring to a base directory. If a `path` argument to any WASI\nfunction starts with `/`, or if any step of resolving a `path`, including\n`..` and symbolic link steps, reaches a directory outside of the base\ndirectory, or reaches a symlink to an absolute or rooted path in the\nunderlying filesystem, the function fails with `error-code::not-permitted`.\n\nFor more information about WASI path resolution and sandboxing, see\n[WASI filesystem path resolution].\n\nThough this package presents a portable interface modelled on POSIX, it\nprioritizes compatibility over portability: allowing users to access their\nfiles on their machine is more important than exposing a single semantics\nacross all platforms.  Notably, depending on the underlying operating system\nand file system:\n  * Paths may be case-folded or not.\n  * Deleting (unlinking) a file may fail if there are other file descriptors\n    open.\n  * Durability and atomicity of changes to underlying files when there are\n    concurrent writers.\n\nUsers that need well-defined, portable semantics should use a key-value\nstore or a database instead.\n\n[WASI filesystem path resolution]: https://github.com/WebAssembly/wasi-filesystem/blob/main/path-resolution.md"
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "preopens",
+      "types": {
+        "descriptor": 38
+      },
+      "functions": {
+        "get-directories": {
+          "name": "get-directories",
+          "kind": "freestanding",
+          "params": [],
+          "result": 41,
+          "docs": {
+            "contents": "Return the set of preopened directories, and their paths."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 1
+    },
+    {
       "name": "insecure-seed",
       "types": {},
       "functions": {
@@ -407,7 +1154,7 @@
           "name": "get-insecure-seed",
           "kind": "freestanding",
           "params": [],
-          "result": 8,
+          "result": 42,
           "docs": {
             "contents": "Return a 128-bit value that may contain a pseudo-random value.\n\nThe returned value is not required to be computed from a CSPRNG, and may\neven be entirely deterministic. Host implementations are encouraged to\nprovide pseudo-random values to any program exposed to\nattacker-controlled content, to enable DoS protection built into many\nlanguages' hash-map implementations.\n\nThis function is intended to only be called once, by a source language\nto initialize Denial Of Service (DoS) protection in its hash-map\nimplementation.\n\n# Expected future evolution\n\nThis will likely be changed to a value import, to prevent it from being\ncalled multiple times and potentially used for purposes other than DoS\nprotection."
           },
@@ -426,7 +1173,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 1
+      "package": 2
     },
     {
       "name": "insecure",
@@ -441,7 +1188,7 @@
               "type": "u64"
             }
           ],
-          "result": 9,
+          "result": 43,
           "docs": {
             "contents": "Return up to `max-len` insecure pseudo-random bytes.\n\nThis function is not cryptographically secure. Do not use it for\nanything related to security.\n\nThere are no requirements on the values of the returned bytes, however\nimplementations are encouraged to return evenly distributed values with\na long period.\n\nImplementations MAY return fewer bytes than requested (a short read).\nCallers that require exactly `max-len` bytes MUST call this function in\na loop until the desired number of bytes has been accumulated.\nImplementations MUST return at least 1 byte when `max-len` is greater\nthan zero. When `max-len` is zero, implementations MUST return an empty\nlist without trapping."
           },
@@ -474,7 +1221,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 1
+      "package": 2
     },
     {
       "name": "random",
@@ -489,7 +1236,7 @@
               "type": "u64"
             }
           ],
-          "result": 9,
+          "result": 43,
           "docs": {
             "contents": "Return up to `max-len` cryptographically-secure random or pseudo-random\nbytes.\n\nThis function must produce data at least as cryptographically secure and\nfast as an adequately seeded cryptographically-secure pseudo-random\nnumber generator (CSPRNG). It must not block, from the perspective of\nthe calling program, under any circumstances, including on the first\nrequest and on requests for numbers of bytes. The returned data must\nalways be unpredictable.\n\nImplementations MAY return fewer bytes than requested (a short read).\nCallers that require exactly `max-len` bytes MUST call this function in\na loop until the desired number of bytes has been accumulated.\nImplementations MUST return at least 1 byte when `max-len` is greater\nthan zero. When `max-len` is zero, implementations MUST return an empty\nlist without trapping.\n\nThis function must always return fresh data. Deterministic environments\nmust omit this function, rather than implementing it with deterministic\ndata."
           },
@@ -522,7 +1269,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 1
+      "package": 2
     },
     {
       "name": "environment",
@@ -532,7 +1279,7 @@
           "name": "get-environment",
           "kind": "freestanding",
           "params": [],
-          "result": 11,
+          "result": 45,
           "docs": {
             "contents": "Get the POSIX-style environment variables.\n\nEach environment variable is provided as a pair of string variable names\nand string value.\n\nMorally, these are a value import, but until value imports are available\nin the component model, this import function should return the same\nvalues each time it is called."
           },
@@ -546,7 +1293,7 @@
           "name": "get-arguments",
           "kind": "freestanding",
           "params": [],
-          "result": 12,
+          "result": 46,
           "docs": {
             "contents": "Get the POSIX-style arguments to the program."
           },
@@ -560,7 +1307,7 @@
           "name": "get-initial-cwd",
           "kind": "freestanding",
           "params": [],
-          "result": 13,
+          "result": 47,
           "docs": {
             "contents": "Return a path that programs should use as their initial current working\ndirectory, interpreting `.` as shorthand for this."
           },
@@ -576,7 +1323,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "exit",
@@ -588,7 +1335,7 @@
           "params": [
             {
               "name": "status",
-              "type": 14
+              "type": 48
             }
           ],
           "docs": {
@@ -624,7 +1371,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "run",
@@ -634,7 +1381,7 @@
           "name": "run",
           "kind": "async-freestanding",
           "params": [],
-          "result": 14,
+          "result": 48,
           "docs": {
             "contents": "Run the program."
           },
@@ -650,12 +1397,12 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "types",
       "types": {
-        "error-code": 15
+        "error-code": 49
       },
       "functions": {},
       "stability": {
@@ -663,19 +1410,19 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "stdin",
       "types": {
-        "error-code": 16
+        "error-code": 50
       },
       "functions": {
         "read-via-stream": {
           "name": "read-via-stream",
           "kind": "freestanding",
           "params": [],
-          "result": 20,
+          "result": 54,
           "docs": {
             "contents": "Return a stream for reading from stdin.\n\nThis function returns a stream which provides data read from stdin,\nand a future to signal read results.\n\nIf the stream's readable end is dropped the future will resolve to success.\n\nIf the stream's writable end is dropped the future will either resolve to\nsuccess if stdin was closed by the writer or to an error-code if reading\nfailed for some other reason.\n\nMultiple streams may be active at the same time. The behavior of concurrent\nreads is implementation-specific."
           },
@@ -691,12 +1438,12 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "stdout",
       "types": {
-        "error-code": 21
+        "error-code": 55
       },
       "functions": {
         "write-via-stream": {
@@ -705,10 +1452,10 @@
           "params": [
             {
               "name": "data",
-              "type": 17
+              "type": 51
             }
           ],
-          "result": 23,
+          "result": 57,
           "docs": {
             "contents": "Write the given stream to stdout.\n\nIf the stream's writable end is dropped this function will either return\nsuccess once the entire contents of the stream have been written or an\nerror-code representing a failure.\n\nOtherwise if there is an error the readable end of the stream will be\ndropped and this function will return an error-code."
           },
@@ -724,12 +1471,12 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "stderr",
       "types": {
-        "error-code": 24
+        "error-code": 58
       },
       "functions": {
         "write-via-stream": {
@@ -738,10 +1485,10 @@
           "params": [
             {
               "name": "data",
-              "type": 17
+              "type": 51
             }
           ],
-          "result": 26,
+          "result": 60,
           "docs": {
             "contents": "Write the given stream to stderr.\n\nIf the stream's writable end is dropped this function will either return\nsuccess once the entire contents of the stream have been written or an\nerror-code representing a failure.\n\nOtherwise if there is an error the readable end of the stream will be\ndropped and this function will return an error-code."
           },
@@ -757,12 +1504,12 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "terminal-input",
       "types": {
-        "terminal-input": 27
+        "terminal-input": 61
       },
       "functions": {},
       "docs": {
@@ -773,12 +1520,12 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "terminal-output",
       "types": {
-        "terminal-output": 28
+        "terminal-output": 62
       },
       "functions": {},
       "docs": {
@@ -789,19 +1536,19 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "terminal-stdin",
       "types": {
-        "terminal-input": 29
+        "terminal-input": 63
       },
       "functions": {
         "get-terminal-stdin": {
           "name": "get-terminal-stdin",
           "kind": "freestanding",
           "params": [],
-          "result": 31,
+          "result": 65,
           "docs": {
             "contents": "If stdin is connected to a terminal, return a `terminal-input` handle\nallowing further interaction with it."
           },
@@ -820,19 +1567,19 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "terminal-stdout",
       "types": {
-        "terminal-output": 32
+        "terminal-output": 66
       },
       "functions": {
         "get-terminal-stdout": {
           "name": "get-terminal-stdout",
           "kind": "freestanding",
           "params": [],
-          "result": 34,
+          "result": 68,
           "docs": {
             "contents": "If stdout is connected to a terminal, return a `terminal-output` handle\nallowing further interaction with it."
           },
@@ -851,19 +1598,19 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     },
     {
       "name": "terminal-stderr",
       "types": {
-        "terminal-output": 35
+        "terminal-output": 69
       },
       "functions": {
         "get-terminal-stderr": {
           "name": "get-terminal-stderr",
           "kind": "freestanding",
           "params": [],
-          "result": 37,
+          "result": 71,
           "docs": {
             "contents": "If stderr is connected to a terminal, return a `terminal-output` handle\nallowing further interaction with it."
           },
@@ -882,7 +1629,7 @@
           "since": "0.3.0"
         }
       },
-      "package": 2
+      "package": 3
     }
   ],
   "types": [
@@ -995,6 +1742,1046 @@
       "owner": null
     },
     {
+      "name": "instant",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "interface": 4
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "filesize",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "File size or length of a region within a file."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "descriptor-type",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "block-device",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a block device inode."
+              }
+            },
+            {
+              "name": "character-device",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a character device inode."
+              }
+            },
+            {
+              "name": "directory",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a directory inode."
+              }
+            },
+            {
+              "name": "fifo",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a named pipe."
+              }
+            },
+            {
+              "name": "symbolic-link",
+              "type": null,
+              "docs": {
+                "contents": "The file refers to a symbolic link inode."
+              }
+            },
+            {
+              "name": "regular-file",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a regular file inode."
+              }
+            },
+            {
+              "name": "socket",
+              "type": null,
+              "docs": {
+                "contents": "The descriptor refers to a socket."
+              }
+            },
+            {
+              "name": "other",
+              "type": 10,
+              "docs": {
+                "contents": "The type of the descriptor or file is different from any of the\nother types specified."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "The type of a filesystem object referenced by a descriptor.\n\nNote: This was called `filetype` in earlier versions of WASI."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "descriptor-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "read",
+              "docs": {
+                "contents": "Read mode: Data can be read."
+              }
+            },
+            {
+              "name": "write",
+              "docs": {
+                "contents": "Write mode: Data can be written to."
+              }
+            },
+            {
+              "name": "file-integrity-sync",
+              "docs": {
+                "contents": "Request that writes be performed according to synchronized I/O file\nintegrity completion. The data stored in the file and the file's\nmetadata are synchronized. This is similar to `O_SYNC` in POSIX.\n\nThe precise semantics of this operation have not yet been defined for\nWASI. At this time, it should be interpreted as a request, and not a\nrequirement."
+              }
+            },
+            {
+              "name": "data-integrity-sync",
+              "docs": {
+                "contents": "Request that writes be performed according to synchronized I/O data\nintegrity completion. Only the data stored in the file is\nsynchronized. This is similar to `O_DSYNC` in POSIX.\n\nThe precise semantics of this operation have not yet been defined for\nWASI. At this time, it should be interpreted as a request, and not a\nrequirement."
+              }
+            },
+            {
+              "name": "requested-write-sync",
+              "docs": {
+                "contents": "Requests that reads be performed at the same level of integrity\nrequested for writes. This is similar to `O_RSYNC` in POSIX.\n\nThe precise semantics of this operation have not yet been defined for\nWASI. At this time, it should be interpreted as a request, and not a\nrequirement."
+              }
+            },
+            {
+              "name": "mutate-directory",
+              "docs": {
+                "contents": "Mutating directories mode: Directory contents may be mutated.\n\nWhen this flag is unset on a descriptor, operations using the\ndescriptor which would create, rename, delete, modify the data or\nmetadata of filesystem objects, or obtain another handle which\nwould permit any of those, shall fail with `error-code::read-only` if\nthey would otherwise succeed.\n\nThis may only be set on directories."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "Descriptor flags.\n\nNote: This was called `fdflags` in earlier versions of WASI."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "path-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "symlink-follow",
+              "docs": {
+                "contents": "As long as the resolved path corresponds to a symbolic link, it is\nexpanded."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "Flags determining the method of how paths are resolved."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "open-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "create",
+              "docs": {
+                "contents": "Create file if it does not exist, similar to `O_CREAT` in POSIX."
+              }
+            },
+            {
+              "name": "directory",
+              "docs": {
+                "contents": "Fail if not a directory, similar to `O_DIRECTORY` in POSIX."
+              }
+            },
+            {
+              "name": "exclusive",
+              "docs": {
+                "contents": "Fail if file already exists, similar to `O_EXCL` in POSIX."
+              }
+            },
+            {
+              "name": "truncate",
+              "docs": {
+                "contents": "Truncate file to size 0, similar to `O_TRUNC` in POSIX."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "Open flags used by `open-at`."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "link-count",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "Number of hard links to an inode."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 8
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "descriptor-stat",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "type",
+              "type": 11,
+              "docs": {
+                "contents": "File type."
+              }
+            },
+            {
+              "name": "link-count",
+              "type": 15,
+              "docs": {
+                "contents": "Number of hard links to the file."
+              }
+            },
+            {
+              "name": "size",
+              "type": 9,
+              "docs": {
+                "contents": "For regular files, the file size in bytes. For symbolic links, the\nlength in bytes of the pathname contained in the symbolic link."
+              }
+            },
+            {
+              "name": "data-access-timestamp",
+              "type": 16,
+              "docs": {
+                "contents": "Last data access timestamp.\n\nIf the `option` is none, the platform doesn't maintain an access\ntimestamp for this file."
+              }
+            },
+            {
+              "name": "data-modification-timestamp",
+              "type": 16,
+              "docs": {
+                "contents": "Last data modification timestamp.\n\nIf the `option` is none, the platform doesn't maintain a\nmodification timestamp for this file."
+              }
+            },
+            {
+              "name": "status-change-timestamp",
+              "type": 16,
+              "docs": {
+                "contents": "Last file status-change timestamp.\n\nIf the `option` is none, the platform doesn't maintain a\nstatus-change timestamp for this file."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "File attributes.\n\nNote: This was called `filestat` in earlier versions of WASI."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "new-timestamp",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "no-change",
+              "type": null,
+              "docs": {
+                "contents": "Leave the timestamp set to its previous value."
+              }
+            },
+            {
+              "name": "now",
+              "type": null,
+              "docs": {
+                "contents": "Set the timestamp to the current time of the system clock associated\nwith the filesystem."
+              }
+            },
+            {
+              "name": "timestamp",
+              "type": 8,
+              "docs": {
+                "contents": "Set the timestamp to the given value."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "When setting a timestamp, this gives the value to set it to."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "directory-entry",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "type",
+              "type": 11,
+              "docs": {
+                "contents": "The type of the file referred to by this directory entry."
+              }
+            },
+            {
+              "name": "name",
+              "type": "string",
+              "docs": {
+                "contents": "The name of the object."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "A directory entry."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "access",
+              "type": null,
+              "docs": {
+                "contents": "Permission denied, similar to `EACCES` in POSIX."
+              }
+            },
+            {
+              "name": "already",
+              "type": null,
+              "docs": {
+                "contents": "Connection already in progress, similar to `EALREADY` in POSIX."
+              }
+            },
+            {
+              "name": "bad-descriptor",
+              "type": null,
+              "docs": {
+                "contents": "Bad descriptor, similar to `EBADF` in POSIX."
+              }
+            },
+            {
+              "name": "busy",
+              "type": null,
+              "docs": {
+                "contents": "Device or resource busy, similar to `EBUSY` in POSIX."
+              }
+            },
+            {
+              "name": "deadlock",
+              "type": null,
+              "docs": {
+                "contents": "Resource deadlock would occur, similar to `EDEADLK` in POSIX."
+              }
+            },
+            {
+              "name": "quota",
+              "type": null,
+              "docs": {
+                "contents": "Storage quota exceeded, similar to `EDQUOT` in POSIX."
+              }
+            },
+            {
+              "name": "exist",
+              "type": null,
+              "docs": {
+                "contents": "File exists, similar to `EEXIST` in POSIX."
+              }
+            },
+            {
+              "name": "file-too-large",
+              "type": null,
+              "docs": {
+                "contents": "File too large, similar to `EFBIG` in POSIX."
+              }
+            },
+            {
+              "name": "illegal-byte-sequence",
+              "type": null,
+              "docs": {
+                "contents": "Illegal byte sequence, similar to `EILSEQ` in POSIX."
+              }
+            },
+            {
+              "name": "in-progress",
+              "type": null,
+              "docs": {
+                "contents": "Operation in progress, similar to `EINPROGRESS` in POSIX."
+              }
+            },
+            {
+              "name": "interrupted",
+              "type": null,
+              "docs": {
+                "contents": "Interrupted function, similar to `EINTR` in POSIX."
+              }
+            },
+            {
+              "name": "invalid",
+              "type": null,
+              "docs": {
+                "contents": "Invalid argument, similar to `EINVAL` in POSIX."
+              }
+            },
+            {
+              "name": "io",
+              "type": null,
+              "docs": {
+                "contents": "I/O error, similar to `EIO` in POSIX."
+              }
+            },
+            {
+              "name": "is-directory",
+              "type": null,
+              "docs": {
+                "contents": "Is a directory, similar to `EISDIR` in POSIX."
+              }
+            },
+            {
+              "name": "loop",
+              "type": null,
+              "docs": {
+                "contents": "Too many levels of symbolic links, similar to `ELOOP` in POSIX."
+              }
+            },
+            {
+              "name": "too-many-links",
+              "type": null,
+              "docs": {
+                "contents": "Too many links, similar to `EMLINK` in POSIX."
+              }
+            },
+            {
+              "name": "message-size",
+              "type": null,
+              "docs": {
+                "contents": "Message too large, similar to `EMSGSIZE` in POSIX."
+              }
+            },
+            {
+              "name": "name-too-long",
+              "type": null,
+              "docs": {
+                "contents": "Filename too long, similar to `ENAMETOOLONG` in POSIX."
+              }
+            },
+            {
+              "name": "no-device",
+              "type": null,
+              "docs": {
+                "contents": "No such device, similar to `ENODEV` in POSIX."
+              }
+            },
+            {
+              "name": "no-entry",
+              "type": null,
+              "docs": {
+                "contents": "No such file or directory, similar to `ENOENT` in POSIX."
+              }
+            },
+            {
+              "name": "no-lock",
+              "type": null,
+              "docs": {
+                "contents": "No locks available, similar to `ENOLCK` in POSIX."
+              }
+            },
+            {
+              "name": "insufficient-memory",
+              "type": null,
+              "docs": {
+                "contents": "Not enough space, similar to `ENOMEM` in POSIX."
+              }
+            },
+            {
+              "name": "insufficient-space",
+              "type": null,
+              "docs": {
+                "contents": "No space left on device, similar to `ENOSPC` in POSIX."
+              }
+            },
+            {
+              "name": "not-directory",
+              "type": null,
+              "docs": {
+                "contents": "Not a directory or a symbolic link to a directory, similar to `ENOTDIR` in POSIX."
+              }
+            },
+            {
+              "name": "not-empty",
+              "type": null,
+              "docs": {
+                "contents": "Directory not empty, similar to `ENOTEMPTY` in POSIX."
+              }
+            },
+            {
+              "name": "not-recoverable",
+              "type": null,
+              "docs": {
+                "contents": "State not recoverable, similar to `ENOTRECOVERABLE` in POSIX."
+              }
+            },
+            {
+              "name": "unsupported",
+              "type": null,
+              "docs": {
+                "contents": "Not supported, similar to `ENOTSUP` and `ENOSYS` in POSIX."
+              }
+            },
+            {
+              "name": "no-tty",
+              "type": null,
+              "docs": {
+                "contents": "Inappropriate I/O control operation, similar to `ENOTTY` in POSIX."
+              }
+            },
+            {
+              "name": "no-such-device",
+              "type": null,
+              "docs": {
+                "contents": "No such device or address, similar to `ENXIO` in POSIX."
+              }
+            },
+            {
+              "name": "overflow",
+              "type": null,
+              "docs": {
+                "contents": "Value too large to be stored in data type, similar to `EOVERFLOW` in POSIX."
+              }
+            },
+            {
+              "name": "not-permitted",
+              "type": null,
+              "docs": {
+                "contents": "Operation not permitted, similar to `EPERM` in POSIX."
+              }
+            },
+            {
+              "name": "pipe",
+              "type": null,
+              "docs": {
+                "contents": "Broken pipe, similar to `EPIPE` in POSIX."
+              }
+            },
+            {
+              "name": "read-only",
+              "type": null,
+              "docs": {
+                "contents": "Read-only file system, similar to `EROFS` in POSIX."
+              }
+            },
+            {
+              "name": "invalid-seek",
+              "type": null,
+              "docs": {
+                "contents": "Invalid seek, similar to `ESPIPE` in POSIX."
+              }
+            },
+            {
+              "name": "text-file-busy",
+              "type": null,
+              "docs": {
+                "contents": "Text file busy, similar to `ETXTBSY` in POSIX."
+              }
+            },
+            {
+              "name": "cross-device",
+              "type": null,
+              "docs": {
+                "contents": "Cross-device link, similar to `EXDEV` in POSIX."
+              }
+            },
+            {
+              "name": "other",
+              "type": 10,
+              "docs": {
+                "contents": "A catch-all for errors not captured by the existing variants.\nImplementations can use this to extend the error type without\nbreaking existing code."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "Error codes returned by functions, similar to `errno` in POSIX.\nNot all of these error codes are returned by the functions provided by this\nAPI; some are used in higher-level library layers, and others are provided\nmerely for alignment with POSIX."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "advice",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "normal",
+              "docs": {
+                "contents": "The application has no advice to give on its behavior with respect\nto the specified data."
+              }
+            },
+            {
+              "name": "sequential",
+              "docs": {
+                "contents": "The application expects to access the specified data sequentially\nfrom lower offsets to higher offsets."
+              }
+            },
+            {
+              "name": "random",
+              "docs": {
+                "contents": "The application expects to access the specified data in a random\norder."
+              }
+            },
+            {
+              "name": "will-need",
+              "docs": {
+                "contents": "The application expects to access the specified data in the near\nfuture."
+              }
+            },
+            {
+              "name": "dont-need",
+              "docs": {
+                "contents": "The application expects that it will not access the specified data\nin the near future."
+              }
+            },
+            {
+              "name": "no-reuse",
+              "docs": {
+                "contents": "The application expects to access the specified data once and then\nnot reuse it thereafter."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "File or memory access pattern advisory information."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "metadata-hash-value",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "lower",
+              "type": "u64",
+              "docs": {
+                "contents": "64 bits of a 128-bit hash value."
+              }
+            },
+            {
+              "name": "upper",
+              "type": "u64",
+              "docs": {
+                "contents": "Another 64 bits of a 128-bit hash value."
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "A 128-bit hash value, split into parts because wasm doesn't have a\n128-bit integer type."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "descriptor",
+      "kind": "resource",
+      "owner": {
+        "interface": 4
+      },
+      "docs": {
+        "contents": "A descriptor is a reference to a filesystem object, which may be a file,\ndirectory, named pipe, special file, or other object on which filesystem\ncalls may be made."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 23
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 26
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            25,
+            27
+          ]
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 12,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 11,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": 19
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            31,
+            27
+          ]
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 17,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 23
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 34,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": "string",
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 22,
+          "err": 20
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "descriptor",
+      "kind": {
+        "type": 23
+      },
+      "owner": {
+        "interface": 5
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 38
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            39,
+            "string"
+          ]
+        }
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 40
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
       "name": null,
       "kind": {
         "tuple": {
@@ -1028,7 +2815,7 @@
     {
       "name": null,
       "kind": {
-        "list": 10
+        "list": 44
       },
       "owner": null
     },
@@ -1083,7 +2870,7 @@
         }
       },
       "owner": {
-        "interface": 10
+        "interface": 12
       },
       "stability": {
         "stable": {
@@ -1094,10 +2881,10 @@
     {
       "name": "error-code",
       "kind": {
-        "type": 15
+        "type": 49
       },
       "owner": {
-        "interface": 11
+        "interface": 13
       }
     },
     {
@@ -1112,7 +2899,7 @@
       "kind": {
         "result": {
           "ok": null,
-          "err": 16
+          "err": 50
         }
       },
       "owner": null
@@ -1120,7 +2907,7 @@
     {
       "name": null,
       "kind": {
-        "future": 18
+        "future": 52
       },
       "owner": null
     },
@@ -1129,8 +2916,8 @@
       "kind": {
         "tuple": {
           "types": [
-            17,
-            19
+            51,
+            53
           ]
         }
       },
@@ -1139,10 +2926,10 @@
     {
       "name": "error-code",
       "kind": {
-        "type": 15
+        "type": 49
       },
       "owner": {
-        "interface": 12
+        "interface": 14
       }
     },
     {
@@ -1150,7 +2937,7 @@
       "kind": {
         "result": {
           "ok": null,
-          "err": 21
+          "err": 55
         }
       },
       "owner": null
@@ -1158,17 +2945,17 @@
     {
       "name": null,
       "kind": {
-        "future": 22
+        "future": 56
       },
       "owner": null
     },
     {
       "name": "error-code",
       "kind": {
-        "type": 15
+        "type": 49
       },
       "owner": {
-        "interface": 13
+        "interface": 15
       }
     },
     {
@@ -1176,7 +2963,7 @@
       "kind": {
         "result": {
           "ok": null,
-          "err": 24
+          "err": 58
         }
       },
       "owner": null
@@ -1184,7 +2971,7 @@
     {
       "name": null,
       "kind": {
-        "future": 25
+        "future": 59
       },
       "owner": null
     },
@@ -1192,7 +2979,7 @@
       "name": "terminal-input",
       "kind": "resource",
       "owner": {
-        "interface": 14
+        "interface": 16
       },
       "docs": {
         "contents": "The input side of a terminal."
@@ -1207,7 +2994,7 @@
       "name": "terminal-output",
       "kind": "resource",
       "owner": {
-        "interface": 15
+        "interface": 17
       },
       "docs": {
         "contents": "The output side of a terminal."
@@ -1221,77 +3008,7 @@
     {
       "name": "terminal-input",
       "kind": {
-        "type": 27
-      },
-      "owner": {
-        "interface": 16
-      },
-      "stability": {
-        "stable": {
-          "since": "0.3.0"
-        }
-      }
-    },
-    {
-      "name": null,
-      "kind": {
-        "handle": {
-          "own": 29
-        }
-      },
-      "owner": null
-    },
-    {
-      "name": null,
-      "kind": {
-        "option": 30
-      },
-      "owner": null,
-      "stability": {
-        "stable": {
-          "since": "0.3.0"
-        }
-      }
-    },
-    {
-      "name": "terminal-output",
-      "kind": {
-        "type": 28
-      },
-      "owner": {
-        "interface": 17
-      },
-      "stability": {
-        "stable": {
-          "since": "0.3.0"
-        }
-      }
-    },
-    {
-      "name": null,
-      "kind": {
-        "handle": {
-          "own": 32
-        }
-      },
-      "owner": null
-    },
-    {
-      "name": null,
-      "kind": {
-        "option": 33
-      },
-      "owner": null,
-      "stability": {
-        "stable": {
-          "since": "0.3.0"
-        }
-      }
-    },
-    {
-      "name": "terminal-output",
-      "kind": {
-        "type": 28
+        "type": 61
       },
       "owner": {
         "interface": 18
@@ -1306,7 +3023,7 @@
       "name": null,
       "kind": {
         "handle": {
-          "own": 35
+          "own": 63
         }
       },
       "owner": null
@@ -1314,7 +3031,77 @@
     {
       "name": null,
       "kind": {
-        "option": 36
+        "option": 64
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-output",
+      "kind": {
+        "type": 62
+      },
+      "owner": {
+        "interface": 19
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 66
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 67
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-output",
+      "kind": {
+        "type": 62
+      },
+      "owner": {
+        "interface": 20
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 69
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 70
       },
       "owner": null,
       "stability": {
@@ -1336,29 +3123,37 @@
       "worlds": {}
     },
     {
+      "name": "wasi:filesystem@0.3.0",
+      "interfaces": {
+        "types": 4,
+        "preopens": 5
+      },
+      "worlds": {}
+    },
+    {
       "name": "wasi:random@0.3.0",
       "interfaces": {
-        "insecure-seed": 4,
-        "insecure": 5,
-        "random": 6
+        "insecure-seed": 6,
+        "insecure": 7,
+        "random": 8
       },
       "worlds": {}
     },
     {
       "name": "wasi:cli@0.3.0",
       "interfaces": {
-        "environment": 7,
-        "exit": 8,
-        "run": 9,
-        "types": 10,
-        "stdin": 11,
-        "stdout": 12,
-        "stderr": 13,
-        "terminal-input": 14,
-        "terminal-output": 15,
-        "terminal-stdin": 16,
-        "terminal-stdout": 17,
-        "terminal-stderr": 18
+        "environment": 9,
+        "exit": 10,
+        "run": 11,
+        "types": 12,
+        "stdin": 13,
+        "stdout": 14,
+        "stderr": 15,
+        "terminal-input": 16,
+        "terminal-output": 17,
+        "terminal-stdin": 18,
+        "terminal-stdout": 19,
+        "terminal-stderr": 20
       },
       "worlds": {
         "imports": 0
