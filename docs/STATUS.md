@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-12（#16） / 対象ブランチ: `main`
+> 最終更新: 2026-11-13（#16、ADR-0019） / 対象ブランチ: `main`
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -49,7 +49,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
 * Component Model の公式テストスイート（`values/`、`resources/`、`async/`。[ADR-0017](adr/0017-component-model-conformance-suite.md)、#30）: Chicory で `values/` と `resources/` は 191 のコマンドのうち 188、`async/` は 514 のうち 480 が通る。残りは `conformance/skip.txt` に理由つきで載せている（#70 共有テーブル経由のデストラクター、wasmtime-environ 48 が再入をトラップにする項目、wasmparser 0.254 の検証）
-* async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future は、`async-stream` フィクスチャの E2E テストで確認
+* async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future、ホストの `suspend fun` の import、並行の呼び出しと取り消し（ADR-0019）は、`async-stream` と `async-import` フィクスチャの E2E テストで確認
 * 差分テストは、Wasmtime の FFM と JNI の両方で流す。型付きブリッジでは、結果とブリッジ自身のエラーメッセージが汎用ブリッジと同じであることも確かめる（Wasmtime の lift のエラーは、種類だけを比べる）。境界値（空と 256 KiB の list、サロゲートペア、char の端、長い list<option>）も含む
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
 * 短い名前が同じ interface（`example:http/types` と `example:fs/types`）の import と export を、両バックエンドで区別して扱える。キーは完全修飾名で、短い名前と版なしの名前は一意のときだけ受け付け、曖昧ならエラー（`same-name` フィクスチャ、[ADR-0011](adr/0011-qualified-interface-keys.md)、#32）
@@ -74,7 +74,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * ホスト resource の受け渡しは、セッションの呼び出し中（同じスレッド）に限られる。Wasmtime ではホストの borrow を一時的な所有ハンドルで代用している（48 でも必要。[ADR-0008](adr/0008-host-defined-resources.md)、[ADR-0010](adr/0010-wasmtime-lts.md)）
 * コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
-* async の制約（[ADR-0018](adr/0018-async-abi-on-chicory.md)）: ホストからの呼び出しは、コンポーネントが返るまでスレッドをブロックする（`suspend fun` でも中断点にならない）。ホストの async な import は同期の関数として実装する。ホストが受け渡せる stream / future は export の引数と結果のトップレベルだけで、要素に resource / stream / future を含まないもの。同じインスタンスや祖先のインスタンスへの再入は、wasmtime-environ 48 がトラップにする
+* async の制約（[ADR-0018](adr/0018-async-abi-on-chicory.md)、[ADR-0019](adr/0019-suspending-async-boundary.md)）: async の export と import は `suspend fun` だが、ゲストの wasm を実行している間は中断しない（取り消しは、ゲストが次にホストを待つか yield したときに届く）。ホストが受け渡せる stream / future は export の引数と結果のトップレベルだけで、要素に resource / stream / future を含まないもの。同じインスタンスや祖先のインスタンスへの再入は、wasmtime-environ 48 がトラップにする
 * AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
 * Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針

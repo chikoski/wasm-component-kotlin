@@ -1,0 +1,88 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "fetch": {
+          "function": {
+            "name": "fetch",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        }
+      },
+      "exports": {
+        "fetch-plus-one": {
+          "function": {
+            "name": "fetch-plus-one",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "fetch-sync-plus-two": {
+          "function": {
+            "name": "fetch-sync-plus-two",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "blocking-fetch": {
+          "function": {
+            "name": "blocking-fetch",
+            "kind": "freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        },
+        "cancellable": {
+          "function": {
+            "name": "cancellable",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "x",
+                "type": "u32"
+              }
+            ],
+            "result": "u32"
+          }
+        }
+      },
+      "package": 0
+    }
+  ],
+  "interfaces": [],
+  "types": [],
+  "packages": [
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

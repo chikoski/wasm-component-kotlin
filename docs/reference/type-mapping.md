@@ -23,11 +23,12 @@
 | `record` / `variant` / `enum` / `flags` | `data class` / `sealed interface` / `enum class` / `@JvmInline value class` |
 | `resource`（コンポーネントが export） | `AutoCloseable` なクラス（ホストはハンドルを持つ） |
 | `resource`（コンポーネントが import。world 直下か import した interface） | ホストが実装する `interface`（`WitHostResource`）。constructor / static は、その interface（world 直下なら `Imports`）のメンバー |
-| `async func`（export） | `suspend fun`（Chicory のみ。呼び出しは、コンポーネントが返るまでスレッドをブロックする。[ADR-0018](../adr/0018-async-abi-on-chicory.md)） |
-| `future<T>` | `kotlinx.coroutines.Deferred<T>`。返された future は `await()` したときに読む。引数に渡す future は、呼び出しの前に `await()` する（async でない関数には完了したものを渡す） |
-| `stream<T>` | `kotlinx.coroutines.flow.Flow<T>`（`stream<u8>` は `Flow<ByteArray>`）。返された stream は 1 回だけ collect でき、途中でやめるとコンポーネント側に drop が伝わる。引数に渡す stream は、呼び出しの前に最後まで collect する |
+| `async func`（export） | `suspend fun`（Chicory のみ）。コンポーネントが返るまで中断し、呼び出し元のスレッドを使わない。同じセッションへの呼び出しは並行に進められ、コルーチンを取り消すとコンポーネントの task に取り消しが届く（[ADR-0019](../adr/0019-suspending-async-boundary.md)） |
+| `async func`（import） | ホストが実装する `suspend fun`。待つ間もコンポーネントの他の task が進み、コンポーネントが subtask を取り消すとコルーチンが取り消される。ブロックする API は `withContext(Dispatchers.IO)` で包む。例外を投げるとトラップになる |
+| `future<T>` | `kotlinx.coroutines.Deferred<T>`。返された future は `await()` したときに読む。引数に渡した future は、コンポーネントが読むときに `await()` する |
+| `stream<T>` | `kotlinx.coroutines.flow.Flow<T>`（`stream<u8>` は `Flow<ByteArray>`）。返された stream は 1 回だけ collect でき、データを待つ間は中断し、途中でやめるとコンポーネント側に drop が伝わる。引数に渡した stream は、コンポーネントが読む速さに合わせて collect する |
 
-`future<T>` / `stream<T>` を使う world の生成コードは、`org.jetbrains.kotlinx:kotlinx-coroutines-core` に依存します。stream / future は export の引数と結果のトップレベルでだけ使えます（record などの中にあると、実行時に `UnsupportedOperationException`）。
+生成コードは `runtime-api` を通して `org.jetbrains.kotlinx:kotlinx-coroutines-core` に依存します（ADR-0019）。async でない関数は、普通の関数として生成され、呼び出し元のスレッドでコンポーネントを実行します（UI のスレッドから呼ぶときは `withContext(Dispatchers.Default)` を使います）。stream / future は export の引数と結果のトップレベルでだけ使えます（record などの中にあると、実行時に `UnsupportedOperationException`）。
 
 生成される関数の KDoc には、元の WIT の定義（例: ``WIT: `lookup: func(k: string) -> option<option<s32>>` ``）が書き出されます。
 

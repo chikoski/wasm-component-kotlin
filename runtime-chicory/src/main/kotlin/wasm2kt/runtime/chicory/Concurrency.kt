@@ -101,12 +101,15 @@ internal object StackSwitching {
             } finally {
                 store.liveThreads.remove(Thread.currentThread())
             }
-            // An abandoned thread hands control to nobody: its resumer is gone too.
-            if (failure is AbandonedThreadError || store.abandoned) {
+            // Pool threads are reused: an interrupt meant for this store must not reach the next one.
+            Thread.interrupted()
+            // An abandoned thread hands control to nobody: its resumer is gone too. A thread that
+            // trapped (and so abandoned the store) still hands the trap to its resumer.
+            val h = handler.get()
+            if (h == null || generateSequence(failure) { it.cause }.any { it is AbandonedThreadError }) {
                 leave()
                 return@execute
             }
-            val h = handler.get()!!
             leave()
             h.cont = null
             h.result = result
@@ -256,7 +259,7 @@ internal class AsyncStore {
     /** Stops every guest thread still blocked; their stacks unwind with [AbandonedThreadError]. */
     fun abandon() {
         abandoned = true
-        for (t in liveThreads) t.interrupt()
+        for (t in liveThreads) if (t !== Thread.currentThread()) t.interrupt()
         waiting.clear()
     }
 }

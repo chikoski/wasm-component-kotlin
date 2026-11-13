@@ -1,0 +1,133 @@
+;; Host `async func` imports (ADR-0019): the component calls the host's `fetch` lowered async (and
+;; waits for the subtask), lowered sync (its thread waits), from a non-async export (the host runs
+;; to completion), and from a callback-ABI export that handles cancellation by cancelling `fetch`.
+(component
+  (import "fetch" (func $fetch async (param "x" u32) (result u32)))
+
+  (core module $Mem (memory (export "mem") 1))
+  (core instance $mem (instantiate $Mem))
+
+  (core module $M
+    (import "" "mem" (memory 1))
+    (import "" "fetch-async" (func $fetch-async (param i32 i32) (result i32)))
+    (import "" "fetch-sync" (func $fetch-sync (param i32) (result i32)))
+    (import "" "task.return" (func $return (param i32)))
+    (import "" "task.cancel" (func $task.cancel))
+    (import "" "subtask.cancel" (func $subtask.cancel (param i32) (result i32)))
+    (import "" "subtask.drop" (func $subtask.drop (param i32)))
+    (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+    (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
+    (import "" "waitable-set.drop" (func $waitable-set.drop (param i32)))
+    (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+    (import "" "context.get" (func $context.get (result i32)))
+    (import "" "context.set" (func $context.set (param i32)))
+
+    ;; Bump allocator for each call's memory: result (+0), event (+8), subtask (+16), set (+20).
+    (global $heap (mut i32) (i32.const 1024))
+    (func $alloc (result i32)
+      (local $p i32)
+      (local.set $p (global.get $heap))
+      (global.set $heap (i32.add (global.get $heap) (i32.const 32)))
+      (local.get $p))
+
+    ;; fetch-twice(x): fetch(x) lowered async, waiting for the subtask; returns fetch(x) + 1 (stackful).
+    (func (export "fetch-plus-one") (param $x i32)
+      (local $p i32)
+      (local $ret i32)
+      (local $sub i32)
+      (local $ws i32)
+      (local.set $p (call $alloc))
+      (local.set $ret (call $fetch-async (local.get $x) (local.get $p)))
+      (if (i32.ne (i32.and (local.get $ret) (i32.const 0xf)) (i32.const 2 (; RETURNED ;)))
+        (then
+          (local.set $sub (i32.shr_u (local.get $ret) (i32.const 4)))
+          (local.set $ws (call $waitable-set.new))
+          (call $waitable.join (local.get $sub) (local.get $ws))
+          (loop $wait
+            (drop (call $waitable-set.wait (local.get $ws) (i32.add (local.get $p) (i32.const 8))))
+            (br_if $wait (i32.ne (i32.load offset=12 (local.get $p)) (i32.const 2 (; RETURNED ;)))))
+          (call $subtask.drop (local.get $sub))
+          (call $waitable-set.drop (local.get $ws))))
+      (call $return (i32.add (i32.load (local.get $p)) (i32.const 1))))
+
+    ;; fetch-sync-plus-two(x): fetch(x) lowered sync from an async export (stackful); + 2.
+    (func (export "fetch-sync-plus-two") (param $x i32)
+      (call $return (i32.add (call $fetch-sync (local.get $x)) (i32.const 2))))
+
+    ;; blocking-fetch(x): fetch(x) lowered sync from a non-async export; + 3.
+    (func (export "blocking-fetch") (param $x i32) (result i32)
+      (i32.add (call $fetch-sync (local.get $x)) (i32.const 3)))
+
+    ;; cancellable(x): fetch(x) through the callback ABI. If the task is cancelled meanwhile, it
+    ;; cancels the fetch and acknowledges with task.cancel; otherwise it returns fetch(x).
+    (func (export "cancellable") (param $x i32) (result i32)
+      (local $p i32)
+      (local $ret i32)
+      (local.set $p (call $alloc))
+      (call $context.set (local.get $p))
+      (local.set $ret (call $fetch-async (local.get $x) (local.get $p)))
+      (if (i32.eq (i32.and (local.get $ret) (i32.const 0xf)) (i32.const 2 (; RETURNED ;)))
+        (then
+          (call $return (i32.load (local.get $p)))
+          (return (i32.const 0 (; EXIT ;)))))
+      (i32.store offset=16 (local.get $p) (i32.shr_u (local.get $ret) (i32.const 4)))
+      (i32.store offset=20 (local.get $p) (call $waitable-set.new))
+      (call $waitable.join (i32.load offset=16 (local.get $p)) (i32.load offset=20 (local.get $p)))
+      (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (i32.load offset=20 (local.get $p)) (i32.const 4))))
+    (func (export "cancellable-cb") (param $event i32) (param $handle i32) (param $result i32) (result i32)
+      (local $p i32)
+      (local.set $p (call $context.get))
+      (if (i32.eq (local.get $event) (i32.const 1 (; SUBTASK ;)))
+        (then (if (i32.ne (local.get $result) (i32.const 2 (; RETURNED ;)))
+          (then (return (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (i32.load offset=20 (local.get $p)) (i32.const 4))))))))
+      (call $waitable.join (i32.load offset=16 (local.get $p)) (i32.const 0))
+      (if (i32.eq (local.get $event) (i32.const 6 (; TASK_CANCELLED ;)))
+        (then
+          (drop (call $subtask.cancel (i32.load offset=16 (local.get $p))))
+          (call $subtask.drop (i32.load offset=16 (local.get $p)))
+          (call $waitable-set.drop (i32.load offset=20 (local.get $p)))
+          (call $task.cancel)
+          (return (i32.const 0 (; EXIT ;)))))
+      (call $subtask.drop (i32.load offset=16 (local.get $p)))
+      (call $waitable-set.drop (i32.load offset=20 (local.get $p)))
+      (call $return (i32.load (local.get $p)))
+      (i32.const 0 (; EXIT ;)))
+  )
+
+  (canon lower (func $fetch) async (memory (core memory $mem "mem")) (core func $fetch-async))
+  (canon lower (func $fetch) (core func $fetch-sync))
+  (canon task.return (result u32) (core func $return))
+  (canon task.cancel (core func $task.cancel))
+  (canon subtask.cancel (core func $subtask.cancel))
+  (canon subtask.drop (core func $subtask.drop))
+  (canon waitable-set.new (core func $waitable-set.new))
+  (canon waitable-set.wait (memory (core memory $mem "mem")) (core func $waitable-set.wait))
+  (canon waitable-set.drop (core func $waitable-set.drop))
+  (canon waitable.join (core func $waitable.join))
+  (canon context.get i32 0 (core func $context.get))
+  (canon context.set i32 0 (core func $context.set))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "mem" (memory $mem "mem"))
+    (export "fetch-async" (func $fetch-async))
+    (export "fetch-sync" (func $fetch-sync))
+    (export "task.return" (func $return))
+    (export "task.cancel" (func $task.cancel))
+    (export "subtask.cancel" (func $subtask.cancel))
+    (export "subtask.drop" (func $subtask.drop))
+    (export "waitable-set.new" (func $waitable-set.new))
+    (export "waitable-set.wait" (func $waitable-set.wait))
+    (export "waitable-set.drop" (func $waitable-set.drop))
+    (export "waitable.join" (func $waitable.join))
+    (export "context.get" (func $context.get))
+    (export "context.set" (func $context.set))
+  ))))
+
+  (func (export "fetch-plus-one") async (param "x" u32) (result u32)
+    (canon lift (core func $m "fetch-plus-one") async))
+  (func (export "fetch-sync-plus-two") async (param "x" u32) (result u32)
+    (canon lift (core func $m "fetch-sync-plus-two") async))
+  (func (export "blocking-fetch") (param "x" u32) (result u32)
+    (canon lift (core func $m "blocking-fetch")))
+  (func (export "cancellable") async (param "x" u32) (result u32)
+    (canon lift (core func $m "cancellable") async (callback (core func $m "cancellable-cb"))))
+)

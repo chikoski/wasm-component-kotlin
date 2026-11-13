@@ -68,7 +68,7 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
 * `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）
 * ホスト定義 resource（world 直下か、import した interface の resource）は、値の境界では rep（整数）で受け渡す。オブジェクトとの対応は生成セッションが束縛する `HostResourceTable` が持ち、drop は `[resource-drop]<name>` の dispatch で伝える。両バックエンドで揃える（ADR-0008）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する。Wasmtime バックエンドは同期の機能の参照実装として維持する（ADR-0005）
-* async（`Concurrency.kt`、`AsyncAbi.kt`）は仕様の参照定義（`definitions.py`）の移植で、継続を JVM のスレッドで表す（ADR-0018）。async を使わないコンポーネント（`ComponentPlan.usesAsync` が false）の実行経路と plan は変えない。async を変えたら `ConformanceTest`（`async/`）と `AsyncAbiTest` を通す
+* async（`Concurrency.kt`、`AsyncAbi.kt`）は仕様の参照定義（`definitions.py`）の移植で、継続を JVM のスレッドで表す（ADR-0018）。async を使わないコンポーネント（`ComponentPlan.usesAsync` が false）の実行経路と plan は変えない。ホストとの境界はコルーチンで、async の状態はインスタンスのスケジューラーのスレッド（`SessionLoop`）だけが触る（ADR-0019）。async を変えたら `ConformanceTest`（`async/`）、`AsyncAbiTest`、`SuspendingCallsTest` を通す
 * 生成コードの公開 API（ワールド DSL）を変えるときは、Wasmtime 側と Chicory 側の両方の E2E テストを確認する
 * commit メッセージは Conventional Commits 形式（`feat(scope): ...`、`fix: ...`）。本文に理由を書く
 * 作業は GitHub Issues（優先度ラベル `P0`/`P1`/`P2`、分野ラベル `area:*`）で管理する。commit や PR では `#番号` で関連 Issue を参照する。状態が変わったら docs/STATUS.md を更新する。設計判断をしたら docs/adr/ に追加する

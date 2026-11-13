@@ -1,5 +1,7 @@
 package wasm2kt.runtime
 
+import kotlinx.coroutines.flow.Flow
+
 /**
  * A live, instantiated component that generated bindings can call into.
  *
@@ -24,11 +26,19 @@ interface ComponentBackend : AutoCloseable {
      */
     fun invoke(function: Int, args: WitReader): WitReader
 
+    /**
+     * Calls [function] like [invoke], but suspends instead of blocking while the component waits
+     * (ADR-0019): for an `async` export, the calling thread is free until the component returns.
+     * Cancelling the coroutine cancels the component's task. Several calls may be in progress at
+     * once. Backends without the async ABI block as [invoke] does.
+     */
+    suspend fun invokeSuspending(function: Int, args: WitReader): WitReader = invoke(function, args)
+
     /** Drops a resource handle previously returned to the host, running its destructor. */
     fun dropResource(handle: Int)
 
-    // Streams and futures (#16, ADR-0018). In the binary format they are `u32` handles: the host's
-    // readable end of one the component returned, or one the host created with [newStream] /
+    // Streams and futures (#16, ADR-0018, ADR-0019). In the binary format they are `u32` handles: the
+    // host's readable end of one the component returned, or one the host created with [newStream] /
     // [newFuture] to pass to the component. Only the Chicory backend implements them.
 
     /**
@@ -38,8 +48,14 @@ interface ComponentBackend : AutoCloseable {
      */
     fun readStream(handle: Int, maxCount: Int): WitReader? = throw UnsupportedOperationException("This backend does not support streams")
 
+    /** [readStream], suspending until the component writes values or drops its end. */
+    suspend fun readStreamSuspending(handle: Int, maxCount: Int): WitReader? = readStream(handle, maxCount)
+
     /** Reads the value of the `future` [handle] the component returned (and frees it); null if its writer was dropped. */
     fun readFuture(handle: Int): WitReader? = throw UnsupportedOperationException("This backend does not support futures")
+
+    /** [readFuture], suspending until the component writes the value or drops its end. */
+    suspend fun readFutureSuspending(handle: Int): WitReader? = readFuture(handle)
 
     /** Drops the readable end [handle] of a stream or future the component returned, without reading the rest. */
     fun dropReadable(handle: Int): Unit = throw UnsupportedOperationException("This backend does not support streams or futures")
@@ -52,7 +68,20 @@ interface ComponentBackend : AutoCloseable {
 
     /** A `future` for the host to pass to the component, already resolved to [value] (in the binary format). */
     fun newFuture(value: ByteArray): Int = throw UnsupportedOperationException("This backend does not support futures")
+
+    /**
+     * A `stream` for the host to pass to the component whose values [chunks] produces as the
+     * component reads them (ADR-0019): the backend collects the next chunk only once the component
+     * has read the previous one. The stream ends when [chunks] completes, or fails.
+     */
+    fun newStream(chunks: Flow<WitStreamChunk>): Int = throw UnsupportedOperationException("This backend does not support streams")
+
+    /** A `future` for the host to pass to the component, resolved to what [value] returns (in the binary format) once it does. */
+    fun newFuture(value: suspend () -> ByteArray): Int = throw UnsupportedOperationException("This backend does not support futures")
 }
+
+/** [count] values of a stream, in the binary format of [WitWriter] (a `list` of them without the count). */
+class WitStreamChunk(val count: Int, val values: ByteArray)
 
 /**
  * Something that can instantiate a [ComponentBackend], e.g. a component whose core modules were

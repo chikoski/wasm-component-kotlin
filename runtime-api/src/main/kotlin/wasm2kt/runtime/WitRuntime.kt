@@ -9,12 +9,27 @@ fun interface HostFunction {
 }
 
 /**
+ * The host implementation of an imported `async func` (ADR-0019): like [HostFunction], but it may
+ * suspend. The component's other tasks run meanwhile; cancelling the call (`subtask.cancel`)
+ * cancels the coroutine.
+ */
+fun interface AsyncHostFunction {
+    suspend fun call(args: WitReader, results: WitWriter)
+}
+
+/**
  * Looks up host imports by key (ADR-0011). Backends look each key up once, when the component first
  * calls the import, and call the [HostFunction] directly afterwards.
  */
 interface WitHostImportDispatcher {
     /** The implementation of [key], or null when the host does not provide it. */
     fun hostFunction(key: String): HostFunction?
+
+    /**
+     * The suspending implementation of [key], an imported `async func`, or null. Backends that
+     * support the async ABI prefer it to [hostFunction]; others call [hostFunction].
+     */
+    fun asyncHostFunction(key: String): AsyncHostFunction? = null
 }
 
 /** Thrown by the generated `WitResult.getOrThrow()` for an `err`; [error] is the WIT error value. */

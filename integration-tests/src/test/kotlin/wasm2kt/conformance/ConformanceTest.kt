@@ -129,6 +129,13 @@ class ConformanceTest {
             failure?.let { throw it }
         }
 
+        /** Closes the instance being replaced, unless a named instance still refers to it. */
+        private fun replaceCurrent(next: Instance?) {
+            val previous = current
+            current = next
+            if (previous != null && previous !in instances.values) runCatching { previous.close() }
+        }
+
         private fun convert(): List<JsonObject> {
             out.toFile().deleteRecursively()
             Files.createDirectories(out)
@@ -149,8 +156,8 @@ class ConformanceTest {
         private fun run(c: JsonObject) {
             when (val type = c.getValue("type").jsonPrimitive.content) {
                 "module" -> {
-                    current = null
-                    current = Instance(decompose(c.getValue("filename").jsonPrimitive.content))
+                    replaceCurrent(null)
+                    replaceCurrent(Instance(decompose(c.getValue("filename").jsonPrimitive.content)))
                 }
                 "module_definition" -> {
                     val name = c.getValue("name").jsonPrimitive.content
@@ -159,12 +166,12 @@ class ConformanceTest {
                     failedDefinitions.remove(name)
                 }
                 "module_instance" -> {
-                    current = null
+                    replaceCurrent(null)
                     val name = c.getValue("module").jsonPrimitive.content
                     val def = definitions[name]
                         ?: failedDefinitions[name]?.let { throw TestAbortedException("its component could not be created ($it)") }
                         ?: error("Unknown definition in $c")
-                    current = Instance(def).also { i -> c["instance"]?.jsonPrimitive?.content?.let { instances[it] = i } }
+                    replaceCurrent(Instance(def).also { i -> c["instance"]?.jsonPrimitive?.content?.let { instances[it] = i } })
                 }
                 "assert_return" -> {
                     val actual = invoke(c.getValue("action").jsonObject)

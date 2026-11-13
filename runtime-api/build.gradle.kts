@@ -8,6 +8,8 @@ plugins {
 }
 
 dependencies {
+    // The async ABI's host boundary is suspending (ADR-0019): suspend calls, Flow streams.
+    api(libs.kotlinx.coroutines.core)
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

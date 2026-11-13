@@ -24,7 +24,10 @@ import com.dylibso.chicory.wasm.types.Value
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.ComponentTrapException
+import kotlinx.coroutines.flow.Flow
+import wasm2kt.runtime.AsyncHostFunction as WitAsyncHostFunction
 import wasm2kt.runtime.HostFunction as WitHostFunction
+import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.WitHostImportDispatcher
@@ -156,6 +159,7 @@ internal class ChicoryComponentInstance(
     private val resolvedIndices = HashMap<String, Int>()
     private val results = WitWriter()
 
+    @Synchronized
     override fun resolve(functionName: String): Int {
         checkUsable()
         resolvedIndices[functionName]?.let { return it }
@@ -165,19 +169,30 @@ internal class ChicoryComponentInstance(
         return index
     }
 
+    @Synchronized
+    private fun resolvedExport(function: Int): PlanExport =
+        resolved.getOrNull(function) ?: throw IllegalArgumentException("Unknown function index $function")
+
+    private fun PlanExport.qualifiedName(): String = instance?.let { "$it#$name" } ?: name
+
+    /**
+     * For a component that uses the async ABI, the call suspends until the component returns, and
+     * several can be in progress at once (ADR-0019); otherwise it is [invoke].
+     */
+    override suspend fun invokeSuspending(function: Int, args: WitReader): WitReader {
+        if (!plan.usesAsync) return invoke(function, args)
+        checkUsable()
+        val export = resolvedExport(function)
+        return async.invokeSuspending(export, export.qualifiedName(), args)
+    }
+
     override fun invoke(function: Int, args: WitReader): WitReader {
         checkUsable()
-        val export = resolved.getOrNull(function) ?: throw IllegalArgumentException("Unknown function index $function")
-        val functionName = export.instance?.let { "$it#${export.name}" } ?: export.name
+        val export = resolvedExport(function)
+        val functionName = export.qualifiedName()
+        // Calls into a component that uses the async ABI are tasks on its scheduler (ADR-0019).
+        if (plan.usesAsync) return async.invoke(export, functionName, args)
         if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
-        if (plan.usesAsync) {
-            entered = true
-            try {
-                return async.invoke(export, functionName, args)
-            } finally {
-                entered = false
-            }
-        }
         val type = export.type
         val opts = plan.options.getValue(export.options)
         val cx = Context(opts, Direction.HOST_TO_GUEST)
@@ -225,6 +240,11 @@ internal class ChicoryComponentInstance(
     }
 
     override fun dropResource(handle: Int) {
+        if (plan.usesAsync) return async.onSession { dropHostHandle(handle) }
+        dropHostHandle(handle)
+    }
+
+    private fun dropHostHandle(handle: Int) {
         checkUsable()
         val h = hostHandles[handle] ?: throw IllegalStateException("Resource handle $handle not found or already consumed")
         check(h.lends == 0) { "Resource handle $handle is borrowed by a call in progress and cannot be dropped" }
@@ -235,26 +255,35 @@ internal class ChicoryComponentInstance(
         guest { destroy(h.table, h.rep) }
     }
 
-    override fun readStream(handle: Int, maxCount: Int): WitReader? = hostCall { async.hostRead(handle, maxCount, stream = true) }
+    // Streams and futures run on the scheduler of the async ABI (ADR-0019).
 
-    override fun readFuture(handle: Int): WitReader? = hostCall { async.hostRead(handle, 1, stream = false) }
+    override fun readStream(handle: Int, maxCount: Int): WitReader? = usable { async.hostRead(handle, maxCount, stream = true) }
 
-    override fun dropReadable(handle: Int) = hostCall { async.hostDropReadable(handle) }
-
-    override fun newStream(values: ByteArray, count: Int): Int = hostCall { async.newHostStream(values, count) }
-
-    override fun newFuture(value: ByteArray): Int = hostCall { async.newHostFuture(value) }
-
-    /** A host call that runs the component's tasks, like [invoke]. */
-    private inline fun <T> hostCall(block: () -> T): T {
+    override suspend fun readStreamSuspending(handle: Int, maxCount: Int): WitReader? {
         checkUsable()
-        if (entered) poison("Cannot reenter component instance: a stream or future was used while another call into it is in progress")
-        entered = true
-        try {
-            return block()
-        } finally {
-            entered = false
-        }
+        return async.hostReadSuspending(handle, maxCount, stream = true)
+    }
+
+    override fun readFuture(handle: Int): WitReader? = usable { async.hostRead(handle, 1, stream = false) }
+
+    override suspend fun readFutureSuspending(handle: Int): WitReader? {
+        checkUsable()
+        return async.hostReadSuspending(handle, 1, stream = false)
+    }
+
+    override fun dropReadable(handle: Int) = usable { async.hostDropReadable(handle) }
+
+    override fun newStream(values: ByteArray, count: Int): Int = usable { async.onSession { async.newHostStream(values, count) } }
+
+    override fun newStream(chunks: Flow<WitStreamChunk>): Int = usable { async.onSession { async.newHostStream(chunks) } }
+
+    override fun newFuture(value: ByteArray): Int = usable { async.onSession { async.newHostFuture(value) } }
+
+    override fun newFuture(value: suspend () -> ByteArray): Int = usable { async.onSession { async.newHostFuture(value) } }
+
+    private inline fun <T> usable(block: () -> T): T {
+        checkUsable()
+        return block()
     }
 
     override fun close() {
@@ -265,7 +294,7 @@ internal class ChicoryComponentInstance(
 
     // ---------------------------------------------------------------- instance state
 
-    private fun checkUsable() {
+    internal fun checkUsable() {
         check(!closed) { "Component instance is already closed" }
         poisoned?.let { throw ComponentTrapException("Component instance is unusable after an earlier trap ($it); open a new session") }
     }
@@ -280,7 +309,7 @@ internal class ChicoryComponentInstance(
         if (poisoned == null) {
             poisoned = message
             // Guest threads still blocked can never run again.
-            async.close()
+            async.abandon()
         }
     }
 
@@ -410,7 +439,15 @@ internal class ChicoryComponentInstance(
         when (val t = plan.trampolines[index] ?: error("Unknown trampoline $index")) {
             is Trampoline.LowerImport -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 checkMayLeave("host import '${plan.imports.getValue(t.import).dispatchKey}'")
-                if (plan.options.getValue(t.options).async) async.callHostAsync(t, args) else callHost(t, args)
+                when {
+                    plan.options.getValue(t.options).async -> async.callHostAsync(t, args)
+                    plan.usesAsync -> {
+                        // An `async func` the host implements as a suspending function (ADR-0019).
+                        var results: LongArray? = null
+                        if (async.callHostSync(t) { fn -> results = callHost(t, args, fn) }) results else callHost(t, args)
+                    }
+                    else -> callHost(t, args)
+                }
             }
             is Trampoline.ResourceNew -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 checkMayLeave("resource.new")
@@ -452,7 +489,15 @@ internal class ChicoryComponentInstance(
     internal fun hostImport(import: Int): WitHostFunction = hostFunction(plan.imports.getValue(import).dispatchKey)
 
     /** A guest calling a host import: lift the guest's arguments, call the host, lower the results. */
-    private fun callHost(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray? {
+    /** Suspending host functions by key, looked up once (ADR-0019). */
+    private val asyncHostFunctions = HashMap<String, WitAsyncHostFunction?>()
+
+    internal fun asyncHostImport(import: Int): WitAsyncHostFunction? {
+        val key = plan.imports.getValue(import).dispatchKey
+        return asyncHostFunctions.getOrPut(key) { imports?.asyncHostFunction(key) }
+    }
+
+    private fun callHost(t: Trampoline.LowerImport, coreArgs: LongArray, fn: WitHostFunction? = null): LongArray? {
         val import = plan.imports.getValue(t.import)
         val opts = plan.options.getValue(t.options)
         val cx = Context(opts, Direction.GUEST_TO_HOST)
@@ -470,7 +515,7 @@ internal class ChicoryComponentInstance(
         }
 
         val results = WitWriter()
-        hostFunction(import.dispatchKey).call(args.toReader(), results)
+        (fn ?: hostFunction(import.dispatchKey)).call(args.toReader(), results)
         val reader = results.toReader()
 
         val lowerer = Lowerer(cx, reader)

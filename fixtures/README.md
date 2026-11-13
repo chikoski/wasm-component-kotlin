@@ -18,6 +18,7 @@ decomposer（`decomposer/regenerate-fixtures.sh`）で共有しています。
 | `composed-str` | 子コンポーネントがそれぞれメモリを持ち、文字列（3 つのエンコーディングのすべての組み合わせ）と list を受け渡す合成コンポーネント。アダプターが 2 つのメモリを import し、transcoder と trap を使う（#47） | [`src/composed-str`](src/composed-str)（`gen-wat.py` が WAT を生成。`build.sh` で再ビルド） |
 | `composed-res` | 子コンポーネントの間で resource を受け渡す合成コンポーネント。アダプターが resource の受け渡しの組み込み関数を使う（#70） | [`src/composed-res`](src/composed-res)（手書きの WAT。`build.sh` で再ビルド） |
 | `async-stream` | async（#16）。callback 形式と stackful 形式の async export、ホストとの間の `stream<u32>` と `future<u32>` | [`src/async-stream`](src/async-stream)（手書きの WAT。`build.sh` で再ビルド） |
+| `async-import` | ホストの `async func` の import（ADR-0019）。async / 同期の lower、async でない export からの呼び出し、callback 形式の export での取り消し | [`src/async-import`](src/async-import)（手書きの WAT。`build.sh` で再ビルド） |
 | `map-type` | Chicory 未対応の型（`map<K, V>`、#71）を使う export。ビルド時の警告（#39）と、使ったときだけ失敗することの確認用 | [`src/map-type`](src/map-type)（手書きの WAT。`build.sh` で再ビルド） |
 | `calculator` | WIT のみ（コード生成と InMemory セッションのテスト用）。`calculator.json` は `wasm-tools component wit calculator.wit --json` の出力 | — |
 

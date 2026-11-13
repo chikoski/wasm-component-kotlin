@@ -4,9 +4,31 @@ import com.dylibso.chicory.runtime.ExportFunction
 import com.dylibso.chicory.runtime.Instance
 import com.dylibso.chicory.runtime.Memory
 import com.dylibso.chicory.runtime.WasmFunctionHandle
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import wasm2kt.runtime.AsyncHostFunction
 import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.HostFunction
+import wasm2kt.runtime.HostResourceTable
 import wasm2kt.runtime.WitReader
+import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitWriter
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.LinkedBlockingQueue
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.resumeWithException
 
 /** Wraps an error in the host's own values found while running on a guest thread (ADR-0007). */
 internal class HostValueException(cause: Throwable) : RuntimeException(cause)
@@ -28,10 +50,6 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private var nextHostObject = 1
 
     fun state(instance: Int): ComponentInstanceState = states.getOrPut(instance) { ComponentInstanceState(instance, store) }
-
-    fun close() {
-        store.abandon()
-    }
 
     // ------------------------------------------------------------------- canon lift
 
@@ -59,12 +77,22 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
         thread.resume()
         if (!ftAsync) {
-            while (task.state != Task.State.RESOLVED) {
-                // The instance's ready threads, in the order they started waiting.
-                // A synchronous call it made into another instance continues this call, too.
-                val candidate = store.waiting.firstOrNull { (it.task.inst === inst || it.root.task === task) && it.ready() }
-                if (candidate != null) candidate.resume()
-                else if (!pumpHostWriters()) trap("deadlock detected: a synchronous call cannot complete because every thread of the instance is waiting")
+            syncLoops++
+            try {
+                while (task.state != Task.State.RESOLVED) {
+                    // The instance's ready threads, in the order they started waiting.
+                    // A synchronous call it made into another instance continues this call, too.
+                    val candidate = store.waiting.firstOrNull { (it.task.inst === inst || it.root.task === task) && it.ready() }
+                    when {
+                        candidate != null -> candidate.resume()
+                        pumpHostWriters() -> Unit
+                        // Waiting for the host (an import, a stream): run its coroutines here.
+                        onLoopThread() && (hostWork > 0 || loop.hasQueued()) -> loop.runOne()
+                        else -> trap("deadlock detected: a synchronous call cannot complete because every thread of the instance is waiting")
+                    }
+                }
+            } finally {
+                syncLoops--
             }
         }
         return task
@@ -126,19 +154,253 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return code
     }
 
+    // ------------------------------------------------------------------- the session's thread
+
+    /**
+     * Runs the scheduler (ADR-0019): every operation on the async state happens on this one thread.
+     * It resumes guest threads, runs the coroutines of host imports and host streams, and resumes
+     * the suspended host calls. A synchronous call waiting for the host can run its queue inline.
+     */
+    private inner class SessionLoop : CoroutineDispatcher() {
+        private val queue = LinkedBlockingQueue<Runnable>()
+
+        @Volatile
+        var stopped = false
+
+        /** The thread running the queue; it exits when idle, so an unclosed instance can be collected. */
+        @Volatile
+        var thread: Thread? = null
+            private set
+
+        private fun loop() {
+            while (true) {
+                val r = try {
+                    queue.poll(IDLE_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: InterruptedException) {
+                    null
+                }
+                if (r == null) {
+                    synchronized(this) {
+                        if (queue.isEmpty() || stopped) {
+                            thread = null
+                            return
+                        }
+                    }
+                    continue
+                }
+                runCatching { r.run() }
+            }
+        }
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            // Once closed, finish what is left on the caller's thread so no coroutine hangs.
+            if (stopped) return block.run()
+            synchronized(this) {
+                queue.add(block)
+                if (thread == null) {
+                    thread = Thread(null, ::loop, "wasm2kt-chicory-session", 8L shl 20).apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
+            }
+        }
+
+        fun hasQueued(): Boolean = queue.isNotEmpty()
+
+        /** Runs one queued task on this thread (from a synchronous call that waits for the host). */
+        fun runOne() {
+            queue.take().run()
+        }
+
+        fun stop() {
+            stopped = true
+            while (true) (queue.poll() ?: break).run()
+        }
+    }
+
+    @Volatile
+    private var started: SessionLoop? = null
+
+    /** Started on first use: components are often opened and never call anything async. */
+    private val loop: SessionLoop
+        get() = started ?: synchronized(this) { started ?: SessionLoop().also { started = it } }
+
+    /** The coroutines of host imports and host streams; cancelled when the instance closes. */
+    private val scope by lazy {
+        // Failures of host imports and host streams are handled where they complete (a trap, or the
+        // end of the stream), not by the default handler (which would crash an Android app).
+        CoroutineScope(SupervisorJob() + loop + kotlinx.coroutines.CoroutineExceptionHandler { _, _ -> })
+    }
+
+    private fun onLoopThread(): Boolean = started?.thread.let { it != null && it === Thread.currentThread() }
+
+    /** Whether the caller runs the async state: the session's thread or a guest thread it resumed. */
+    fun isScheduling(): Boolean = onLoopThread() || StackSwitching.currentHandler() != null
+
+    /** Runs [block] on the session's thread and waits for it (at once if already there). */
+    fun <T> onSession(block: () -> T): T {
+        if (isScheduling()) return block()
+        val task = FutureTask(block)
+        loop.dispatch(EmptyCoroutineContext, task)
+        try {
+            return task.get()
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
+
+    /** Runs [block] on the session's thread later. */
+    private fun post(block: () -> Unit) = loop.dispatch(EmptyCoroutineContext, Runnable(block))
+
+    /** A host call of an export in progress. */
+    private class PendingCall(val name: String, val cont: CancellableContinuation<WitReader>) {
+        /** The host cancelled the call: the task runs until it resolves, but nobody waits for its result. */
+        var cancelled = false
+    }
+
+    private val pendingCalls = ArrayList<PendingCall>()
+
+    /** Host imports, streams and futures whose coroutine may still produce something. */
+    private var hostWork = 0
+
+    /** Nested in a synchronous call's loop: that loop picks the threads to run (see [canonLift]). */
+    private var syncLoops = 0
+
+    /**
+     * Runs the guest threads that are ready while the host waits for a call or a read, and resumes
+     * what it waits for. Traps when the host waits but nothing can make progress any more. Called on
+     * the session's thread.
+     */
+    private fun drain() {
+        if (syncLoops > 0) return
+        // Guest threads resumed from here see the session's host resources (ADR-0008).
+        val previous = HostResourceTable.currentOrNull()
+        hostResources?.let { HostResourceTable.setCurrent(it) }
+        try {
+            while (true) {
+                completeHostReads()
+                // As in Wasmtime, tasks run while the host waits for something: a task that keeps
+                // yielding after its call returned waits for the next call instead of spinning.
+                if (pendingCalls.isEmpty() && hostReads.isEmpty()) {
+                    pumpHostWriters()
+                    return
+                }
+                if (c.guest { store.tick() }) {
+                    // Let queued work (a resumed call, a host import that finished) have its turn.
+                    if (loop.hasQueued()) {
+                        post { drain() }
+                        return
+                    }
+                    continue
+                }
+                if (pumpHostWriters()) continue
+                break
+            }
+            if ((pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) && hostWork == 0 && !loop.hasQueued()) {
+                // A cancelled task that cannot finish is nobody's problem any more.
+                pendingCalls.removeAll { it.cancelled }
+                if (pendingCalls.isEmpty() && hostReads.isEmpty()) return
+            }
+            if ((pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) && hostWork == 0 && !loop.hasQueued()) {
+                val waiting = pendingCalls.joinToString { "'${it.name}'" }.ifEmpty { "a stream or future the host reads" }
+                c.poison("deadlock detected: $waiting cannot finish because every task is waiting")
+            }
+        } catch (e: Throwable) {
+            failAll(if (e is HostValueException) e.cause!! else e)
+        } finally {
+            HostResourceTable.setCurrent(previous)
+        }
+    }
+
+    /** The session's host resource table, as the first call that had one bound saw it. */
+    @Volatile
+    private var hostResources: HostResourceTable? = null
+
+    /** A trap: every host call in progress fails with it (the instance is poisoned). */
+    private fun failAll(e: Throwable) {
+        val calls = pendingCalls.toList()
+        pendingCalls.clear()
+        val reads = hostReads.toList()
+        hostReads.clear()
+        for (call in calls) if (!call.cancelled) call.cont.resumeWithException(e)
+        for (read in reads) read.cont.resumeWithException(e)
+    }
+
+    /** After a trap: guest threads still blocked can never run again; host calls in progress fail with the trap. */
+    fun abandon() {
+        store.abandon()
+    }
+
+    fun close() {
+        val l = started
+        if (l == null) {
+            store.abandon()
+            return
+        }
+        onSession {
+            if (pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) failAll(IllegalStateException("The component instance was closed"))
+            store.abandon()
+            scope.cancel()
+        }
+        l.stop()
+    }
+
     // ------------------------------------------------------------------- host calls
 
-    /** A host call of an export of a component that uses the async ABI: runs it as a task to completion. */
+    /**
+     * A host call of an export of a component that uses the async ABI (ADR-0019): suspends until the
+     * task returns. Cancelling the coroutine requests the task's cancellation.
+     */
+    suspend fun invokeSuspending(export: PlanExport, functionName: String, args: WitReader): WitReader = withContext(loop) {
+        c.checkUsable()
+        if (hostResources == null) hostResources = HostResourceTable.currentOrNull()
+        suspendCancellableCoroutine { cont ->
+            val call = PendingCall(functionName, cont)
+            pendingCalls += call
+            val task = try {
+                c.guest {
+                    startExport(export, functionName, args) { result ->
+                        if (pendingCalls.remove(call)) cont.resumeWith(result)
+                    }
+                }
+            } catch (e: Throwable) {
+                pendingCalls.remove(call)
+                throw e
+            }
+            cont.invokeOnCancellation {
+                post {
+                    if (call in pendingCalls && !call.cancelled) {
+                        call.cancelled = true
+                        try {
+                            c.guest { if (task.state != Task.State.RESOLVED) task.requestCancellation() }
+                        } catch (e: Throwable) {
+                            failAll(e)
+                        }
+                        drain()
+                    }
+                }
+            }
+            drain()
+        }
+    }
+
+    /** A blocking host call ([wasm2kt.runtime.ComponentBackend.invoke]): [invokeSuspending] on this thread. */
     fun invoke(export: PlanExport, functionName: String, args: WitReader): WitReader {
+        // A synchronous host import calling back into the component (the spec's may_enter).
+        if (StackSwitching.currentHandler() != null) c.poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        check(!onLoopThread()) { "'$functionName' was called synchronously from a suspending host import; call it from the coroutine instead" }
+        return runBlocking { invokeSuspending(export, functionName, args) }
+    }
+
+    /** Starts the task of a host call; [done] receives its results once it returns. */
+    private fun startExport(export: PlanExport, functionName: String, args: WitReader, done: (Result<WitReader>) -> Unit): Task {
         val type = export.type
         val opts = plan.options.getValue(export.options)
         val inst = state(opts.instance)
         lateinit var task: Task
         val cx = c.context(opts, ChicoryComponentInstance.Direction.HOST_TO_GUEST) { task }
         val paramTypes = type.params.map { it.second }
-        val results = WitWriter()
-        var resolved = false
-        var cancelled = false
         val onStart = {
             // Lowering the host's arguments: errors in the values are the host's, not traps (ADR-0007).
             val coreArgs = ArrayList<Long>()
@@ -152,22 +414,23 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
             } catch (e: ComponentTrapException) {
                 throw e
-            } catch (e: IllegalArgumentException) {
+            } catch (e: RuntimeException) {
+                if (e !is IllegalArgumentException && e !is IllegalStateException) throw e
                 cx.rollbackLowering()
+                // The task never started: it leaves the instance as if it had not been called.
                 task.state = Task.State.RESOLVED
-                throw HostValueException(e)
-            } catch (e: IllegalStateException) {
-                cx.rollbackLowering()
-                task.state = Task.State.RESOLVED
+                task.exitImplicitThread()
                 throw HostValueException(e)
             }
             cx.commitMoves()
             coreArgs.toLongArray()
         }
         val onResolve = { flat: LongArray? ->
+            cx.releaseLends()
             if (flat == null) {
-                cancelled = true
+                done(Result.failure(CancellationException("'$functionName' was cancelled")))
             } else {
+                val results = WitWriter()
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
                 if (CanonicalAbi.flattenAll(type.results).size > limit) {
@@ -176,57 +439,151 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     val reader = Lifter.FlatReader(flat)
                     type.results.forEach { lifter.liftFlat(it, reader) }
                 }
+                done(Result.success(results.toReader()))
             }
-            resolved = true
         }
-        try {
-            c.guest {
-                canonLift(
-                    inst, type.async, opts.async,
-                    callee = c.coreFunction(export.func).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } },
-                    callback = opts.callback?.let { cb -> c.callbacks.getValue(cb).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } } },
-                    postReturn = opts.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r); Unit } },
-                    checkReturn = { tr, trOpts -> tr.results == type.results && sameLiftOptions(trOpts, opts) },
-                    onStart = onStart,
-                    onResolve = onResolve,
-                    createdTask = { task = it },
-                )
-                runUntil("'$functionName' has not returned") { resolved }
-            }
-        } finally {
-            cx.releaseLends()
-        }
-        if (cancelled) throw IllegalStateException("'$functionName' was cancelled")
-        return results.toReader()
+        return canonLift(
+            inst, type.async, opts.async,
+            callee = c.coreFunction(export.func).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } },
+            callback = opts.callback?.let { cb -> c.callbacks.getValue(cb).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } } },
+            postReturn = opts.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r); Unit } },
+            checkReturn = { tr, trOpts -> tr.results == type.results && sameLiftOptions(trOpts, opts) },
+            onStart = onStart,
+            onResolve = onResolve,
+            createdTask = { task = it },
+        )
     }
 
     /** As in Wasmtime: a `task.return` that needs no memory may leave it out. */
     private fun sameLiftOptions(a: CanonOptions, b: CanonOptions) = a.stringEncoding == b.stringEncoding && (a.memory == null || a.memory == b.memory)
 
+    // ------------------------------------------------------------------- host imports
+
     /**
-     * A guest calling a host import with `async` lowering. The host function runs to completion, so
-     * the subtask has returned by the time the call does (the reference's eager return).
+     * Calls the suspending host function [fn] for the guest's call of an `async func` import, in a
+     * coroutine on the session's thread with the session's host resources (ADR-0019). [onDone]
+     * runs on the session's thread once it finished (null cause), failed or was cancelled.
      */
-    fun callHostAsync(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray {
-        val opts = plan.options.getValue(t.options)
-        val cx = c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST)
+    private fun launchHostImport(fn: AsyncHostFunction, args: WitReader, results: WitWriter, onDone: (Throwable?) -> Unit): Job {
+        val resources = HostResourceTable.currentOrNull()
+        hostWork++
+        val job = scope.launch(resources?.asContextElement() ?: EmptyCoroutineContext) { fn.call(args, results) }
+        job.invokeOnCompletion { cause ->
+            post {
+                hostWork--
+                onDone(cause)
+                drain()
+            }
+        }
+        return job
+    }
+
+    /** The guest's arguments for a call of host import [t], lifted into the binary format. */
+    private fun liftImportArgs(t: Trampoline.LowerImport, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
         val args = WitWriter()
         val lifter = Lifter(cx, args)
         val paramTypes = t.type.params.map { it.second }
-        if (CanonicalAbi.flattenAll(paramTypes).size > CanonicalAbi.MAX_FLAT_ASYNC_PARAMS) {
+        if (CanonicalAbi.flattenAll(paramTypes).size > maxFlat) {
             lifter.loadTuple(coreArgs[0].toInt(), paramTypes)
         } else {
             val reader = Lifter.FlatReader(coreArgs)
             paramTypes.forEach { lifter.liftFlat(it, reader) }
         }
-        val results = WitWriter()
-        c.hostImport(t.import).call(args.toReader(), results)
-        val reader = results.toReader()
-        if (t.type.results.isNotEmpty()) {
-            Lowerer(cx, reader).storeTupleAt(t.type.results, coreArgs[coreArgs.size - 1].toInt())
+        return args
+    }
+
+    private fun checkImportResults(reader: WitReader, key: String) {
+        if (reader.remaining != 0) throw IllegalStateException("${reader.remaining} unread bytes after the results of host import '$key'")
+    }
+
+    /** A host import failed: the component cannot continue (ADR-0019). */
+    private fun importFailed(key: String, cause: Throwable): Nothing {
+        if (cause is ComponentTrapException) throw cause
+        throw ComponentTrapException("Host import '$key' failed: $cause", cause)
+    }
+
+    /**
+     * A guest calling a host import with `async` lowering. A suspending host function runs in a
+     * coroutine while the guest goes on; a blocking one completes the call at once.
+     */
+    fun callHostAsync(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray {
+        val opts = plan.options.getValue(t.options)
+        val cx = c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST)
+        val key = plan.imports.getValue(t.import).dispatchKey
+        val args = liftImportArgs(t, cx, coreArgs, CanonicalAbi.MAX_FLAT_ASYNC_PARAMS)
+        val retPtr = if (t.type.results.isNotEmpty()) coreArgs[coreArgs.size - 1].toInt() else null
+        val fn = if (t.type.async) c.asyncHostImport(t.import) else null
+        if (fn == null) {
+            val results = WitWriter()
+            c.hostImport(t.import).call(args.toReader(), results)
+            val reader = results.toReader()
+            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+            checkImportResults(reader, key)
+            return longArrayOf(Subtask.State.RETURNED.toLong())
         }
-        if (reader.remaining != 0) throw IllegalStateException("${reader.remaining} unread bytes after the results of a host import")
-        return longArrayOf(Subtask.State.RETURNED.toLong())
+        val caller = currentThread()
+        val subtask = Subtask()
+        subtask.state = Subtask.State.STARTED
+        val subtaski = caller.task.inst.handles.add(subtask)
+        val results = WitWriter()
+        val job = launchHostImport(fn, args.toReader(), results) { cause ->
+            if (subtask.resolved()) return@launchHostImport
+            when {
+                cause == null -> {
+                    try {
+                        c.guest {
+                            val reader = results.toReader()
+                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+                            checkImportResults(reader, key)
+                        }
+                    } catch (e: Throwable) {
+                        failAll(c.asTrap(e))
+                        return@launchHostImport
+                    }
+                    subtask.resolve(Subtask.State.RETURNED, LongArray(0))
+                }
+                cause is CancellationException && subtask.cancellationRequested ->
+                    subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, LongArray(0))
+                else -> {
+                    failAll(runCatching { c.guest { importFailed(key, cause) } }.exceptionOrNull()!!)
+                    return@launchHostImport
+                }
+            }
+            subtask.setPendingEvent {
+                if (subtask.resolved()) subtask.deliverResolve()
+                Event(EventCode.SUBTASK, subtaski, subtask.state)
+            }
+        }
+        subtask.onCancel = { job.cancel() }
+        return longArrayOf((Subtask.State.STARTED or (subtaski shl 4)).toLong())
+    }
+
+    /**
+     * A guest calling a host import synchronously. For an `async func` with a suspending host
+     * function, the guest's thread waits (other tasks run meanwhile); a task that may not block runs
+     * the host function to completion on its thread instead. Returns null when [fn] does not apply.
+     */
+    fun callHostSync(t: Trampoline.LowerImport, invoke: (HostFunction) -> Unit): Boolean {
+        if (!t.type.async) return false
+        val fn = c.asyncHostImport(t.import) ?: return false
+        val thread = currentThreadOrNull()
+        if (thread == null || !thread.task.mayBlock()) {
+            invoke(HostFunction { a, r -> runBlocking(HostResourceTable.currentOrNull()?.asContextElement() ?: EmptyCoroutineContext) { fn.call(a, r) } })
+            return true
+        }
+        invoke(
+            HostFunction { a, r ->
+                var outcome: Throwable? = null
+                var finished = false
+                launchHostImport(fn, a, r) { cause ->
+                    outcome = cause
+                    finished = true
+                }
+                thread.waitUntil { finished }
+                outcome?.let { importFailed(plan.imports.getValue(t.import).dispatchKey, it) }
+            },
+        )
+        return true
     }
 
     // ------------------------------------------------------------------- intrinsics
@@ -862,26 +1219,74 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val element = transmitTable(table, stream).element
         if (element != null) require(!containsHandles(element)) { "A $what of resources, streams, futures or error contexts cannot be passed from the host" }
         hostObjects.remove(id)
-        // The host's writable end holds all the values; the component reads them, then the stream ends.
         val (r, w) = newEnds(stream, table, null)
-        val writer = HostWriter(w, HostReadableBuffer(source, element))
-        w.copy(writer.buffer)
+        val writer = HostWriter(w, element)
         hostWriters += writer
+        startHostWriter(writer, source)
         return lowerAsyncValue(r, table, stream)
     }
 
     /** Values the host passes in a stream or future it created ([newStream] / [newFuture]). */
-    private class HostSource(val stream: Boolean, val values: ByteArray, val count: Int)
+    private class HostSource(val stream: Boolean, val chunks: Flow<WitStreamChunk>)
 
-    private class HostWriter(val end: End, val buffer: HostReadableBuffer)
+    /**
+     * The host's writable end of a stream or future it passed: its coroutine collects the chunks
+     * one at a time, each once the component has read the previous one (ADR-0019).
+     */
+    private class HostWriter(val end: End, val element: WitType?) {
+        var buffer: HostReadableBuffer? = null
+        var consumed: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        var producing = true
+        var finished = false
+        var job: Job? = null
+    }
 
     /** Writable ends the host holds; dropped once the component has read every value. */
     private val hostWriters = ArrayList<HostWriter>()
 
+    private fun startHostWriter(writer: HostWriter, source: HostSource) {
+        val resources = HostResourceTable.currentOrNull()
+        hostWork++
+        writer.job = scope.launch(resources?.asContextElement() ?: EmptyCoroutineContext) {
+            try {
+                source.chunks.collect { chunk ->
+                    writer.producing = false
+                    hostWork--
+                    if (chunk.count == 0) {
+                        writer.producing = true
+                        hostWork++
+                        return@collect
+                    }
+                    if (writer.end.other == null) throw CancellationException("The component dropped the stream")
+                    val consumed = kotlinx.coroutines.CompletableDeferred<Unit>()
+                    writer.consumed = consumed
+                    val buffer = HostReadableBuffer(chunk, writer.element)
+                    writer.buffer = buffer
+                    try {
+                        c.guest {
+                            if (writer.end.hasPendingEvent()) writer.end.getPendingEvent()
+                            writer.end.copy(buffer)
+                        }
+                    } catch (e: Throwable) {
+                        failAll(e)
+                        throw CancellationException("trapped")
+                    }
+                    drain()
+                    consumed.await()
+                }
+            } finally {
+                if (writer.producing) hostWork--
+                writer.producing = false
+                writer.finished = true
+                post { drain() }
+            }
+        }
+    }
+
     /**
-     * Lets the component see what the host's writable ends did: an end whose values were all read
-     * is dropped (once the reader took its last event), so a reader waiting for more sees the stream
-     * end. Returns whether anything changed.
+     * Lets the component see what the host's writable ends did: the next chunk is collected once a
+     * chunk was read; an end whose source finished is dropped (once the reader took its last
+     * event), so a reader waiting for more sees the stream end. Returns whether anything changed.
      */
     private fun pumpHostWriters(): Boolean {
         var changed = false
@@ -891,61 +1296,80 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             if (w.end.hasPendingEvent()) w.end.getPendingEvent()
             val reader = w.end.other
             if (reader == null) {
+                // The component dropped its end: stop collecting.
+                w.job?.cancel()
                 it.remove()
                 continue
             }
-            if (w.buffer.remain() == 0 && !reader.hasPendingEvent() && w.end.buffer == null) {
-                if (w.end.isStream) {
-                    w.end.drop()
-                    changed = true
+            val buffer = w.buffer
+            if (buffer != null && buffer.remain() > 0 && w.end.buffer == null && w.end.state == End.EndState.IDLE) {
+                // A copy took part of the chunk: offer the rest, as a guest writes again.
+                c.guest { w.end.copy(buffer) }
+                changed = true
+                continue
+            }
+            if (buffer != null && buffer.remain() == 0 && w.end.buffer == null) {
+                w.buffer = null
+                if (!w.finished) {
+                    w.producing = true
+                    hostWork++
                 }
+                w.consumed?.complete(Unit)
+                changed = true
+            }
+            if (w.finished && w.buffer == null && !reader.hasPendingEvent() && w.end.buffer == null) {
+                w.end.drop()
                 it.remove()
+                changed = true
             }
         }
         return changed
     }
 
-    /** Runs the scheduler until [done]; traps when nothing can run any more. */
-    private fun runUntil(what: String, done: () -> Boolean) {
-        while (!done()) {
-            if (!store.tick() && !pumpHostWriters()) trap("deadlock detected: $what, but every task is waiting")
-        }
-    }
-
     fun newHostStream(values: ByteArray, count: Int): Int {
         require(count >= 0) { "Negative stream length $count" }
+        return newHostStream(kotlinx.coroutines.flow.flowOf(WitStreamChunk(count, values.copyOf())))
+    }
+
+    fun newHostStream(chunks: Flow<WitStreamChunk>): Int {
         val id = nextHostObject++
-        hostObjects[id] = HostSource(true, values.copyOf(), count)
+        hostObjects[id] = HostSource(true, chunks)
         return id
     }
 
     fun newHostFuture(value: ByteArray): Int {
+        val copy = value.copyOf()
+        return newHostFuture { copy }
+    }
+
+    fun newHostFuture(value: suspend () -> ByteArray): Int {
         val id = nextHostObject++
-        hostObjects[id] = HostSource(false, value.copyOf(), 1)
+        hostObjects[id] = HostSource(false, kotlinx.coroutines.flow.flow { emit(WitStreamChunk(1, value())) })
         return id
     }
 
-    /** The host reading the readable end [handle] of a stream or future the component returned. */
-    fun hostRead(handle: Int, maxCount: Int, stream: Boolean): WitReader? {
-        val what = if (stream) "stream" else "future"
-        val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown $what handle $handle")
-        require(end.isStream == stream && end.isReadable) { "Handle $handle is not the readable end of a $what" }
-        require(!stream || maxCount > 0) { "maxCount must be positive" }
-        val element = transmitTable(end.table, stream).element
-        if (element != null && containsHandles(element)) {
-            throw UnsupportedOperationException("Reading a $what of resources, streams, futures or error contexts on the host is not supported")
+    /** A host read in progress of a stream or future the component returned. */
+    private class HostRead(
+        val handle: Int,
+        val end: End,
+        val buffer: HostWritableBuffer,
+        val stream: Boolean,
+        val cont: CancellableContinuation<WitReader?>,
+    )
+
+    private val hostReads = ArrayList<HostRead>()
+
+    /** Resumes the host reads whose copy finished. */
+    private fun completeHostReads() {
+        val done = hostReads.filter { it.end.hasPendingEvent() }
+        for (read in done) {
+            hostReads.remove(read)
+            read.end.getPendingEvent()
+            read.cont.resumeWith(Result.success(finishRead(read.handle, read.end, read.buffer, read.stream)))
         }
-        if (end.state == End.EndState.DONE) {
-            hostObjects.remove(handle)
-            end.drop()
-            return null
-        }
-        val buffer = HostWritableBuffer(if (stream) maxCount else 1)
-        c.guest {
-            end.copy(buffer)
-            runUntil("the host is reading a $what") { end.hasPendingEvent() }
-            end.getPendingEvent()
-        }
+    }
+
+    private fun finishRead(handle: Int, end: End, buffer: HostWritableBuffer, stream: Boolean): WitReader? {
         if (buffer.progress == 0 && end.state == End.EndState.DONE) {
             hostObjects.remove(handle)
             end.drop()
@@ -963,11 +1387,60 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }.toReader()
     }
 
-    fun hostDropReadable(handle: Int) {
+    /**
+     * The host reading the readable end [handle] of a stream or future the component returned:
+     * suspends until the component writes values or drops its end (ADR-0019).
+     */
+    suspend fun hostReadSuspending(handle: Int, maxCount: Int, stream: Boolean): WitReader? = withContext(loop) {
+        c.checkUsable()
+        val what = if (stream) "stream" else "future"
+        val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown $what handle $handle")
+        require(end.isStream == stream && end.isReadable) { "Handle $handle is not the readable end of a $what" }
+        require(!stream || maxCount > 0) { "maxCount must be positive" }
+        check(hostReads.none { it.handle == handle }) { "The $what $handle is already being read" }
+        val element = transmitTable(end.table, stream).element
+        if (element != null && containsHandles(element)) {
+            throw UnsupportedOperationException("Reading a $what of resources, streams, futures or error contexts on the host is not supported")
+        }
+        if (end.state == End.EndState.DONE) {
+            hostObjects.remove(handle)
+            end.drop()
+            return@withContext null
+        }
+        val buffer = HostWritableBuffer(if (stream) maxCount else 1)
+        suspendCancellableCoroutine { cont ->
+            hostReads += HostRead(handle, end, buffer, stream, cont)
+            try {
+                c.guest { end.copy(buffer) }
+            } catch (e: Throwable) {
+                hostReads.removeAll { it.cont === cont }
+                throw e
+            }
+            cont.invokeOnCancellation {
+                post {
+                    if (hostReads.removeAll { it.cont === cont } && end.copyingOrCancelling()) {
+                        // Take the buffer back, as `stream.cancel-read` does; values already copied are lost.
+                        runCatching { c.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() } }
+                    }
+                }
+            }
+            drain()
+        }
+    }
+
+    /** A blocking host read ([wasm2kt.runtime.ComponentBackend.readStream]). */
+    fun hostRead(handle: Int, maxCount: Int, stream: Boolean): WitReader? {
+        check(!isScheduling()) { "A stream or future was read synchronously from a host import; read it from a coroutine" }
+        return runBlocking { hostReadSuspending(handle, maxCount, stream) }
+    }
+
+    fun hostDropReadable(handle: Int) = onSession {
         val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown stream or future handle $handle")
         require(end.isReadable) { "Handle $handle is not a readable end" }
+        check(hostReads.none { it.handle == handle }) { "The stream or future $handle is being read" }
         hostObjects.remove(handle)
         c.guest { end.drop() }
+        drain()
     }
 
     private fun containsHandles(t: WitType): Boolean = when (t) {
@@ -997,7 +1470,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     /** The host's values for a copy out of a stream or future it created. */
-    private class HostReadableBuffer(private val source: HostSource, private val element: WitType?) : ReadableBuffer {
+    private class HostReadableBuffer(private val source: WitStreamChunk, private val element: WitType?) : ReadableBuffer {
         private val reader = WitReader(source.values)
         override var progress = 0
             private set
@@ -1144,6 +1617,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     companion object {
+        /** Seconds the session's thread waits for work before it exits. */
+        const val IDLE_SECONDS = 2L
         const val CALLBACK_EXIT = 0
         const val CALLBACK_YIELD = 1
         const val CALLBACK_WAIT = 2

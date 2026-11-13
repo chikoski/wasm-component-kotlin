@@ -1,0 +1,10 @@
+package root:component;
+
+world root {
+  import fetch: async func(x: u32) -> u32;
+
+  export fetch-plus-one: async func(x: u32) -> u32;
+  export fetch-sync-plus-two: async func(x: u32) -> u32;
+  export blocking-fetch: func(x: u32) -> u32;
+  export cancellable: async func(x: u32) -> u32;
+}
