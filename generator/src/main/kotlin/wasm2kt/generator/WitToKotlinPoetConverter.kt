@@ -582,6 +582,12 @@ class WitToKotlinPoetConverter(
                 resolve.types.getOrNull(targetId)?.owner?.`interface`?.let { importedIds += it }
             }
         }
+        val queue = ArrayDeque(importedIds)
+        while (queue.isNotEmpty()) {
+            for (dep in interfaceDependencies(queue.removeFirst())) {
+                if (importedIds.add(dep)) queue += dep
+            }
+        }
         val exportedIds = linkedSetOf<Int>()
         world.exports.values.forEach { item -> if (item is WitWorldItem.InterfaceRef) exportedIds += item.id }
         currentImportedIfaces = importedIds
@@ -1821,11 +1827,41 @@ class WitToKotlinPoetConverter(
                 b.addStatement("val $v = %L", value)
                 kind.types.forEachIndexed { i, t -> b.add(buildWrite(t, CodeBlock.of("$v.f$i"), w, depth + 1)) }
             }
-            is WitTypeDefKind.FutureType, is WitTypeDefKind.StreamType ->
-                b.addStatement(
-                    "throw %T(%S)", UnsupportedOperationException::class,
-                    "Only parameters of exported functions can be futures and streams, not values nested in other types (#16)",
-                )
+            is WitTypeDefKind.StreamType -> {
+                val id = localVarCounter++
+                val chunk = ClassName("wasm2kt.runtime", "WitStreamChunk")
+                val element = kind.element
+                val map = MemberName("kotlinx.coroutines.flow", "map")
+                val streamVar = "__s$id"
+                b.addStatement("val $streamVar = %L", value)
+                when {
+                    element == null -> b.addStatement("val __chunks$id = $streamVar.%M { %T(1, ByteArray(0)) }", map, chunk)
+                    isPrimitive(element, "u8") -> b.addStatement("val __chunks$id = $streamVar.%M { %T(it.size, it) }", map, chunk)
+                    else -> {
+                        val elemVar = "__se$id"
+                        val writerVar = "__sw$id"
+                        b.beginControlFlow("val __chunks$id = $streamVar.%M { $elemVar ->", map)
+                        b.addStatement("val $writerVar = %T()", witWriterClass)
+                        b.add(buildWrite(element, CodeBlock.of(elemVar), writerVar, depth + 1))
+                        b.addStatement("%T(1, $writerVar.toByteArray())", chunk)
+                        b.endControlFlow()
+                    }
+                }
+                b.addStatement("$w.int(%T.current().newStream(__chunks$id))", componentBackendClass)
+            }
+            is WitTypeDefKind.FutureType -> {
+                val id = localVarCounter++
+                val futVar = "__f$id"
+                val futLambda = "__future$id"
+                b.addStatement("val $futVar = %L", value)
+                b.beginControlFlow("val $futLambda: suspend () -> %T =", BYTE_ARRAY)
+                b.addStatement("val __fv$id = $futVar.await()")
+                b.addStatement("val __fw$id = %T()", witWriterClass)
+                kind.type?.let { b.add(buildWrite(it, CodeBlock.of("__fv$id"), "__fw$id", depth + 1)) }
+                b.addStatement("__fw$id.toByteArray()")
+                b.endControlFlow()
+                b.addStatement("$w.int(%T.current().newFuture($futLambda))", componentBackendClass)
+            }
         }
         return b.build()
     }
@@ -1902,27 +1938,31 @@ class WitToKotlinPoetConverter(
                 val tupleClass = ClassName(targetPackage, "Tuple${kind.types.size}")
                 CodeBlock.of("%T(%L)", tupleClass, kind.types.map { buildRead(it, r, depth + 1, sessionExpr) }.joinToCode(", "))
             }
-            is WitTypeDefKind.FutureType ->
-                if (sessionExpr == null) {
-                    CodeBlock.of("throw %T(%S)", UnsupportedOperationException::class, "Host imports cannot take or return futures yet (#16)")
-                } else {
-                    usesAsyncValues = true
-                    val inner = kind.type?.let { buildRead(it, "__fr", depth + 1, sessionExpr) } ?: CodeBlock.of("Unit")
-                    CodeBlock.of("%M(%L.runtimeSession, $r.int()) { __fr -> %L }", MemberName(targetPackage, "witFuture"), sessionExpr, inner)
+            is WitTypeDefKind.FutureType -> {
+                val fr = "__fr$depth"
+                val inner = kind.type?.let { buildRead(it, fr, depth + 1, sessionExpr) } ?: CodeBlock.of("Unit")
+                CodeBlock.of(
+                    "%M(%T.current(), $r.int()) { $fr -> %L }",
+                    MemberName("wasm2kt.runtime", "witFuture"),
+                    componentBackendClass,
+                    inner,
+                )
+            }
+            is WitTypeDefKind.StreamType -> {
+                val sr = "__sr$depth"
+                val element = kind.element
+                val chunk = when {
+                    element == null -> CodeBlock.of("List($sr.length()) { Unit }")
+                    isPrimitive(element, "u8") -> CodeBlock.of("listOf($sr.bytes())")
+                    else -> CodeBlock.of("List($sr.length()) { %L }", buildRead(element, sr, depth + 1, sessionExpr))
                 }
-            is WitTypeDefKind.StreamType ->
-                if (sessionExpr == null) {
-                    CodeBlock.of("throw %T(%S)", UnsupportedOperationException::class, "Host imports cannot take or return streams yet (#16)")
-                } else {
-                    usesAsyncValues = true
-                    val element = kind.element
-                    val chunk = when {
-                        element == null -> CodeBlock.of("List(__sr.length()) { Unit }")
-                        isPrimitive(element, "u8") -> CodeBlock.of("listOf(__sr.bytes())")
-                        else -> CodeBlock.of("List(__sr.length()) { %L }", buildRead(element, "__sr", depth + 1, sessionExpr))
-                    }
-                    CodeBlock.of("%M(%L.runtimeSession, $r.int()) { __sr -> %L }", MemberName(targetPackage, "witStream"), sessionExpr, chunk)
-                }
+                CodeBlock.of(
+                    "%M(%T.current(), $r.int()) { $sr -> %L }",
+                    MemberName("wasm2kt.runtime", "witStream"),
+                    componentBackendClass,
+                    chunk,
+                )
+            }
         }
     }
 
@@ -1977,41 +2017,6 @@ class WitToKotlinPoetConverter(
                     argValues += CodeBlock.of("%T(%N)", witBorrowedClass, name)
                     encode.addStatement("__w.borrowHostResource(%N)", name)
                 }
-                asyncValueKind(param.type) != null && sessionExpr != null -> {
-                    // The backend collects the flow and awaits the deferred as the component reads
-                    // them, while the call runs (ADR-0019).
-                    usesAsyncValues = true
-                    argValues += CodeBlock.of("%N", name)
-                    val chunk = ClassName("wasm2kt.runtime", "WitStreamChunk")
-                    when (val kind = asyncValueKind(param.type)) {
-                        is WitTypeDefKind.StreamType -> {
-                            val element = kind.element
-                            val map = MemberName("kotlinx.coroutines.flow", "map")
-                            when {
-                                element == null -> prelude.addStatement("val __chunks$i = %N.%M { %T(1, ByteArray(0)) }", name, map, chunk)
-                                isPrimitive(element, "u8") -> prelude.addStatement("val __chunks$i = %N.%M { %T(it.size, it) }", name, map, chunk)
-                                else -> {
-                                    prelude.beginControlFlow("val __chunks$i = %N.%M { __e ->", name, map)
-                                    prelude.addStatement("val __sw = %T()", witWriterClass)
-                                    prelude.add(buildWrite(element, CodeBlock.of("__e"), "__sw"))
-                                    prelude.addStatement("%T(1, __sw.toByteArray())", chunk)
-                                    prelude.endControlFlow()
-                                }
-                            }
-                            encode.addStatement("__w.int(%L.runtimeSession.withBackend { it.newStream(__chunks$i) })", target)
-                        }
-                        is WitTypeDefKind.FutureType -> {
-                            prelude.beginControlFlow("val __future$i: suspend () -> %T =", BYTE_ARRAY)
-                            prelude.addStatement("val __v = %N.await()", name)
-                            prelude.addStatement("val __fw = %T()", witWriterClass)
-                            kind.type?.let { prelude.add(buildWrite(it, CodeBlock.of("__v"), "__fw")) }
-                            prelude.addStatement("__fw.toByteArray()")
-                            prelude.endControlFlow()
-                            encode.addStatement("__w.int(%L.runtimeSession.withBackend { it.newFuture(__future$i) })", target)
-                        }
-                        else -> error("unreachable")
-                    }
-                }
                 else -> {
                     argValues += CodeBlock.of("%N", name)
                     encode.add(buildWrite(param.type, CodeBlock.of("%N", name), "__w"))
@@ -2041,20 +2046,6 @@ class WitToKotlinPoetConverter(
         val after = if (moved.isEmpty()) CodeBlock.of("") else CodeBlock.of(".also { %L }", moved.joinToCode("; "))
         return CallParts(prelude.build(), args, encodeLambda, decode, after)
     }
-
-
-    /** The stream or future type [ref] names, if it is one (through type aliases). */
-    private fun asyncValueKind(ref: WitTypeRef): WitTypeDefKind? {
-        val id = ref as? WitTypeRef.Id ?: return null
-        return when (val kind = resolve.types.getOrNull(id.index)?.kind) {
-            is WitTypeDefKind.StreamType, is WitTypeDefKind.FutureType -> kind
-            is WitTypeDefKind.TypeAlias -> asyncValueKind(kind.type)
-            else -> null
-        }
-    }
-
-    /** Whether generated code reads or writes streams or futures: the support file then gets their helpers. */
-    private var usesAsyncValues = false
 
     private fun returnsOwnedResource(fn: WitFunction): Boolean {
         if (fn.results.size != 1) return false
@@ -2290,65 +2281,6 @@ class WitToKotlinPoetConverter(
         }
     }
 
-    /**
-     * Streams and futures the component returns, and streams the host passes (#16, ADR-0006): a
-     * future is a lazy [kotlinx.coroutines.Deferred] that reads the value when awaited; a stream a
-     * [kotlinx.coroutines.flow.Flow] that reads chunks as it is collected, once. Reads suspend (ADR-0019).
-     */
-    private fun addAsyncValueHelpers(fileBuilder: FileSpec.Builder) {
-        val session = ClassName(targetPackage, "WasmtimeSession")
-        val t = TypeVariableName("T")
-        val coroutines = "kotlinx.coroutines"
-        fileBuilder.addFunction(
-            FunSpec.builder("witFuture")
-                .addKdoc("The future [handle] the component returned; awaiting it runs the component until it writes the value.\n")
-                .addModifiers(KModifier.INTERNAL)
-                .addAnnotation(AnnotationSpec.builder(ClassName("kotlin", "OptIn")).addMember("%T::class", ClassName(coroutines, "DelicateCoroutinesApi")).build())
-                .addTypeVariable(t)
-                .addParameter("session", session)
-                .addParameter("handle", INT)
-                .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = t))
-                .returns(deferredClass.parameterizedBy(t))
-                .beginControlFlow(
-                    "return %T.%M(%T.Unconfined, start = %T.LAZY)",
-                    ClassName(coroutines, "GlobalScope"), MemberName(coroutines, "async"), ClassName(coroutines, "Dispatchers"), ClassName(coroutines, "CoroutineStart"),
-                )
-                .addStatement("val r = session.withBackendSuspending { it.readFutureSuspending(handle) } ?: throw %T(%S)", IllegalStateException::class, "The component dropped the future without writing a value")
-                .addStatement("decode(r)")
-                .endControlFlow()
-                .build(),
-        )
-        fileBuilder.addFunction(
-            FunSpec.builder("witStream")
-                .addKdoc("The stream [handle] the component returned, read in chunks as it is collected; it can be collected once.\n")
-                .addModifiers(KModifier.INTERNAL)
-                .addTypeVariable(t)
-                .addParameter("session", session)
-                .addParameter("handle", INT)
-                .addParameter("decode", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(witReaderClass)), returnType = LIST.parameterizedBy(t)))
-                .returns(flowClass.parameterizedBy(t))
-                .addStatement("val collected = %T(false)", ClassName("java.util.concurrent.atomic", "AtomicBoolean"))
-                .beginControlFlow("return %M", MemberName("kotlinx.coroutines.flow", "flow"))
-                .addStatement("check(collected.compareAndSet(false, true)) { %S }", "A stream returned by the component can be collected only once")
-                .addStatement("var ended = false")
-                .beginControlFlow("try")
-                .beginControlFlow("while (true)")
-                .addStatement("val r = session.withBackendSuspending { it.readStreamSuspending(handle, 64) }")
-                .beginControlFlow("if (r == null)")
-                .addStatement("ended = true")
-                .addStatement("break")
-                .endControlFlow()
-                .addStatement("for (v in decode(r)) emit(v)")
-                .endControlFlow()
-                .nextControlFlow("finally")
-                // Stopped early: tell the component, which sees its writes fail with DROPPED.
-                .addStatement("if (!ended) runCatching { session.withBackend { it.dropReadable(handle) } }")
-                .endControlFlow()
-                .endControlFlow()
-                .build(),
-        )
-    }
-
     private fun generateCommonSupportFile(): FileSpec {
         val fileBuilder = FileSpec.builder(targetPackage, "WitSupport")
 
@@ -2369,7 +2301,6 @@ class WitToKotlinPoetConverter(
         }
         // A library of interfaces has no sessions (ADR-0014).
         if (interfacesOnly) return fileBuilder.build()
-        if (usesAsyncValues) addAsyncValueHelpers(fileBuilder)
 
         // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
         fileBuilder.addType(buildWasmtimeSessionTypeSpec())
@@ -3276,10 +3207,12 @@ class WitToKotlinPoetConverter(
                     .addAnnotation(synchronizedAnnotation)
                     .addModifiers(KModifier.OVERRIDE)
                     .addStatement("check(!isClosed) { %S }", closedMessage)
+                    .beginControlFlow("return backend.bind")
                     .addStatement("writer.reset()")
                     .addStatement("encode(writer)")
                     .addStatement("val index = functionIndices.getOrPut(functionName) { backend.resolve(functionName) }")
-                    .addStatement("return decode(backend.invoke(index, writer.toReader()))")
+                    .addStatement("decode(backend.invoke(index, writer.toReader()))")
+                    .endControlFlow()
                     .build(),
             )
             .addFunction(
@@ -3319,10 +3252,12 @@ class WitToKotlinPoetConverter(
                     .addModifiers(KModifier.OVERRIDE, KModifier.SUSPEND)
                     .addKdoc("Not serialized: the backend runs suspending calls on its own scheduler, several at once (ADR-0019).\n")
                     .addStatement("check(!isClosed) { %S }", closedMessage)
+                    .beginControlFlow("return backend.bindSuspending")
                     .addStatement("val w = %T()", witWriterClass)
                     .addStatement("encode(w)")
                     .addStatement("val index = synchronized(this) { functionIndices.getOrPut(functionName) { backend.resolve(functionName) } }")
-                    .addStatement("return decode(backend.invokeSuspending(index, w.toReader()))")
+                    .addStatement("decode(backend.invokeSuspending(index, w.toReader()))")
+                    .endControlFlow()
                     .build(),
             )
             .addFunction(
@@ -3345,7 +3280,7 @@ class WitToKotlinPoetConverter(
                     .addParameter("block", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(backendClass)), returnType = typeR).copy(suspending = true))
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", closedMessage)
-                    .addStatement("return block(backend)")
+                    .addStatement("return backend.bindSuspending { block(backend) }")
                     .build(),
             )
             .addFunction(
@@ -3356,7 +3291,7 @@ class WitToKotlinPoetConverter(
                     .addParameter("block", LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(backendClass)), returnType = typeR))
                     .returns(typeR)
                     .addStatement("check(!isClosed) { %S }", closedMessage)
-                    .addStatement("return block(backend)")
+                    .addStatement("return backend.bind { block(backend) }")
                     .build(),
             )
             .addFunction(

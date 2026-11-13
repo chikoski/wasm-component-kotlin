@@ -118,4 +118,22 @@ class GeneratorUnitTest {
         assertFalse(Regex("""val __l0 =[^\n]*\n(?:.*\n)*?\s*val __l0 =""").containsMatchIn(world), world)
         assertTrue("writer.reset()" in generate("roundtrip").getValue("WitSupport"))
     }
+
+    @Test
+    fun `host imports support streams, futures, and nested async values with interfacesOnly`() {
+        val fixturesDir = Paths.get(requireNotNull(System.getProperty("wasm2kt.fixtures")) { "wasm2kt.fixtures is not set" })
+        val wasiResolve = WitResolve.parse(Files.readString(fixturesDir.parent.resolve("runtime-wasi/wit.json")))
+        val converter = WitToKotlinPoetConverter(wasiResolve, "wasm2kt.wasi", interfacesOnly = true)
+        val files = converter.generate().associate { file ->
+            val rel = file.packageName.removePrefix("wasm2kt.wasi").removePrefix(".").replace('.', '/')
+            (if (rel.isEmpty()) "" else "$rel/") + file.name to file.content
+        }
+        val stdin = files.getValue("wasi/cli/stdin/Stdin")
+        assertTrue("ComponentBackend.current().newStream(" in stdin, stdin)
+        assertTrue("ComponentBackend.current().newFuture(" in stdin, stdin)
+        val stdout = files.getValue("wasi/cli/stdout/Stdout")
+        assertTrue("witStream(ComponentBackend.current()," in stdout, stdout)
+        assertTrue("ComponentBackend.current().newFuture(" in stdout, stdout)
+        assertTrue("wasi:cli/types@0.3.0" in converter.manifest!!.interfaces)
+    }
 }

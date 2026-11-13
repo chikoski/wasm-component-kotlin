@@ -17,6 +17,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import wasm2kt.runtime.AsyncHostFunction
+import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.HostFunction
 import wasm2kt.runtime.HostResourceTable
@@ -274,9 +275,11 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      */
     private fun drain() {
         if (syncLoops > 0) return
-        // Guest threads resumed from here see the session's host resources (ADR-0008).
+        // Guest threads resumed from here see the session's host resources (ADR-0008) and backend.
         val previous = HostResourceTable.currentOrNull()
+        val previousBackend = ComponentBackend.currentOrNull()
         hostResources?.let { HostResourceTable.setCurrent(it) }
+        ComponentBackend.setCurrent(c)
         try {
             while (true) {
                 completeHostReads()
@@ -310,6 +313,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             failAll(if (e is HostValueException) e.cause!! else e)
         } finally {
             HostResourceTable.setCurrent(previous)
+            ComponentBackend.setCurrent(previousBackend)
         }
     }
 
@@ -352,7 +356,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * A host call of an export of a component that uses the async ABI (ADR-0019): suspends until the
      * task returns. Cancelling the coroutine requests the task's cancellation.
      */
-    suspend fun invokeSuspending(export: PlanExport, functionName: String, args: WitReader): WitReader = withContext(loop) {
+    suspend fun invokeSuspending(export: PlanExport, functionName: String, args: WitReader): WitReader = withContext(loop + c.asContextElement()) {
         c.checkUsable()
         if (hostResources == null) hostResources = HostResourceTable.currentOrNull()
         suspendCancellableCoroutine { cont ->
@@ -466,8 +470,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      */
     private fun launchHostImport(fn: AsyncHostFunction, args: WitReader, results: WitWriter, onDone: (Throwable?) -> Unit): Job {
         val resources = HostResourceTable.currentOrNull()
+        val context = c.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
         hostWork++
-        val job = scope.launch(resources?.asContextElement() ?: EmptyCoroutineContext) { fn.call(args, results) }
+        val job = scope.launch(context) { fn.call(args, results) }
         job.invokeOnCompletion { cause ->
             post {
                 hostWork--
@@ -515,7 +520,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val fn = if (t.type.async) c.asyncHostImport(t.import) else null
         if (fn == null) {
             val results = WitWriter()
-            c.hostImport(t.import).call(args.toReader(), results)
+            c.bind { c.hostImport(t.import).call(args.toReader(), results) }
             val reader = results.toReader()
             if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
             checkImportResults(reader, key)
@@ -568,7 +573,10 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val fn = c.asyncHostImport(t.import) ?: return false
         val thread = currentThreadOrNull()
         if (thread == null || !thread.task.mayBlock()) {
-            invoke(HostFunction { a, r -> runBlocking(HostResourceTable.currentOrNull()?.asContextElement() ?: EmptyCoroutineContext) { fn.call(a, r) } })
+            invoke(HostFunction { a, r ->
+                val context = c.asContextElement() + (HostResourceTable.currentOrNull()?.asContextElement() ?: EmptyCoroutineContext)
+                runBlocking(context) { fn.call(a, r) }
+            })
             return true
         }
         invoke(
@@ -1246,8 +1254,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     private fun startHostWriter(writer: HostWriter, source: HostSource) {
         val resources = HostResourceTable.currentOrNull()
+        val context = c.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
         hostWork++
-        writer.job = scope.launch(resources?.asContextElement() ?: EmptyCoroutineContext) {
+        writer.job = scope.launch(context) {
             try {
                 source.chunks.collect { chunk ->
                     writer.producing = false

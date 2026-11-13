@@ -138,17 +138,19 @@ internal class ChicoryComponentInstance(
     internal var mayLeave = true
 
     init {
-        for (init in plan.initializers) {
-            when (init) {
-                is Initializer.Instantiate -> instantiateModule(init)
-                is Initializer.ExtractMemory -> memories[init.index] = instance(init.export.instance).exports().memory(init.export.name)
-                is Initializer.ExtractRealloc -> reallocs[init.index] = coreFunction(init.def)
-                is Initializer.ExtractPostReturn -> postReturns[init.index] = coreFunction(init.def)
-                is Initializer.ExtractTable -> tables[init.index] = instance(init.export.instance).exports().table(init.export.name)
-                is Initializer.ExtractCallback -> callbacks[init.index] = coreFunction(init.def)
-                is Initializer.Resource -> init.dtor?.let { d ->
-                    // The dtor's instance may not exist yet; resolve lazily on first drop.
-                    resourceDtors[init.resource] = ExportFunction { args -> coreFunction(d).apply(*args) }
+        bind {
+            for (init in plan.initializers) {
+                when (init) {
+                    is Initializer.Instantiate -> instantiateModule(init)
+                    is Initializer.ExtractMemory -> memories[init.index] = instance(init.export.instance).exports().memory(init.export.name)
+                    is Initializer.ExtractRealloc -> reallocs[init.index] = coreFunction(init.def)
+                    is Initializer.ExtractPostReturn -> postReturns[init.index] = coreFunction(init.def)
+                    is Initializer.ExtractTable -> tables[init.index] = instance(init.export.instance).exports().table(init.export.name)
+                    is Initializer.ExtractCallback -> callbacks[init.index] = coreFunction(init.def)
+                    is Initializer.Resource -> init.dtor?.let { d ->
+                        // The dtor's instance may not exist yet; resolve lazily on first drop.
+                        resourceDtors[init.resource] = ExportFunction { args -> coreFunction(d).apply(*args) }
+                    }
                 }
             }
         }
@@ -515,7 +517,7 @@ internal class ChicoryComponentInstance(
         }
 
         val results = WitWriter()
-        (fn ?: hostFunction(import.dispatchKey)).call(args.toReader(), results)
+        bind { (fn ?: hostFunction(import.dispatchKey)).call(args.toReader(), results) }
         val reader = results.toReader()
 
         val lowerer = Lowerer(cx, reader)

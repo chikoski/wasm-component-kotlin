@@ -83,6 +83,7 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
         ":generator:publishAllPublicationsToTestRepository",
         ":runtime-api:publishAllPublicationsToTestRepository",
         ":runtime-chicory:publishAllPublicationsToTestRepository",
+        ":runtime-wasi:publishAllPublicationsToTestRepository",
         ":tooling:publishAllPublicationsToTestRepository",
     )
     systemProperty("wasm2kt.testRepo", testRepo.get().asFile.absolutePath)
