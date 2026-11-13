@@ -9,8 +9,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.glitch.FilterInfo
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,19 +98,27 @@ class GlitchViewModel : ViewModel() {
     private val engine = GlitchEngine()
 
     /*
-     * Frames go through two stages, so that a frame's cost is that of the slower stage rather
-     * than the sum of both:
+     * Frames go through three stages, so that a frame's cost is that of the slowest stage rather
+     * than the sum of all three:
      *
-     * - The engine stage is one coroutine per frame, one frame at a time ([processingFrame]): it
-     *   converts the camera frame on [Dispatchers.Default] and awaits the glitch engine, whose
-     *   suspending calls run on the component's own scheduler thread.
+     * - The conversion stage is the camera's analyzer ([analyzeImage], on [analysisExecutor]): it
+     *   converts every camera frame as it arrives, closes it at once (so the camera can deliver the
+     *   next one), and leaves the result in [latestFrame]. A frame the engine has not taken yet is
+     *   replaced by the newer one. So when the engine finishes a frame, the next one is already
+     *   converted, instead of the engine waiting up to a camera frame interval for it and then for
+     *   its conversion.
+     * - The engine stage is one long-running coroutine ([engineLoop]) that takes the latest
+     *   converted frame and awaits the glitch engine, whose suspending calls run on the
+     *   component's own scheduler thread.
      * - The presentation stage runs on its own thread ([presentationExecutor]): it copies the
      *   result into the preview Bitmap, draws it, and hands it to the MP4 encoder. It owns the
      *   Bitmap and the preview surface.
      *
-     * `renderRgba` returns a new array for every frame, so the engine stage hands its output over
-     * without copying it ([handOff]). Only the latest output waits: if the presentation thread is
-     * still busy, an output it has not taken yet is replaced by the newer one.
+     * The converted frames' buffers come from [framePool], so a frame is never converted into the
+     * buffer the engine is reading. `renderRgba` returns a new array for every frame, so the engine
+     * stage hands its output over without copying it ([handOff]). Only the latest output waits: if
+     * the presentation thread is still busy, an output it has not taken yet is replaced by the
+     * newer one.
      */
     val analysisExecutor: Executor = Dispatchers.Default.asExecutor()
     private val presentationExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -115,9 +126,18 @@ class GlitchViewModel : ViewModel() {
     }
     private val pendingOutput = AtomicReference<GlitchFrameOutput?>(null)
 
-    // Used by one engine-stage coroutine at a time (processingFrame, or the synthetic run).
-    private val scratchHolder = RgbaBufferHolder()
-    private val processingFrame = AtomicBoolean(false)
+    private val framePool = FrameBufferPool()
+    private val latestFrame = LatestFrameSlot(framePool)
+
+    /** Signals [engineLoop] that [latestFrame] may hold a frame. */
+    private val frameReady = Channel<Unit>(Channel.CONFLATED)
+
+    // CameraX calls the analyzer for one frame at a time (the next frame comes after the previous
+    // one is closed), so the camera's conversion scratch is never used concurrently.
+    private val cameraScratch = RgbaBufferHolder()
+
+    // Used by the synthetic run's conversion coroutine only.
+    private val syntheticScratch = RgbaBufferHolder()
     private val baseAssetsLoaded = AtomicBoolean(false)
 
     /** Draws frames into the preview surface (AndroidExternalSurface) on the presentation thread. */
@@ -140,6 +160,7 @@ class GlitchViewModel : ViewModel() {
     private var smoothedFrameIntervalMs: Double = 0.0
 
     init {
+        viewModelScope.launch(Dispatchers.Default) { engineLoop() }
         viewModelScope.launch {
             val filters = runCatching { engine.availablePngFilters() }.getOrDefault(emptyList())
             val defaultFilter = filters.firstOrNull { it.name == "chromatic-aberration" } ?: filters.firstOrNull()
@@ -279,25 +300,36 @@ class GlitchViewModel : ViewModel() {
                 seedMode = SeedMode.PER_FRAME,
                 filterOption = PngFilterOption.ADAPTIVE_FAST,
             )
+            // Conversion overlaps the engine as on the camera path, but no frame is dropped: the
+            // converter waits while a converted frame is still queued (capacity 1).
+            val frames = Channel<ExtractedFrame>(capacity = 1)
             FrameTrace.asyncSection(FrameTrace.SYNTHETIC_RUN) {
-                repeat(frameCount) {
-                    FrameTrace.asyncSection(FrameTrace.ANALYZE) {
-                        val extracted = FrameTrace.section(FrameTrace.CONVERT) {
-                            RgbaFrameTransform.convert(
-                                source = source,
-                                srcWidth = srcWidth,
-                                srcHeight = srcHeight,
-                                rowStride = rowStride,
-                                pixelStride = 4,
-                                rotationDegrees = 90,
-                                mirrorHorizontally = false,
-                                maxLongSide = resolution.longSide,
-                                maxShortSide = resolution.shortSide,
-                                scratch = scratchHolder,
-                            )
+                coroutineScope {
+                    launch {
+                        try {
+                            repeat(frameCount) {
+                                val extracted = FrameTrace.section(FrameTrace.CONVERT) {
+                                    RgbaFrameTransform.convert(
+                                        source = source,
+                                        srcWidth = srcWidth,
+                                        srcHeight = srcHeight,
+                                        rowStride = rowStride,
+                                        pixelStride = 4,
+                                        rotationDegrees = 90,
+                                        mirrorHorizontally = false,
+                                        maxLongSide = resolution.longSide,
+                                        maxShortSide = resolution.shortSide,
+                                        scratch = syntheticScratch,
+                                        outputBuffer = framePool::acquire,
+                                    )
+                                }
+                                frames.send(extracted)
+                            }
+                        } finally {
+                            frames.close()
                         }
-                        engine.processFrame(extracted.width, extracted.height, extracted.rgbaBytes).onSuccess(::handOff)
                     }
+                    for (extracted in frames) runEngine(extracted)
                 }
             }
             // Runs after the presentation of the last frame handed off above.
@@ -307,50 +339,65 @@ class GlitchViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Conversion stage, the camera's analyzer: converts [image], closes it, and leaves the result
+     * for [engineLoop], replacing a frame the engine has not taken yet.
+     */
     fun analyzeImage(image: ImageProxy) {
-        if (!processingFrame.compareAndSet(false, true)) {
+        try {
+            val currentState = _uiState.value
+            val extracted = FrameTrace.section(FrameTrace.CONVERT) {
+                FrameConverter.extractRgba(
+                    image = image,
+                    mirrorHorizontally = currentState.lensFacing == CameraSelector.LENS_FACING_FRONT,
+                    maxLongSide = currentState.resolution.longSide,
+                    maxShortSide = currentState.resolution.shortSide,
+                    scratchHolder = cameraScratch,
+                    outputBuffer = framePool::acquire,
+                )
+            }
+            latestFrame.offer(extracted)
+            frameReady.trySend(Unit)
+        } catch (t: Throwable) {
+            _uiState.update { state ->
+                state.copy(statusMessage = t.message ?: "Frame error")
+            }
+        } finally {
             image.close()
-            return
         }
-        viewModelScope.launch(Dispatchers.Default) {
-            try {
-                // Async: the engine's calls suspend, and may resume on another thread.
-                FrameTrace.asyncSection(FrameTrace.ANALYZE) { analyze(image) }
-            } catch (t: Throwable) {
-                runCatching { image.close() }
-                _uiState.update { state ->
-                    state.copy(statusMessage = t.message ?: "Frame error")
-                }
-            } finally {
-                processingFrame.set(false)
+    }
+
+    /** Engine stage: processes the latest converted camera frame whenever there is one. */
+    private suspend fun engineLoop() {
+        while (true) {
+            frameReady.receive()
+            while (true) {
+                val frame = latestFrame.take() ?: break
+                runEngine(frame)
             }
         }
     }
 
-    /** Engine stage: converts [image], closes it, runs the engine and hands the output off. */
-    private suspend fun analyze(image: ImageProxy) {
-        val currentState = _uiState.value
-        val mirror = currentState.lensFacing == CameraSelector.LENS_FACING_FRONT
-        val extracted = FrameTrace.section(FrameTrace.CONVERT) {
-            FrameConverter.extractRgba(
-                image = image,
-                mirrorHorizontally = mirror,
-                maxLongSide = currentState.resolution.longSide,
-                maxShortSide = currentState.resolution.shortSide,
-                scratchHolder = scratchHolder,
-            )
-        }
-        image.close()
-
-        val glitchResult = engine.processFrame(
-            width = extracted.width,
-            height = extracted.height,
-            rgba = extracted.rgbaBytes,
-        )
-        glitchResult.onSuccess(::handOff).onFailure { err ->
-            _uiState.update { state ->
-                state.copy(statusMessage = err.message ?: "Glitch failed")
+    /**
+     * Engine stage: runs the engine on [frame], hands the output off, and gives [frame]'s buffer
+     * back to [framePool] (`reloadPixels` has copied it into the component by then).
+     */
+    private suspend fun runEngine(frame: ExtractedFrame) {
+        try {
+            // Async: the engine's calls suspend, and may resume on another thread.
+            FrameTrace.asyncSection(FrameTrace.ANALYZE) {
+                engine.processFrame(frame.width, frame.height, frame.rgbaBytes)
+                    .onSuccess(::handOff)
+                    .onFailure { err ->
+                        _uiState.update { state -> state.copy(statusMessage = err.message ?: "Glitch failed") }
+                    }
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _uiState.update { state -> state.copy(statusMessage = t.message ?: "Frame error") }
+        } finally {
+            framePool.release(frame.rgbaBytes)
         }
     }
 

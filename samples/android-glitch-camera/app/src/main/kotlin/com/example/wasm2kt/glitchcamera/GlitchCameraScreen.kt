@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -154,7 +155,12 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
             val mainExecutor = ContextCompat.getMainExecutor(context)
             val listener = Runnable {
                 val cameraProvider = runCatching { providerFuture.get() }.getOrNull() ?: return@Runnable
+                // The processing sizes are 16:9. Without an aspect ratio strategy CameraX prefers
+                // 4:3 for ImageAnalysis, and may deliver frames much larger than needed (such as
+                // 1280x960 for 540p), which costs time in CameraX's YUV to RGBA conversion and in
+                // ours.
                 val resolutionSelector = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
                     .setResolutionStrategy(
                         ResolutionStrategy(
                             Size(state.resolution.longSide, state.resolution.shortSide),

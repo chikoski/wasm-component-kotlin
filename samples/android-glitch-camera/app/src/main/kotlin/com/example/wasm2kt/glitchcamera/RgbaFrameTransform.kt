@@ -10,6 +10,10 @@ import java.nio.ByteOrder
  *
  * Kept free of Android types so it can be tested on the host JVM.
  *
+ * The result is written into the array [convert] gets from `outputBuffer` (by default the
+ * scratch holder's single output buffer; the camera pipeline passes a [FrameBufferPool], so that a
+ * frame can be converted while the engine still reads the previous one).
+ *
  * The source position of every output pixel splits into a part that depends only on the output
  * column and a part that depends only on the output row, for every rotation. Both are
  * precomputed into tables, so the inner loop is one table lookup and one 4-byte copy per pixel
@@ -27,6 +31,7 @@ object RgbaFrameTransform {
         maxLongSide: Int,
         maxShortSide: Int,
         scratch: RgbaBufferHolder,
+        outputBuffer: (size: Int) -> ByteArray = scratch::acquire,
     ): ExtractedFrame {
         require(srcWidth > 0 && srcHeight > 0) { "Empty frame ${srcWidth}x$srcHeight" }
         require(pixelStride >= 4) { "RGBA_8888 needs a pixel stride of at least 4, got $pixelStride" }
@@ -47,7 +52,8 @@ object RgbaFrameTransform {
         val outWidth = if (num >= den) rotWidth else scaledLength(rotWidth, num, den)
         val outHeight = if (num >= den) rotHeight else scaledLength(rotHeight, num, den)
 
-        val out = scratch.acquire(outWidth * outHeight * 4)
+        val out = outputBuffer(outWidth * outHeight * 4)
+        require(out.size == outWidth * outHeight * 4) { "Output buffer of ${out.size} bytes for ${outWidth}x$outHeight" }
         val buffer = source.duplicate()
         buffer.position(0)
 

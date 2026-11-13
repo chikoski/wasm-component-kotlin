@@ -16,9 +16,11 @@ object FrameTrace {
      * async sections ([asyncSection]); the others are ordinary thread sections ([section]).
      */
 
-    /** Engine stage: one camera (or synthetic) frame, from conversion to the hand-off. */
-    const val ANALYZE = "glitch.analyze"
+    /** Conversion stage: one camera (or synthetic) frame, rotated, mirrored and downscaled. */
     const val CONVERT = "glitch.convert"
+
+    /** Engine stage: one converted frame, from the engine calls to the hand-off. */
+    const val ANALYZE = "glitch.analyze"
     const val FROM_PIXELS = "glitch.fromPixels"
     const val RELOAD_PIXELS = "glitch.reloadPixels"
     const val SET_RECIPE = "glitch.setRecipe"

@@ -23,6 +23,8 @@ import org.junit.runners.Parameterized
  *
  * - `glitch.syntheticRun` (First): wall time of the whole run in the engine stage; the engine's
  *   throughput is FRAME_COUNT / this.
+ * - `glitch.convert` (Average): per-frame time in the conversion stage, which overlaps the engine
+ *   stage.
  * - `glitch.analyze` and its parts (Average): per-frame time in the engine stage.
  * - `glitch.present` and its parts (Average): per-frame time on the presentation thread.
  * - `glitch.present` (Count): frames actually shown; fewer than FRAME_COUNT when the presentation
