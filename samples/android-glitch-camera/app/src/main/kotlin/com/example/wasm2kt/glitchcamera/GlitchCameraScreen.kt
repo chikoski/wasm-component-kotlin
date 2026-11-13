@@ -51,6 +51,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -230,11 +231,14 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     LiveCameraSection(
-                        state = state,
+                        resolution = state.resolution,
+                        zoomOption = state.zoomOption,
+                        isRecording = state.isRecording,
+                        statusMessage = state.statusMessage,
+                        showPermissionPrompt = !hasCameraPermission && !state.isBenchmarkWarmup,
                         previewFrame = previewFrame,
                         previewRenderer = viewModel.previewRenderer,
                         isFoldable = true,
-                        hasCameraPermission = hasCameraPermission,
                         onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         onSelectResolution = viewModel::selectResolution,
                         onSelectZoom = viewModel::selectZoom,
@@ -263,11 +267,14 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 }
             } else {
                 LiveCameraSection(
-                    state = state,
+                    resolution = state.resolution,
+                    zoomOption = state.zoomOption,
+                    isRecording = state.isRecording,
+                    statusMessage = state.statusMessage,
+                    showPermissionPrompt = !hasCameraPermission && !state.isBenchmarkWarmup,
                     previewFrame = previewFrame,
                     previewRenderer = viewModel.previewRenderer,
                     isFoldable = false,
-                    hasCameraPermission = hasCameraPermission,
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                     onSelectResolution = viewModel::selectResolution,
                     onSelectZoom = viewModel::selectZoom,
@@ -302,7 +309,9 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 contentColor = ColorTextPrimary,
             ) {
                 EngineSettingsSheetContent(
-                    state = state,
+                    pngFilterOption = state.pngFilterOption,
+                    seedMode = state.seedMode,
+                    seed = state.seed,
                     previewFrame = previewFrame,
                     onSelectPngFilter = viewModel::selectPngFilterOption,
                     onSelectSeedMode = viewModel::selectSeedMode,
@@ -349,13 +358,21 @@ private fun PixelfrayAppBar(
     }
 }
 
+/**
+ * The camera preview and its controls. It takes only the fields of [GlitchUiState] it shows (all
+ * stable), so that changes elsewhere in the state, such as dragging a filter parameter slider,
+ * skip this section instead of recomposing it.
+ */
 @Composable
 private fun LiveCameraSection(
-    state: GlitchUiState,
+    resolution: CameraResolutionOption,
+    zoomOption: CameraZoomOption,
+    isRecording: Boolean,
+    statusMessage: String?,
+    showPermissionPrompt: Boolean,
     previewFrame: State<PreviewFrame>,
     previewRenderer: PreviewRenderer,
     isFoldable: Boolean,
-    hasCameraPermission: Boolean,
     onRequestPermission: () -> Unit,
     onSelectResolution: (CameraResolutionOption) -> Unit,
     onSelectZoom: (CameraZoomOption) -> Unit,
@@ -376,8 +393,9 @@ private fun LiveCameraSection(
                 .clipToBounds()
                 .background(ColorCameraSurface),
         ) {
-            // Frames are drawn into this surface by PreviewRenderer on the analysis worker
-            // thread, so a new frame involves neither recomposition nor a Compose draw pass.
+            // Frames are drawn into this surface by PreviewRenderer on the presentation thread
+            // (glitch-present), so a new frame involves neither recomposition nor a Compose draw
+            // pass.
             AndroidExternalSurface(
                 modifier = Modifier
                     .fillMaxSize()
@@ -409,14 +427,14 @@ private fun LiveCameraSection(
 
             // Resolution selector pill (node 2:38 / 2:82)
             ResolutionSelectorPill(
-                selected = state.resolution,
+                selected = resolution,
                 onSelect = onSelectResolution,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 12.dp, end = 16.dp),
             )
 
-            if (!hasCameraPermission && !state.isBenchmarkWarmup) {
+            if (showPermissionPrompt) {
                 Surface(
                     color = ColorOverlayPill.copy(alpha = 0.9f),
                     shape = RoundedCornerShape(14.dp),
@@ -437,7 +455,7 @@ private fun LiveCameraSection(
 
             // Lens zoom selection pill (node 2:40 / 2:84)
             LensZoomSelectorPill(
-                selected = state.zoomOption,
+                selected = zoomOption,
                 onSelect = onSelectZoom,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -452,7 +470,7 @@ private fun LiveCameraSection(
                     .padding(bottom = 15.dp, end = 16.dp),
             )
 
-            state.statusMessage?.let { msg ->
+            statusMessage?.let { msg ->
                 Surface(
                     color = ColorOverlayPill.copy(alpha = 0.92f),
                     shape = RoundedCornerShape(12.dp),
@@ -473,7 +491,7 @@ private fun LiveCameraSection(
         }
 
         CaptureControlsBar(
-            isRecording = state.isRecording,
+            isRecording = isRecording,
             isFoldable = isFoldable,
             onToggleRecording = onToggleRecording,
             onCapturePng = onCapturePng,
@@ -602,24 +620,20 @@ private fun FpsBadgePill(
     previewFrame: State<PreviewFrame>,
     modifier: Modifier = Modifier,
 ) {
-    // Reading the frame here limits per-frame recomposition to this badge.
-    val frame = previewFrame.value
-    val fpsText = if (frame.displayFps > 0.0) {
-        "${frame.displayFps.roundToInt().coerceIn(1, 120)} fps"
-    } else {
-        "-- fps"
+    // PreviewFrame changes on every camera frame, but the badge shows whole frames per second.
+    // Reading it only inside derivedStateOf recomposes the badge when the text changes, not on
+    // every frame. (The engine time, which changes every frame, is shown in the settings sheet.)
+    val fpsText by remember(previewFrame) {
+        derivedStateOf {
+            val fps = previewFrame.value.displayFps
+            if (fps > 0.0) "${fps.roundToInt().coerceIn(1, 120)} fps" else "-- fps"
+        }
     }
-    val perfDesc = if (frame.width > 0) {
-        String.format(
-            Locale.US,
-            "%dx%d %.1f ms/frame in engine (%s)",
-            frame.width,
-            frame.height,
-            frame.processingTimeMs,
-            fpsText,
-        )
-    } else {
-        fpsText
+    val perfDesc by remember(previewFrame) {
+        derivedStateOf {
+            val frame = previewFrame.value
+            if (frame.width > 0) "${frame.width}x${frame.height} ($fpsText)" else fpsText
+        }
     }
 
     Box(
@@ -1217,7 +1231,9 @@ private fun PixelfraySliderRow(
 
 @Composable
 private fun EngineSettingsSheetContent(
-    state: GlitchUiState,
+    pngFilterOption: PngFilterOption,
+    seedMode: SeedMode,
+    seed: ULong,
     previewFrame: State<PreviewFrame>,
     onSelectPngFilter: (PngFilterOption) -> Unit,
     onSelectSeedMode: (SeedMode) -> Unit,
@@ -1250,7 +1266,7 @@ private fun EngineSettingsSheetContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PngFilterOption.entries.forEach { option ->
-                    val isSelected = state.pngFilterOption == option
+                    val isSelected = pngFilterOption == option
                     Box(
                         modifier = Modifier
                             .height(34.dp)
@@ -1285,7 +1301,7 @@ private fun EngineSettingsSheetContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val isPerFrame = state.seedMode == SeedMode.PER_FRAME
+                val isPerFrame = seedMode == SeedMode.PER_FRAME
                 Box(
                     modifier = Modifier
                         .height(34.dp)
@@ -1303,7 +1319,7 @@ private fun EngineSettingsSheetContent(
                     )
                 }
 
-                val isFixed = state.seedMode == SeedMode.FIXED
+                val isFixed = seedMode == SeedMode.FIXED
                 Box(
                     modifier = Modifier
                         .height(34.dp)
@@ -1314,7 +1330,7 @@ private fun EngineSettingsSheetContent(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "Fixed (${state.seed})",
+                        text = "Fixed ($seed)",
                         color = if (isFixed) ColorOnAccentDark else ColorTextTabUnselected,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,

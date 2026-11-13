@@ -11,21 +11,21 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Draws processed camera frames into the [Surface] of a Compose `AndroidExternalSurface` (a
- * SurfaceView: its own layer, composited by the system) from the analysis worker thread,
- * bypassing Compose.
+ * Draws processed camera frames into the [Surface] of a Compose `AndroidExternalSurface` from the
+ * presentation thread, bypassing Compose. The surface is its own layer, composited by the system,
+ * so a new frame needs neither recomposition nor a Compose draw pass.
  *
  * Every Bitmap the renderer draws is written and drawn on the same thread ([drawExecutor], the
- * analysis worker), so a single preview Bitmap can be reused: `unlockCanvasAndPost` on a hardware
- * canvas returns only after the render thread has synced the frame, which uploads the Bitmap, and
- * the surface's buffer queue keeps the posted buffer away from the next draw. The worker can
- * therefore overwrite the Bitmap for the next frame without the preview showing a half-written
- * one. (The MP4 recorder relies on the same property.)
+ * presentation thread), so a single preview Bitmap can be reused: `unlockCanvasAndPost` on a
+ * hardware canvas returns only after the render thread has synced the frame, which uploads the
+ * Bitmap, and the surface's buffer queue keeps the posted buffer away from the next draw. The
+ * thread can therefore overwrite the Bitmap for the next frame without the preview showing a
+ * half-written one. (The MP4 recorder relies on the same property.)
  *
- * The surface is created, resized and destroyed on the main thread ([attach], [resize],
- * [detach]). [lock] makes [detach] wait for a draw in progress, as `SurfaceHolder.Callback`
- * requires: the surface must no longer be touched once `surfaceDestroyed` returns. The surface
- * belongs to the SurfaceView, so it is never released here.
+ * `AndroidExternalSurface` reports the surface's life on the main thread: `onSurface` ([attach]),
+ * `onChanged` ([resize]) and `onDestroyed` ([detach]). [lock] makes [detach] wait for a draw in
+ * progress, because the surface must no longer be touched once `onDestroyed` returns. The surface
+ * belongs to `AndroidExternalSurface`, so it is never released here.
  */
 class PreviewRenderer(private val drawExecutor: Executor) {
     private val lock = Any()
@@ -39,7 +39,7 @@ class PreviewRenderer(private val drawExecutor: Executor) {
     @Volatile
     var backgroundColor: Int = Color.BLACK
 
-    // Only touched on the worker thread.
+    // Only touched on the presentation thread.
     private var lastFrame: Bitmap? = null
     private var fallback: Bitmap? = null
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -73,13 +73,13 @@ class PreviewRenderer(private val drawExecutor: Executor) {
         }
     }
 
-    /** Draws [bitmap] now. Call on the worker thread; [bitmap] may be overwritten once this returns. */
+    /** Draws [bitmap] now. Call on the presentation thread; [bitmap] may be overwritten once this returns. */
     fun render(bitmap: Bitmap) {
         lastFrame = bitmap
         draw(bitmap)
     }
 
-    /** Shown until the first camera frame. Call on the worker thread. */
+    /** Shown until the first camera frame. Call on the presentation thread. */
     fun setFallback(bitmap: Bitmap) {
         fallback = bitmap
         if (lastFrame == null) draw(bitmap)
@@ -89,7 +89,7 @@ class PreviewRenderer(private val drawExecutor: Executor) {
         try {
             drawExecutor.execute { draw(lastFrame ?: fallback) }
         } catch (e: RejectedExecutionException) {
-            // The worker was shut down: nothing more to draw.
+            // The presentation thread was shut down: nothing more to draw.
         }
     }
 
