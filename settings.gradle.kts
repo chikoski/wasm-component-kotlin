@@ -9,6 +9,7 @@ include(":cli")
 include(":runtime-api")
 include(":runtime-wasmtime")
 include(":runtime-chicory")
+include(":runtime-wasi")
 
 // Chicory build pipeline and Gradle plugin
 include(":tooling")

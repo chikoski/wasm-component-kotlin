@@ -48,4 +48,4 @@ class WitResultException(val error: Any?) : RuntimeException("WIT result error: 
  * Extends [IllegalStateException] so that callers written before this type existed keep working.
  * Thrown by the Chicory backend; the Wasmtime backend reports traps as [IllegalStateException].
  */
-class ComponentTrapException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+open class ComponentTrapException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)

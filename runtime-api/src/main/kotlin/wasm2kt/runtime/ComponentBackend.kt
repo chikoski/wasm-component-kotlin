@@ -1,6 +1,17 @@
 package wasm2kt.runtime
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
 
 /**
  * A live, instantiated component that generated bindings can call into.
@@ -78,6 +89,87 @@ interface ComponentBackend : AutoCloseable {
 
     /** A `future` for the host to pass to the component, resolved to what [value] returns (in the binary format) once it does. */
     fun newFuture(value: suspend () -> ByteArray): Int = throw UnsupportedOperationException("This backend does not support futures")
+
+    /** Runs [block] with this backend as [current]. */
+    fun <R> bind(block: () -> R): R {
+        val previous = CURRENT.get()
+        CURRENT.set(this)
+        try {
+            return block()
+        } finally {
+            if (previous == null) CURRENT.remove() else CURRENT.set(previous)
+        }
+    }
+
+    /** Runs the suspending [block] with this backend as [current] wherever the coroutine runs. */
+    suspend fun <R> bindSuspending(block: suspend () -> R): R =
+        withContext(asContextElement()) { block() }
+
+    /** Makes this backend [current] in a coroutine wherever it runs. */
+    fun asContextElement(): CoroutineContext.Element = CURRENT.asContextElement(this)
+
+    companion object {
+        private val CURRENT = ThreadLocal<ComponentBackend?>()
+
+        /** The backend bound on this thread, or null. */
+        @JvmStatic
+        fun currentOrNull(): ComponentBackend? = CURRENT.get()
+
+        /** Binds [backend] on this thread (null unbinds); see [currentOrNull]. */
+        @JvmStatic
+        fun setCurrent(backend: ComponentBackend?) {
+            if (backend == null) CURRENT.remove() else CURRENT.set(backend)
+        }
+
+        /** The backend of the session whose call is in progress on this thread. */
+        @JvmStatic
+        fun current(): ComponentBackend = CURRENT.get()
+            ?: throw IllegalStateException("Streams and futures can only be used during a call on an open session")
+    }
+}
+
+/** The future [handle] on [backend]; awaiting it runs the component until it writes the value. */
+@OptIn(DelicateCoroutinesApi::class)
+fun <T> witFuture(backend: ComponentBackend, handle: Int, decode: (WitReader) -> T): Deferred<T> {
+    val resources = HostResourceTable.currentOrNull()
+    return GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
+        val r = backend.bindSuspending {
+            if (resources != null) resources.bindSuspending { backend.readFutureSuspending(handle) }
+            else backend.readFutureSuspending(handle)
+        } ?: throw IllegalStateException("The component dropped the future without writing a value")
+        backend.bind {
+            if (resources != null) resources.bind { decode(r) } else decode(r)
+        }
+    }
+}
+
+/** The stream [handle] on [backend], read in chunks as it is collected; it can be collected once. */
+fun <T> witStream(backend: ComponentBackend, handle: Int, decode: (WitReader) -> List<T>): Flow<T> {
+    val collected = AtomicBoolean(false)
+    val resources = HostResourceTable.currentOrNull()
+    return flow {
+        check(collected.compareAndSet(false, true)) { "A stream returned by the component can be collected only once" }
+        var ended = false
+        try {
+            while (true) {
+                val r = backend.bindSuspending {
+                    if (resources != null) resources.bindSuspending { backend.readStreamSuspending(handle, 64) }
+                    else backend.readStreamSuspending(handle, 64)
+                }
+                if (r == null) {
+                    ended = true
+                    break
+                }
+                val chunk = backend.bind {
+                    if (resources != null) resources.bind { decode(r) } else decode(r)
+                }
+                for (v in chunk) emit(v)
+            }
+        } finally {
+            // Stopped early: tell the component, which sees its writes fail with DROPPED.
+            if (!ended) runCatching { backend.dropReadable(handle) }
+        }
+    }
 }
 
 /** [count] values of a stream, in the binary format of [WitWriter] (a `list` of them without the count). */

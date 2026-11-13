@@ -35,4 +35,19 @@ class WitJsonFixturesTest {
             )
         }
     }
+
+    @Test
+    fun `committed WASI 0_3 WIT JSON matches runtime-wasi wit sources`() {
+        val wasiDir = Paths.get("runtime-wasi").toAbsolutePath()
+        val process = ProcessBuilder(wasmToolsBin, "component", "wit", wasiDir.resolve("wit").toString(), "--json")
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        check(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0) { "wasm-tools failed for runtime-wasi/wit:\n$output" }
+        assertEquals(
+            Json.parseToJsonElement(output),
+            Json.parseToJsonElement(Files.readString(wasiDir.resolve("wit.json"))),
+            "runtime-wasi/wit.json is stale; regenerate it with `wasm-tools component wit runtime-wasi/wit --json > runtime-wasi/wit.json`",
+        )
+    }
 }

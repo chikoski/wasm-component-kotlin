@@ -1,0 +1,1368 @@
+{
+  "worlds": [
+    {
+      "name": "imports",
+      "imports": {
+        "interface-7": {
+          "interface": {
+            "id": 7,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-8": {
+          "interface": {
+            "id": 8,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-10": {
+          "interface": {
+            "id": 10,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-11": {
+          "interface": {
+            "id": 11,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-12": {
+          "interface": {
+            "id": 12,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-13": {
+          "interface": {
+            "id": 13,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-14": {
+          "interface": {
+            "id": 14,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-15": {
+          "interface": {
+            "id": 15,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-16": {
+          "interface": {
+            "id": 16,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-17": {
+          "interface": {
+            "id": 17,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-18": {
+          "interface": {
+            "id": 18,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-0": {
+          "interface": {
+            "id": 0,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-2": {
+          "interface": {
+            "id": 2,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-3": {
+          "interface": {
+            "id": 3,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-6": {
+          "interface": {
+            "id": 6,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-5": {
+          "interface": {
+            "id": 5,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        },
+        "interface-4": {
+          "interface": {
+            "id": 4,
+            "stability": {
+              "stable": {
+                "since": "0.3.0"
+              }
+            }
+          }
+        }
+      },
+      "exports": {},
+      "package": 2,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "types",
+      "types": {
+        "duration": 0
+      },
+      "functions": {},
+      "docs": {
+        "contents": "This interface defines common types used throughout wasi:clocks."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "monotonic-clock",
+      "types": {
+        "duration": 1,
+        "mark": 2
+      },
+      "functions": {
+        "now": {
+          "name": "now",
+          "kind": "freestanding",
+          "params": [],
+          "result": 2,
+          "docs": {
+            "contents": "Read the current value of the clock.\n\nThe clock is monotonic, therefore calling this function repeatedly will\nproduce a sequence of non-decreasing values.\n\nFor completeness, this function traps if it's not possible to represent\nthe value of the clock in a `mark`. Consequently, implementations\nshould ensure that the starting time is low enough to avoid the\npossibility of overflow in practice."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-resolution": {
+          "name": "get-resolution",
+          "kind": "freestanding",
+          "params": [],
+          "result": 1,
+          "docs": {
+            "contents": "Query the resolution of the clock. Returns the duration of time\ncorresponding to a clock tick."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "wait-until": {
+          "name": "wait-until",
+          "kind": "async-freestanding",
+          "params": [
+            {
+              "name": "when",
+              "type": 2
+            }
+          ],
+          "docs": {
+            "contents": "Wait until the specified mark has occurred."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "wait-for": {
+          "name": "wait-for",
+          "kind": "async-freestanding",
+          "params": [
+            {
+              "name": "how-long",
+              "type": 1
+            }
+          ],
+          "docs": {
+            "contents": "Wait for the specified duration to elapse."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "WASI Monotonic Clock is a clock API intended to let users measure elapsed\ntime.\n\nIt is intended to be portable at least between Unix-family platforms and\nWindows.\n\nA monotonic clock is a clock which has an unspecified initial value, and\nsuccessive reads of the clock will produce non-decreasing values."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "system-clock",
+      "types": {
+        "duration": 3,
+        "instant": 4
+      },
+      "functions": {
+        "now": {
+          "name": "now",
+          "kind": "freestanding",
+          "params": [],
+          "result": 4,
+          "docs": {
+            "contents": "Read the current value of the clock.\n\nThis clock is not monotonic, therefore calling this function repeatedly\nwill not necessarily produce a sequence of non-decreasing values.\n\nThe nanoseconds field of the output is always less than 1000000000."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-resolution": {
+          "name": "get-resolution",
+          "kind": "freestanding",
+          "params": [],
+          "result": 3,
+          "docs": {
+            "contents": "Query the resolution of the clock. Returns the smallest duration of time\nthat the implementation permits distinguishing."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "WASI System Clock is a clock API intended to let users query the current\ntime. The clock is not necessarily monotonic as it may be reset.\n\nIt is intended to be portable at least between Unix-family platforms and\nWindows.\n\nExternal references may be reset, so this clock is not necessarily\nmonotonic, making it unsuitable for measuring elapsed time.\n\nIt is intended for reporting the current date and time for humans."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "timezone",
+      "types": {
+        "instant": 5
+      },
+      "functions": {
+        "iana-id": {
+          "name": "iana-id",
+          "kind": "freestanding",
+          "params": [],
+          "result": 6,
+          "docs": {
+            "contents": "Return the IANA identifier of the currently configured timezone. This\nshould be an identifier from the IANA Time Zone Database.\n\nFor displaying to a user, the identifier should be converted into a\nlocalized name by means of an internationalization API.\n\nIf the implementation does not expose an actual timezone, or is unable\nto provide mappings from times to deltas between the configured timezone\nand UTC, or determining the current timezone fails, or the timezone does\nnot have an IANA identifier, this returns nothing."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "utc-offset": {
+          "name": "utc-offset",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "when",
+              "type": 5
+            }
+          ],
+          "result": 7,
+          "docs": {
+            "contents": "The number of nanoseconds difference between UTC time and the local\ntime of the currently configured timezone, at the exact time of\n`instant`.\n\nThe magnitude of the returned value will always be less than\n86,400,000,000,000 which is the number of nanoseconds in a day\n(24*60*60*1e9).\n\nIf the implementation does not expose an actual timezone, or is unable\nto provide mappings from times to deltas between the configured timezone\nand UTC, or determining the current timezone fails, this returns\nnothing."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "to-debug-string": {
+          "name": "to-debug-string",
+          "kind": "freestanding",
+          "params": [],
+          "result": "string",
+          "docs": {
+            "contents": "Returns a string that is suitable to assist humans in debugging whether\nany timezone is available, and if so, which. This may be the same string\nas `iana-id`, or a formatted representation of the UTC offset such as\n`-04:00`, or something else.\n\nWARNING: The returned string should not be consumed mechanically! It may\nchange across platforms, hosts, or other implementation details. Parsing\nthis string is a major platform-compatibility hazard."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "insecure-seed",
+      "types": {},
+      "functions": {
+        "get-insecure-seed": {
+          "name": "get-insecure-seed",
+          "kind": "freestanding",
+          "params": [],
+          "result": 8,
+          "docs": {
+            "contents": "Return a 128-bit value that may contain a pseudo-random value.\n\nThe returned value is not required to be computed from a CSPRNG, and may\neven be entirely deterministic. Host implementations are encouraged to\nprovide pseudo-random values to any program exposed to\nattacker-controlled content, to enable DoS protection built into many\nlanguages' hash-map implementations.\n\nThis function is intended to only be called once, by a source language\nto initialize Denial Of Service (DoS) protection in its hash-map\nimplementation.\n\n# Expected future evolution\n\nThis will likely be changed to a value import, to prevent it from being\ncalled multiple times and potentially used for purposes other than DoS\nprotection."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "The insecure-seed interface for seeding hash-map DoS resistance.\n\nIt is intended to be portable at least between Unix-family platforms and\nWindows."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "insecure",
+      "types": {},
+      "functions": {
+        "get-insecure-random-bytes": {
+          "name": "get-insecure-random-bytes",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "max-len",
+              "type": "u64"
+            }
+          ],
+          "result": 9,
+          "docs": {
+            "contents": "Return up to `max-len` insecure pseudo-random bytes.\n\nThis function is not cryptographically secure. Do not use it for\nanything related to security.\n\nThere are no requirements on the values of the returned bytes, however\nimplementations are encouraged to return evenly distributed values with\na long period.\n\nImplementations MAY return fewer bytes than requested (a short read).\nCallers that require exactly `max-len` bytes MUST call this function in\na loop until the desired number of bytes has been accumulated.\nImplementations MUST return at least 1 byte when `max-len` is greater\nthan zero. When `max-len` is zero, implementations MUST return an empty\nlist without trapping."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-insecure-random-u64": {
+          "name": "get-insecure-random-u64",
+          "kind": "freestanding",
+          "params": [],
+          "result": "u64",
+          "docs": {
+            "contents": "Return an insecure pseudo-random `u64` value.\n\nThis function returns the same type of pseudo-random data as\n`get-insecure-random-bytes`, represented as a `u64`."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "The insecure interface for insecure pseudo-random numbers.\n\nIt is intended to be portable at least between Unix-family platforms and\nWindows."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "random",
+      "types": {},
+      "functions": {
+        "get-random-bytes": {
+          "name": "get-random-bytes",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "max-len",
+              "type": "u64"
+            }
+          ],
+          "result": 9,
+          "docs": {
+            "contents": "Return up to `max-len` cryptographically-secure random or pseudo-random\nbytes.\n\nThis function must produce data at least as cryptographically secure and\nfast as an adequately seeded cryptographically-secure pseudo-random\nnumber generator (CSPRNG). It must not block, from the perspective of\nthe calling program, under any circumstances, including on the first\nrequest and on requests for numbers of bytes. The returned data must\nalways be unpredictable.\n\nImplementations MAY return fewer bytes than requested (a short read).\nCallers that require exactly `max-len` bytes MUST call this function in\na loop until the desired number of bytes has been accumulated.\nImplementations MUST return at least 1 byte when `max-len` is greater\nthan zero. When `max-len` is zero, implementations MUST return an empty\nlist without trapping.\n\nThis function must always return fresh data. Deterministic environments\nmust omit this function, rather than implementing it with deterministic\ndata."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-random-u64": {
+          "name": "get-random-u64",
+          "kind": "freestanding",
+          "params": [],
+          "result": "u64",
+          "docs": {
+            "contents": "Return a cryptographically-secure random or pseudo-random `u64` value.\n\nThis function returns the same type of data as `get-random-bytes`,\nrepresented as a `u64`."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "WASI Random is a random data API.\n\nIt is intended to be portable at least between Unix-family platforms and\nWindows."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "environment",
+      "types": {},
+      "functions": {
+        "get-environment": {
+          "name": "get-environment",
+          "kind": "freestanding",
+          "params": [],
+          "result": 11,
+          "docs": {
+            "contents": "Get the POSIX-style environment variables.\n\nEach environment variable is provided as a pair of string variable names\nand string value.\n\nMorally, these are a value import, but until value imports are available\nin the component model, this import function should return the same\nvalues each time it is called."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-arguments": {
+          "name": "get-arguments",
+          "kind": "freestanding",
+          "params": [],
+          "result": 12,
+          "docs": {
+            "contents": "Get the POSIX-style arguments to the program."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "get-initial-cwd": {
+          "name": "get-initial-cwd",
+          "kind": "freestanding",
+          "params": [],
+          "result": 13,
+          "docs": {
+            "contents": "Return a path that programs should use as their initial current working\ndirectory, interpreting `.` as shorthand for this."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "exit",
+      "types": {},
+      "functions": {
+        "exit": {
+          "name": "exit",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "status",
+              "type": 14
+            }
+          ],
+          "docs": {
+            "contents": "Exit the current instance and any linked instances."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        },
+        "exit-with-code": {
+          "name": "exit-with-code",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "status-code",
+              "type": "u8"
+            }
+          ],
+          "docs": {
+            "contents": "Exit the current instance and any linked instances, reporting the\nspecified status code to the host.\n\nThe meaning of the code depends on the context, with 0 usually meaning\n\"success\", and other values indicating various types of failure.\n\nThis function does not return; the effect is analogous to a trap, but\nwithout the connotation that something bad has happened."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "run",
+      "types": {},
+      "functions": {
+        "run": {
+          "name": "run",
+          "kind": "async-freestanding",
+          "params": [],
+          "result": 14,
+          "docs": {
+            "contents": "Run the program."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "types",
+      "types": {
+        "error-code": 15
+      },
+      "functions": {},
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "stdin",
+      "types": {
+        "error-code": 16
+      },
+      "functions": {
+        "read-via-stream": {
+          "name": "read-via-stream",
+          "kind": "freestanding",
+          "params": [],
+          "result": 20,
+          "docs": {
+            "contents": "Return a stream for reading from stdin.\n\nThis function returns a stream which provides data read from stdin,\nand a future to signal read results.\n\nIf the stream's readable end is dropped the future will resolve to success.\n\nIf the stream's writable end is dropped the future will either resolve to\nsuccess if stdin was closed by the writer or to an error-code if reading\nfailed for some other reason.\n\nMultiple streams may be active at the same time. The behavior of concurrent\nreads is implementation-specific."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "stdout",
+      "types": {
+        "error-code": 21
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 17
+            }
+          ],
+          "result": 23,
+          "docs": {
+            "contents": "Write the given stream to stdout.\n\nIf the stream's writable end is dropped this function will either return\nsuccess once the entire contents of the stream have been written or an\nerror-code representing a failure.\n\nOtherwise if there is an error the readable end of the stream will be\ndropped and this function will return an error-code."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "stderr",
+      "types": {
+        "error-code": 24
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 17
+            }
+          ],
+          "result": 26,
+          "docs": {
+            "contents": "Write the given stream to stderr.\n\nIf the stream's writable end is dropped this function will either return\nsuccess once the entire contents of the stream have been written or an\nerror-code representing a failure.\n\nOtherwise if there is an error the readable end of the stream will be\ndropped and this function will return an error-code."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "terminal-input",
+      "types": {
+        "terminal-input": 27
+      },
+      "functions": {},
+      "docs": {
+        "contents": "Terminal input.\n\nIn the future, this may include functions for disabling echoing,\ndisabling input buffering so that keyboard events are sent through\nimmediately, querying supported features, and so on."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "terminal-output",
+      "types": {
+        "terminal-output": 28
+      },
+      "functions": {},
+      "docs": {
+        "contents": "Terminal output.\n\nIn the future, this may include functions for querying the terminal\nsize, being notified of terminal size changes, querying supported\nfeatures, and so on."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "terminal-stdin",
+      "types": {
+        "terminal-input": 29
+      },
+      "functions": {
+        "get-terminal-stdin": {
+          "name": "get-terminal-stdin",
+          "kind": "freestanding",
+          "params": [],
+          "result": 31,
+          "docs": {
+            "contents": "If stdin is connected to a terminal, return a `terminal-input` handle\nallowing further interaction with it."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "An interface providing an optional `terminal-input` for stdin as a\nlink-time authority."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "terminal-stdout",
+      "types": {
+        "terminal-output": 32
+      },
+      "functions": {
+        "get-terminal-stdout": {
+          "name": "get-terminal-stdout",
+          "kind": "freestanding",
+          "params": [],
+          "result": 34,
+          "docs": {
+            "contents": "If stdout is connected to a terminal, return a `terminal-output` handle\nallowing further interaction with it."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "An interface providing an optional `terminal-output` for stdout as a\nlink-time authority."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    },
+    {
+      "name": "terminal-stderr",
+      "types": {
+        "terminal-output": 35
+      },
+      "functions": {
+        "get-terminal-stderr": {
+          "name": "get-terminal-stderr",
+          "kind": "freestanding",
+          "params": [],
+          "result": 37,
+          "docs": {
+            "contents": "If stderr is connected to a terminal, return a `terminal-output` handle\nallowing further interaction with it."
+          },
+          "stability": {
+            "stable": {
+              "since": "0.3.0"
+            }
+          }
+        }
+      },
+      "docs": {
+        "contents": "An interface providing an optional `terminal-output` for stderr as a\nlink-time authority."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      },
+      "package": 2
+    }
+  ],
+  "types": [
+    {
+      "name": "duration",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 0
+      },
+      "docs": {
+        "contents": "A duration of time, in nanoseconds."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "duration",
+      "kind": {
+        "type": 0
+      },
+      "owner": {
+        "interface": 1
+      }
+    },
+    {
+      "name": "mark",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 1
+      },
+      "docs": {
+        "contents": "A mark on a monotonic clock is a number of nanoseconds since an\nunspecified initial value, and can only be compared to instances from\nthe same monotonic-clock."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "duration",
+      "kind": {
+        "type": 0
+      },
+      "owner": {
+        "interface": 2
+      }
+    },
+    {
+      "name": "instant",
+      "kind": {
+        "record": {
+          "fields": [
+            {
+              "name": "seconds",
+              "type": "s64"
+            },
+            {
+              "name": "nanoseconds",
+              "type": "u32"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 2
+      },
+      "docs": {
+        "contents": "An \"instant\", or \"exact time\", is a point in time without regard to any\ntime zone: just the time since a particular external reference point,\noften called an \"epoch\".\n\nHere, the epoch is 1970-01-01T00:00:00Z, also known as\n[POSIX's Seconds Since the Epoch], also known as [Unix Time].\n\nNote that even if the seconds field is negative, incrementing\nnanoseconds always represents moving forwards in time.\nFor example, `{ -1 seconds, 999999999 nanoseconds }` represents the\ninstant one nanosecond before the epoch.\nFor more on various different ways to represent time, see\nhttps://tc39.es/proposal-temporal/docs/timezone.html\n\n[POSIX's Seconds Since the Epoch]: https://pubs.opengroup.org/onlinepubs/9699919799/xrat/V4_xbd_chap04.html#tag_21_04_16\n[Unix Time]: https://en.wikipedia.org/wiki/Unix_time"
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "instant",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "interface": 3
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "s64"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            "u64",
+            "u64"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            "string",
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 10
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "io",
+              "docs": {
+                "contents": "Input/output error"
+              }
+            },
+            {
+              "name": "illegal-byte-sequence",
+              "docs": {
+                "contents": "Invalid or incomplete multibyte or wide character"
+              }
+            },
+            {
+              "name": "pipe",
+              "docs": {
+                "contents": "Broken pipe"
+              }
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 10
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 15
+      },
+      "owner": {
+        "interface": 11
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 16
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 18
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            17,
+            19
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 15
+      },
+      "owner": {
+        "interface": 12
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 21
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 22
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 15
+      },
+      "owner": {
+        "interface": 13
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 24
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 25
+      },
+      "owner": null
+    },
+    {
+      "name": "terminal-input",
+      "kind": "resource",
+      "owner": {
+        "interface": 14
+      },
+      "docs": {
+        "contents": "The input side of a terminal."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-output",
+      "kind": "resource",
+      "owner": {
+        "interface": 15
+      },
+      "docs": {
+        "contents": "The output side of a terminal."
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-input",
+      "kind": {
+        "type": 27
+      },
+      "owner": {
+        "interface": 16
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 29
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 30
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-output",
+      "kind": {
+        "type": 28
+      },
+      "owner": {
+        "interface": 17
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 32
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 33
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": "terminal-output",
+      "kind": {
+        "type": 28
+      },
+      "owner": {
+        "interface": 18
+      },
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 35
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": 36
+      },
+      "owner": null,
+      "stability": {
+        "stable": {
+          "since": "0.3.0"
+        }
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "wasi:clocks@0.3.0",
+      "interfaces": {
+        "types": 0,
+        "monotonic-clock": 1,
+        "system-clock": 2,
+        "timezone": 3
+      },
+      "worlds": {}
+    },
+    {
+      "name": "wasi:random@0.3.0",
+      "interfaces": {
+        "insecure-seed": 4,
+        "insecure": 5,
+        "random": 6
+      },
+      "worlds": {}
+    },
+    {
+      "name": "wasi:cli@0.3.0",
+      "interfaces": {
+        "environment": 7,
+        "exit": 8,
+        "run": 9,
+        "types": 10,
+        "stdin": 11,
+        "stdout": 12,
+        "stderr": 13,
+        "terminal-input": 14,
+        "terminal-output": 15,
+        "terminal-stdin": 16,
+        "terminal-stdout": 17,
+        "terminal-stderr": 18
+      },
+      "worlds": {
+        "imports": 0
+      }
+    }
+  ]
+}
