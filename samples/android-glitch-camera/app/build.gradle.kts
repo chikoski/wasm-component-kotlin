@@ -74,6 +74,10 @@ dependencies {
 }
 
 baselineProfile {
-    automaticGenerationDuringBuild = true
+    // Generating the profile needs a device or an emulator. Pass
+    // -PgenerateBaselineProfileOnBuild=false to build a release without one (as samples/android).
+    automaticGenerationDuringBuild = providers.gradleProperty("generateBaselineProfileOnBuild")
+        .map { it.toBoolean() }
+        .getOrElse(true)
     dexLayoutOptimization = true
 }
