@@ -69,7 +69,7 @@ data class GlitchUiState(
     val filterParams: Map<String, String> = emptyMap(),
     val seedMode: SeedMode = SeedMode.PER_FRAME,
     val seed: ULong = 42uL,
-    val pngFilterOption: PngFilterOption = PngFilterOption.ADAPTIVE_FAST,
+    val pngFilterOption: PngFilterOption = PngFilterOption.DEFAULT,
     val activeRecipeYaml: String = RecipePresets.curated.first().yaml,
     val fallbackPreviewBitmap: Bitmap? = null,
     val presetThumbnails: Map<String, Bitmap> = emptyMap(),
@@ -258,6 +258,7 @@ class GlitchViewModel : ViewModel() {
                     recipeYaml = preset.yaml,
                     seed = 42uL,
                     seedMode = SeedMode.PER_FRAME,
+                    // AdaptiveFast tries all five filters, so the profile covers each of them.
                     filterOption = PngFilterOption.ADAPTIVE_FAST,
                 )
                 repeat(3) {
@@ -298,7 +299,7 @@ class GlitchViewModel : ViewModel() {
                 recipeYaml = preset.yaml,
                 seed = 42uL,
                 seedMode = SeedMode.PER_FRAME,
-                filterOption = PngFilterOption.ADAPTIVE_FAST,
+                filterOption = PngFilterOption.DEFAULT,
             )
             // Conversion overlaps the engine as on the camera path, but no frame is dropped: the
             // converter waits while a converted frame is still queued (capacity 1).

@@ -28,6 +28,17 @@ enum class PngFilterOption(
     UP("Up", FilterStrategy.Fixed(FilterType.UP)),
     AVERAGE("Average", FilterStrategy.Fixed(FilterType.AVERAGE)),
     NONE("None", FilterStrategy.Fixed(FilterType.NONE)),
+    ;
+
+    companion object {
+        /**
+         * The strategy used until one is chosen in the settings. The other strategies cost the
+         * component much more per frame (PNG filtering in `reloadPixels`, unfiltering in
+         * `renderRgba`): on the host JVM at 540p, AdaptiveFast and Paeth add 50 to 75 ms to a
+         * frame, so the live preview defaults to None.
+         */
+        val DEFAULT: PngFilterOption = NONE
+    }
 }
 
 data class GlitchFrameOutput(
@@ -48,7 +59,7 @@ class GlitchEngine : AutoCloseable {
 
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
-    private var currentFilterOption: PngFilterOption = PngFilterOption.ADAPTIVE_FAST
+    private var currentFilterOption: PngFilterOption = PngFilterOption.DEFAULT
 
     private var currentRecipeYaml: String = RecipePresets.curated.first().yaml
     private var currentSeed: ULong = 42uL
@@ -151,7 +162,7 @@ class GlitchEngine : AutoCloseable {
         val encoding = Encoding(
             colorType = ColorType.RGBA,
             bitDepth = 8u,
-            filter = FilterStrategy.AdaptiveFast,
+            filter = PngFilterOption.DEFAULT.strategy,
         )
         val created = context(ensureWorldSessionLocked()) {
             LiveSession.fromPixels(width.toUInt(), height.toUInt(), baseRgba, encoding)
