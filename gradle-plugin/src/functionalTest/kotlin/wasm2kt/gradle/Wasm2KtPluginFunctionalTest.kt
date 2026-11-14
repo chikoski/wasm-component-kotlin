@@ -277,6 +277,49 @@ class Wasm2KtPluginFunctionalTest {
         assertTrue("scaled = 42, tag = ERR#404, count = 15" in result.output, "unexpected output:\n${result.output}")
         assertEquals(TaskOutcome.SUCCESS, result.task(":wasm2ktCompileRoundtrip")?.outcome)
     }
+
+    @Test
+    fun `oversized wasm module splits functions and reports compile warnings across cached builds`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("heavy.wasm"), dir.resolve("heavy.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n$ISOLATED_BUILD_CACHE")
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            plugins { id("io.github.wasm2kt") }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                components {
+                    register("heavy") {
+                        source.set(file("heavy.wasm"))
+                        packageName.set("com.example.heavy")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val first = runner(dir, "wasm2ktCompileHeavy", "--build-cache", "--info").build()
+        assertEquals(TaskOutcome.SUCCESS, first.task(":wasm2ktCompileHeavy")?.outcome)
+        assertTrue("wasm2kt: split " in first.output, first.output)
+        assertTrue("1 function(s) of core module 0 are too large for a JVM method and will be interpreted" in first.output, first.output)
+        assertTrue("exceed ART's compiler instruction limit" !in first.output, first.output)
+        assertTrue("exceed HotSpot's 8,000-byte JIT limit" in first.output, first.output)
+
+        val again = runner(dir, "wasm2ktCompileHeavy", "--build-cache").build()
+        assertEquals(TaskOutcome.UP_TO_DATE, again.task(":wasm2ktCompileHeavy")?.outcome)
+        assertTrue("1 function(s) of core module 0 are too large for a JVM method and will be interpreted" in again.output, again.output)
+        assertTrue("exceed ART's compiler instruction limit" !in again.output, again.output)
+        assertTrue("exceed HotSpot's 8,000-byte JIT limit" in again.output, again.output)
+
+        dir.resolve("build/wasm2kt").deleteRecursively()
+        val fromCache = runner(dir, "wasm2ktCompileHeavy", "--build-cache").build()
+        assertEquals(TaskOutcome.FROM_CACHE, fromCache.task(":wasm2ktCompileHeavy")?.outcome)
+        assertTrue("1 function(s) of core module 0 are too large for a JVM method and will be interpreted" in fromCache.output, fromCache.output)
+        assertTrue("exceed ART's compiler instruction limit" !in fromCache.output, fromCache.output)
+        assertTrue("exceed HotSpot's 8,000-byte JIT limit" in fromCache.output, fromCache.output)
+    }
 }
 
 /**

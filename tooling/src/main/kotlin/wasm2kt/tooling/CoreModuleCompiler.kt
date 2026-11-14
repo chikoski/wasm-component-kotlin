@@ -18,17 +18,35 @@ import java.nio.file.Path
  */
 object CoreModuleCompiler {
     /** A compiled core module: `<className>` is a [com.dylibso.chicory.runtime.Machine] with an `(Instance)` constructor. */
-    class Compiled(val index: Int, val machineClassName: String, val metaResource: String, val interpretedFunctions: Int = 0)
+    class Compiled(
+        val index: Int,
+        val machineClassName: String,
+        val metaResource: String,
+        val interpretedFunctions: Int = 0,
+        val splitMethods: Int = 0,
+        val hotspotOversizedMethods: Int = 0,
+        val artOversizedMethods: Int = 0,
+        val maxMethodCodeBytes: Int = 0,
+    )
 
     /** The class and resource names [compile] produces, without compiling (they are deterministic). */
     fun layout(decomposedDir: Path, packageName: String): List<Compiled> =
         PlanFiles.coreModules(decomposedDir).map { (index, _) -> describe(index, packageName) }
 
-    private fun describe(index: Int, packageName: String, interpreted: Int = 0) = Compiled(
+    private fun describe(
+        index: Int,
+        packageName: String,
+        interpreted: Int = 0,
+        stats: JvmMethodSplitter.MethodSizeStats = JvmMethodSplitter.MethodSizeStats(0, 0, 0, 0, 0),
+    ) = Compiled(
         index = index,
         machineClassName = "$packageName.Core${index}Machine",
         metaResource = "/" + packageName.replace('.', '/') + "/Core$index.meta",
         interpretedFunctions = interpreted,
+        splitMethods = stats.splitMethods,
+        hotspotOversizedMethods = stats.hotspotOversizedMethods,
+        artOversizedMethods = stats.artOversizedMethods,
+        maxMethodCodeBytes = stats.maxMethodCodeBytes,
     )
 
     /**
@@ -56,7 +74,28 @@ object CoreModuleCompiler {
             val generator = Generator(config)
             val interpreted = generator.generateResources()
             generator.generateMetaWasm(interpreted)
-            describe(index, packageName, interpreted.size)
+            val classPrefix = packageName.replace('.', '/') + "/${baseName}Machine"
+            val stats = JvmMethodSplitter.processClasses(classesDir, classPrefix)
+            describe(index, packageName, interpreted.size, stats)
+        }
+    }
+
+    /** Formats build-time compiler warnings for core modules that exceed JVM, HotSpot, or ART limits. */
+    fun warningsFor(compiled: List<Compiled>): List<String> = buildList {
+        for (c in compiled) {
+            if (c.interpretedFunctions > 0) {
+                add("wasm2kt: ${c.interpretedFunctions} function(s) of core module ${c.index} are too large for a JVM method and will be interpreted")
+            }
+            if (c.artOversizedMethods > 0) {
+                add(
+                    "wasm2kt: ${c.artOversizedMethods} method(s) of core module ${c.index} exceed ART's compiler instruction limit (16,383 DEX code units; max ${c.maxMethodCodeBytes} JVM bytes) and will run in ART's interpreter",
+                )
+            }
+            if (c.hotspotOversizedMethods > 0) {
+                add(
+                    "wasm2kt: ${c.hotspotOversizedMethods} method(s) of core module ${c.index} exceed HotSpot's 8,000-byte JIT limit (DontCompileHugeMethods; max ${c.maxMethodCodeBytes} bytes); pass -XX:-DontCompileHugeMethods on desktop JVM",
+                )
+            }
         }
     }
 }

@@ -139,6 +139,8 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
     }
 
     abstract class CompileAction : WorkAction<Params> {
+        private val logger = org.gradle.api.logging.Logging.getLogger(Wasm2KtCompileTask::class.java)
+
         override fun execute() {
             val work = parameters.workDir.get().asFile.toPath()
             work.toFile().deleteRecursively()
@@ -148,9 +150,18 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
             val pkg = parameters.internalPackage.get()
             val compiled = CoreModuleCompiler.compile(decomposed, classes, resources, pkg)
             ComponentBuild.copyPlan(decomposed, resources, pkg)
-            val warnings = compiled.filter { it.interpretedFunctions > 0 }.joinToString("") {
-                "wasm2kt: ${it.interpretedFunctions} function(s) of core module ${it.index} are too large for a JVM method and will be interpreted\n"
+            for (module in compiled) {
+                if (module.splitMethods > 0) {
+                    logger.info(
+                        "wasm2kt: split {} large method(s) in core module {} (max {} bytes after splitting)",
+                        module.splitMethods,
+                        module.index,
+                        module.maxMethodCodeBytes,
+                    )
+                }
             }
+            val warnings = CoreModuleCompiler.warningsFor(compiled)
+                .joinToString(separator = "") { "$it\n" }
             parameters.warnings.get().asFile.apply { parentFile.mkdirs() }.writeText(warnings)
             writeJar(parameters.jar.get().asFile, listOf(classes, resources).map { it.toFile() })
         }

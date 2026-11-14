@@ -63,11 +63,17 @@ wasm2kt {
 }
 ```
 
-## 4. 関数の大きさとパフォーマンス（Chicory バックエンド）
+## 4. 関数の大きさとパフォーマンス
 
-Chicory のビルド時コンパイラは、wasm の各関数を JVM のメソッドへ変換します。
+Chicory のビルド時コンパイラは wasm の各関数を JVM メソッドへ変換し、さらにビルドパイプライン内の `JvmMethodSplitter` が 7,500 バイトを目安に大きなメソッドを自動分割します。これにより、多くの関数で HotSpot JVM と Android ART の双方がネイティブコンパイルを適用できます。自動分割の設計は [ADR-0021](../adr/0021-split-large-chicory-methods.md) にまとめています。
 
-* **JVM バイトコードで 64 KB を超える巨大な wasm 関数**: JVM のメソッドサイズ上限を超えるため、その関数だけインタプリタ実行にフォールバックします（ビルド時に `wasm2ktCompile<Name>` が警告を表示します）
-* **JVM バイトコードで 8,000 バイトを超える関数**: HotSpot JVM の既定設定（`-XX:+DontCompileHugeMethods`）では JIT コンパイルされません（[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57)）
+ビルドパイプラインには 4 つのサイズ境界があります。
 
-たとえば `regex` クレートの DFA のような巨大な関数を含むコンポーネントで計算時間が問題になる場合は、デスクトップ / サーバー JVM では `-XX:-DontCompileHugeMethods` を付与するか、Wasmtime バックエンドの利用を検討してください（[性能とサイズ](../explanation/performance.md#3-計算の性能heavy)）。
+* JVM クラスファイル上限の 64 KB
+* HotSpot JIT 上限の 8,000 バイト
+* Android ART コンパイラ上限の 16,383 DEX コード単位
+* 自動分割の目標上限である 7,500 バイト
+
+Chicory のコード生成段階で 64 KB を超えた関数は、バイトコードが出力されず Chicory のインタプリタ実行へフォールバックします。この状態の関数は `JvmMethodSplitter` でも分割できません。`regex` クレートの DFA のような巨大関数でこの警告が出た場合は、ゲスト側の関数分割を検討してください。
+
+分割後も 21,000 JVM バイト以上または 8,000 JVM バイト超のメソッドが残った場合は、`wasm2ktCompileWarnings<Name>` タスクが ART 上限や HotSpot 上限の警告を表示します。デスクトップやサーバーの JVM で HotSpot 上限の警告が出た場合は `-XX:-DontCompileHugeMethods` の指定が有効です。詳細は [トラブルシューティング](troubleshooting.md) と [性能とサイズ](../explanation/performance.md) に記載しています。

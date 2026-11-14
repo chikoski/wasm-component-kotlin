@@ -17,7 +17,8 @@
   * Chicory AOT（ART エミュレーター）: 約 **0.26〜0.38 ms**
 * **計算性能**:
   * 小さな関数のループ（`lcg-sum`）は、Chicory AOT と Wasmtime でほぼ同等（約 1.1 倍）です（インタプリタ比で約 168 倍高速）
-  * 巨大な wasm 関数を含むコード（`regex-count`）は、HotSpot JVM の既定では 8,000 バイト超のメソッドが JIT されないこと、および 64 KB 超の関数がインタプリタにフォールバックすることにより、Wasmtime より最大約 50 倍遅くなります（`-XX:-DontCompileHugeMethods` で改善します。[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57)）
+  * 大きな wasm 関数への対応については、ビルド時の `JvmMethodSplitter` が 7,500 バイトを目安にメソッドを自動分割します。分割の設計と背景は [ADR-0021](../adr/0021-split-large-chicory-methods.md) に記載しています
+  * 分割後も 8,000 バイトを超えるディスパッチメソッドなどはデスクトップ JVM では `-XX:-DontCompileHugeMethods` で改善し、64 KB を超える関数は Chicory のインタプリタにフォールバックします
 * **初回の `openSession`**:
   * ART で 57 ms（最小コンポーネント）〜 239 ms（1.2 MB のコンポーネント）。2 回目以降は 0.2〜10 ms
 * **Android APK サイズ（release、R8 適用後）**:
@@ -84,8 +85,27 @@
 | `regex-count`（16 B、主にパターンコンパイル） | 1.2 ms | 1.7 ms | 5.8 ms | 20 µs | 2.0 ms |
 | `regex-count`（14 KiB） | 3.7 ms | **1.1 ms** | 16.7 ms | 70 µs | 16.4 ms |
 
-* `heavy` コンポーネントの 1,012 関数のうち 1 つ（`func_366`、wasm で 56 KB）が JVM メソッドの上限（64 KB）を超え、インタプリタにフォールバックします（パターンのコンパイル部分がこれに該当します）
-* また 13 個のメソッドが JVM バイトコードで 8,000 バイトを超え、HotSpot の既定（`-XX:+DontCompileHugeMethods`）では JIT コンパイルされません。`-XX:-DontCompileHugeMethods` を指定すると 14 KiB の `regex-count` は 3.7 ms から 1.1 ms に短縮されます（[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57)）
+* 上記の表は `JvmMethodSplitter` 導入前のベースライン計測値です
+* 分割前は `regex-count` 関連を含む 13 個のメソッドが JVM バイトコードで 8,000 バイトを超え、HotSpot の既定である `-XX:+DontCompileHugeMethods` 下では JIT コンパイルされませんでした。`-XX:-DontCompileHugeMethods` を指定したときは 14 KiB の `regex-count` が 3.7 ms から 1.1 ms に短縮されていました
+
+### 4.1 メソッド分割後の比較と ART 上限への対応
+
+ビルド時の `JvmMethodSplitter` は、7,500 バイトを超えるメソッドを自動分割します。この分割により、`heavy` コンポーネントでは 13 個のメソッドが分割され、HotSpot 上限超過のメソッドは 1 個、最大 8,121 バイトに減りました。Android ART の命令数上限である 16,383 DEX コード単位を超えるメソッドは 0 個になっています。詳細は [ADR-0021](../adr/0021-split-large-chicory-methods.md) にまとめています。
+
+`samples/android-glitch-camera` の `png-glitch-component.wasm` では、分割前にコアモジュールごとに 31 個のメソッドが HotSpot の 8,000 バイト上限を超えていました。Android の `nonMinifiedRelease` ビルドを `emulator-5554` で AOT コンパイルすると、`dex2oat64` は 4 つの `func_*` メソッドをコンパイル対象外としてスキップしました。分割後はコアモジュール 0 の 34 個のメソッドが分割され、すべての `func_*` メソッドが 6,724 DEX コード単位以下に収まりました。ディスパッチ用の `call_dispatch_0` は名前フィルタにより分割対象外となるため 15,377 JVM バイト、13,440 DEX コード単位のまま残りますが、`dex2oat64` の上限超過ログは `app-nonMinifiedRelease` と R8 適用後の `app-release` の双方で 0 件になりました。
+
+`cyber_sort` プリセットを用い、解像度 960×540、`PngFilterOption.NONE`、ウォームアップ 10 回、本計測 20 回の条件で 1 フレームあたりの処理時間を計測しました。デスクトップは OpenJDK 21、Android は `emulator-5554` 上の非 `debuggable` である `nonMinifiedRelease` ビルドを使用しました。
+
+| 実行環境と条件 | 分割前の中央値 | 分割後の中央値 | 分割前の平均値 | 分割後の平均値 |
+| :--- | ---: | ---: | ---: | ---: |
+| Host JVM 既定設定 | 198.27 ms | 10.50 ms | 195.75 ms | 10.57 ms |
+| Host JVM huge メソッド制限無効 | 19.71 ms | 10.99 ms | 19.48 ms | 11.02 ms |
+| Android ART AOT 最大最適化 | 558.92 ms | 334.01 ms | 569.87 ms | 335.11 ms |
+| Android ART 検証のみ JIT 併用 | 528.24 ms | 337.19 ms | 544.23 ms | 348.75 ms |
+
+デスクトップ Host JVM では既定設定のまま 198.27 ms から 10.50 ms へ短縮し、`-XX:-DontCompileHugeMethods` なしの状態で同等以上の速度が出ています。Android ART でも、`dex2oat64` と JIT の両方で 4 メソッドのインタプリタフォールバックが解消し、558.92 ms から 334.01 ms へ短縮しました。
+
+なお、`debuggable` が有効な `debug` ビルドを同じエミュレーターで実行した場合、`cmd package compile -m everything` を実行しても `dexopt` は `verify` 状態のままになります。そのため `debug` ビルド上の同じ計測では 1,148.60 ms から 1,173.16 ms かかり、Android 実環境での性能確認には非 `debuggable` ビルドが必要です。
 
 ---
 

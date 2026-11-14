@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-13（#99 / #13、WASI 0.3 `wasi:filesystem` ホスト実装） / 対象ブランチ: `main`
+> 最終更新: 2026-11-14。対象ブランチは `feat/split-large-wasm-methods-106`、主な変更点は #106 と #57 の Chicory メソッド自動分割です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -42,7 +42,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
 | `samples/android` | Android サンプルアプリ（composite build） | 11 | ART（エミュレーター）で debug / release とも動作確認済み |
-| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 11 | ホスト JVM のユニットテストと debug / release APK ビルドを確認済み |
+| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 11 | ホスト JVM のユニットテストと debug / release APK ビルド、ART エミュレーターでの `nonMinifiedRelease` 実行と `dex2oat64` 警告ゼロを確認済み |
 
 ## 2. 現在の状態
 
@@ -62,7 +62,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * Wasmtime の FFM ブリッジ: ホスト import の戻り値とエラーメッセージに大きさの上限がない（#35）。事前コンパイル済みの `.cwasm` は `openPrecompiledSession` / `withPrecompiledSession` からだけ読み込む（#33）
 * decomposer の出力は決定的（exports と canonical options の順序）。各フィクスチャを繰り返し分解して同じ plan になることを `cargo test` で確認
 * Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
-* 性能とサイズ（[docs/performance.md](performance.md)、#19。バイナリ形式のあとは 8 節）: 64 KiB の `list<u8>` の往復は JVM（Chicory AOT）12 µs / Wasmtime FFM 3.5 ms / ART 0.3 ms（JSON 境界のときは 6.6 ms / 16.5 ms / 52 ms）。Wasmtime の型付きブリッジでは 29 µs（同じランナーの汎用ブリッジは 5.7 ms。9 節）。整数だけの呼び出しは JVM 0.19 µs / ART 2〜6 µs。小さな関数の計算は Wasmtime と同等、大きな wasm 関数を含むコード（regex）は HotSpot の JIT の上限とインタプリタへのフォールバックのため最大 53 倍遅い。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
+* 性能とサイズ（[docs/performance.md](performance.md)、#19。バイナリ形式のあとは 8 節）: 64 KiB の `list<u8>` の往復は JVM（Chicory AOT）12 µs / Wasmtime FFM 3.5 ms / ART 0.3 ms（JSON 境界のときは 6.6 ms / 16.5 ms / 52 ms）。Wasmtime の型付きブリッジでは 29 µs（同じランナーの汎用ブリッジは 5.7 ms。9 節）。整数だけの呼び出しは JVM 0.19 µs / ART 2〜6 µs。小さな関数の計算は Wasmtime と同等です。大きな wasm 関数に対しては `JvmMethodSplitter` による 7,500 バイト単位の自動分割を導入済みで、詳細と `cyber_sort` の比較は [performance.md](explanation/performance.md) と [ADR-0021](adr/0021-split-large-chicory-methods.md) にあります。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
 * Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
 
 ### 未検証・既知の制約
@@ -112,7 +112,7 @@ QC レビュー（2026-11-04）で見つかったものも片付けました（�
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
-| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策（#19 で発見） |
+| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。64 KB 超による Chicory インタプリタ実行とディスパッチメソッドの残存分を継続課題として維持 |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い（`Transcoder` の UTF-8 検査も残っている） |
 | [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) | — | Chicory: 合成したコンポーネントの間の resource。組み込み関数は #16 で実装した。共有テーブル経由で呼ぶデストラクターが `indirect call type mismatch` になる 2 コマンドが残る |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
@@ -129,6 +129,8 @@ QC レビュー（2026-11-04）で見つかったものも片付けました（�
 * [#68](https://github.com/chikoski/wasm-component-kotlin/issues/68) 数値だけの関数をバイト列を通さずに呼ぶ — 必要な使い方がないため。案は [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 3 に残っている
 
 ### 完了
+
+* [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) ART でコンパイル上限を超える大きな wasm 関数の対策 — [ADR-0021](adr/0021-split-large-chicory-methods.md)。`JvmMethodSplitter` による 7,500 バイト単位のバイトコード自動分割と、HotSpot 8,000 バイト / ART 16,383 DEX コード単位 / 64 KB インタプリタのビルド時警告を実装。`samples/android-glitch-camera` で `dex2oat64` 上限超過を 4 件から 0 件へ解消
 
 * [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) Component Model Async（Chicory のみ）— [ADR-0018](adr/0018-async-abi-on-chicory.md)（参照定義の移植、継続をスレッドで表す。plan v5。生成コードの `suspend fun` / `Flow` / `Deferred`。公式テストの `async/`。fused adapter の resource の受け渡しも実装し、#70 は共有テーブル経由のデストラクターだけが残る）
 * [#50](https://github.com/chikoski/wasm-component-kotlin/issues/50) ドキュメントの組み直し（読者別の構成、古い記述の修正、`examples/05-chicory-gradle-plugin` の追加、`examples/*/Main.kt` のコンパイル・実行検査と Markdown 相対リンク検査の CI 組み込み）— #89、#90（KDoc / Dokka、LICENSE、英語版は #10、PR テンプレートは #95 へ移した）
