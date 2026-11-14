@@ -28,6 +28,17 @@ enum class PngFilterOption(
     UP("Up", FilterStrategy.Fixed(FilterType.UP)),
     AVERAGE("Average", FilterStrategy.Fixed(FilterType.AVERAGE)),
     NONE("None", FilterStrategy.Fixed(FilterType.NONE)),
+    ;
+
+    companion object {
+        /**
+         * The strategy used until one is chosen in the settings. The other strategies cost the
+         * component much more per frame (PNG filtering in `reloadPixels`, unfiltering in
+         * `renderRgba`): on the host JVM at 540p, AdaptiveFast and Paeth add 50 to 75 ms to a
+         * frame, so the live preview defaults to None.
+         */
+        val DEFAULT: PngFilterOption = NONE
+    }
 }
 
 data class GlitchFrameOutput(
@@ -48,7 +59,7 @@ class GlitchEngine : AutoCloseable {
 
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
-    private var currentFilterOption: PngFilterOption = PngFilterOption.ADAPTIVE_FAST
+    private var currentFilterOption: PngFilterOption = PngFilterOption.DEFAULT
 
     private var currentRecipeYaml: String = RecipePresets.curated.first().yaml
     private var currentSeed: ULong = 42uL
@@ -101,16 +112,19 @@ class GlitchEngine : AutoCloseable {
         val startNanos = System.nanoTime()
         val session = ensureLiveSessionLocked(width, height, rgba).getOrElse { return Result.failure(it) }
         if (recipeDirty) {
-            when (val setRes = session.setRecipe(currentRecipeYaml, currentSeed, currentSeedMode)) {
+            val setRes = FrameTrace.asyncSection(FrameTrace.SET_RECIPE) {
+                session.setRecipe(currentRecipeYaml, currentSeed, currentSeedMode)
+            }
+            when (setRes) {
                 is WitResult.Ok -> recipeDirty = false
                 is WitResult.Err -> return Result.failure(IllegalStateException(formatError(setRes.error)))
             }
         }
-        when (val applyRes = session.apply()) {
+        when (val applyRes = FrameTrace.asyncSection(FrameTrace.APPLY) { session.apply() }) {
             is WitResult.Ok -> Unit
             is WitResult.Err -> return Result.failure(IllegalStateException(formatError(applyRes.error)))
         }
-        val outRgba = when (val renderRes = session.renderRgba()) {
+        val outRgba = when (val renderRes = FrameTrace.asyncSection(FrameTrace.RENDER_RGBA) { session.renderRgba() }) {
             is WitResult.Ok -> renderRes.value
             is WitResult.Err -> return Result.failure(IllegalStateException(formatError(renderRes.error)))
         }
@@ -148,7 +162,7 @@ class GlitchEngine : AutoCloseable {
         val encoding = Encoding(
             colorType = ColorType.RGBA,
             bitDepth = 8u,
-            filter = FilterStrategy.AdaptiveFast,
+            filter = PngFilterOption.DEFAULT.strategy,
         )
         val created = context(ensureWorldSessionLocked()) {
             LiveSession.fromPixels(width.toUInt(), height.toUInt(), baseRgba, encoding)
@@ -181,7 +195,7 @@ class GlitchEngine : AutoCloseable {
     private suspend fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
         val existing = liveSession
         if (existing != null && !existing.isClosed && currentWidth == width && currentHeight == height) {
-            return when (val reloadRes = existing.reloadPixels(rgba)) {
+            return when (val reloadRes = FrameTrace.asyncSection(FrameTrace.RELOAD_PIXELS) { existing.reloadPixels(rgba) }) {
                 is WitResult.Ok -> Result.success(existing)
                 is WitResult.Err -> Result.failure(IllegalStateException(formatError(reloadRes.error)))
             }
@@ -193,8 +207,10 @@ class GlitchEngine : AutoCloseable {
             bitDepth = 8u,
             filter = currentFilterOption.strategy,
         )
-        val created = context(ensureWorldSessionLocked()) {
-            LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
+        val created = FrameTrace.asyncSection(FrameTrace.FROM_PIXELS) {
+            context(ensureWorldSessionLocked()) {
+                LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
+            }
         }
         return when (created) {
             is WitResult.Ok -> {
