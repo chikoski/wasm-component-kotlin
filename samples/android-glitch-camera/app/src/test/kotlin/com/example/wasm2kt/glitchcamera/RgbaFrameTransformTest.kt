@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class RgbaFrameTransformTest {
     private val rotations = listOf(0, 90, 180, 270)
@@ -94,6 +95,32 @@ class RgbaFrameTransformTest {
         val first = convertInPlace(src, 90, true, scratch)
         val second = convertInPlace(src, 90, true, scratch)
         assertSame(first.rgbaBytes, second.rgbaBytes)
+    }
+
+    @Test
+    fun handlesHeapBufferAndPreservesCallerPositionAndOrder() {
+        val src = SourceFrame(width = 6, height = 4, rowPadding = 3, pixelStride = 5)
+        val raw = ByteArray(src.buffer.remaining())
+        src.buffer.duplicate().get(raw)
+        val heap = ByteBuffer.wrap(raw).order(ByteOrder.BIG_ENDIAN)
+        heap.position(11)
+
+        val actual = RgbaFrameTransform.convert(
+            source = heap,
+            srcWidth = src.width,
+            srcHeight = src.height,
+            rowStride = src.rowStride,
+            pixelStride = src.pixelStride,
+            rotationDegrees = 90,
+            mirrorHorizontally = false,
+            maxLongSide = 100,
+            maxShortSide = 100,
+            scratch = RgbaBufferHolder(),
+        )
+        val expected = reference(src, rotation = 90, mirror = false)
+        assertEquals(11, heap.position())
+        assertEquals(ByteOrder.BIG_ENDIAN, heap.order())
+        assertArrayEquals(expected.rgbaBytes, actual.rgbaBytes)
     }
 
     private fun convertInPlace(src: SourceFrame, rotation: Int, mirror: Boolean, scratch: RgbaBufferHolder) =

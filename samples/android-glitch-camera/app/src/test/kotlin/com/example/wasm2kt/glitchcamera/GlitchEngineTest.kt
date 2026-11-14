@@ -87,4 +87,30 @@ class GlitchEngineTest {
             assertFalse(thumbs.getValue("invert").contentEquals(frame1))
         }
     }
+
+    @Test
+    fun `processFrame advances PerFrame seed across identical inputs`() = runBlocking {
+        val width = 16
+        val height = 16
+        val frame = ByteArray(width * height * 4) { idx ->
+            if (idx % 4 == 3) 0xFF.toByte() else (idx % 251).toByte()
+        }
+        GlitchEngine().use { engine ->
+            engine.updateConfig(
+                recipeYaml = """
+                    filters:
+                      - type: Replace
+                        magnitude: 0.3
+                """.trimIndent(),
+                seed = 7uL,
+                seedMode = SeedMode.PER_FRAME,
+                filterOption = PngFilterOption.NONE,
+            )
+            val first = engine.processFrame(width, height, frame).getOrThrow()
+            val second = engine.processFrame(width, height, frame).getOrThrow()
+            assertEquals(width * height * 4, first.rgbaBytes.size)
+            assertEquals(width * height * 4, second.rgbaBytes.size)
+            assertFalse("Expected PerFrame seed progression on repeated identical frame", first.rgbaBytes.contentEquals(second.rgbaBytes))
+        }
+    }
 }
