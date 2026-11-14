@@ -64,64 +64,41 @@ object RgbaFrameTransform {
             return ExtractedFrame(outWidth, outHeight, out)
         }
 
-        // Rows and pixels are addressed in ints when the strides allow it, otherwise in bytes.
-        val intAddressing = rowStride % 4 == 0 && pixelStride % 4 == 0
-        val rowStep = if (intAddressing) rowStride / 4 else rowStride
-        val pixelStep = if (intAddressing) pixelStride / 4 else pixelStride
-
         val columnTerms = scratch.acquireColumnTable(outWidth)
         for (ox in 0 until outWidth) {
             // Mirror in full-resolution coordinates: the result is the mirrored frame, downscaled.
             val sampled = sample(ox, outWidth, rotWidth)
             val rx = if (mirrorHorizontally) rotWidth - 1 - sampled else sampled
             columnTerms[ox] = when (rotation) {
-                0 -> rx * pixelStep // sx = rx
-                90 -> (srcHeight - 1 - rx) * rowStep // sy = srcHeight - 1 - rx
-                180 -> (srcWidth - 1 - rx) * pixelStep // sx = srcWidth - 1 - rx
-                else -> rx * rowStep // 270: sy = rx
+                0 -> rx * pixelStride // sx = rx
+                90 -> (srcHeight - 1 - rx) * rowStride // sy = srcHeight - 1 - rx
+                180 -> (srcWidth - 1 - rx) * pixelStride // sx = srcWidth - 1 - rx
+                else -> rx * rowStride // 270: sy = rx
             }
         }
         val rowTerms = scratch.acquireRowTable(outHeight)
         for (oy in 0 until outHeight) {
             val ry = sample(oy, outHeight, rotHeight)
             rowTerms[oy] = when (rotation) {
-                0 -> ry * rowStep // sy = ry
-                90 -> ry * pixelStep // sx = ry
-                180 -> (srcHeight - 1 - ry) * rowStep // sy = srcHeight - 1 - ry
-                else -> (srcWidth - 1 - ry) * pixelStep // 270: sx = srcWidth - 1 - ry
+                0 -> ry * rowStride // sy = ry
+                90 -> ry * pixelStride // sx = ry
+                180 -> (srcHeight - 1 - ry) * rowStride // sy = srcHeight - 1 - ry
+                else -> (srcWidth - 1 - ry) * pixelStride // 270: sx = srcWidth - 1 - ry
             }
         }
 
-        if (intAddressing) {
-            // Native order on both sides keeps the R, G, B, A bytes in place.
-            val srcInts = buffer.order(ByteOrder.nativeOrder()).asIntBuffer()
-            val srcCount = srcInts.remaining()
-            val src = scratch.acquireSourceInts(srcCount)
-            srcInts.get(src, 0, srcCount)
-            val dst = scratch.acquireOutputInts(outWidth * outHeight)
-            var d = 0
-            for (oy in 0 until outHeight) {
-                val base = rowTerms[oy]
-                for (ox in 0 until outWidth) {
-                    dst[d++] = src[base + columnTerms[ox]]
-                }
-            }
-            ByteBuffer.wrap(out).order(ByteOrder.nativeOrder()).asIntBuffer().put(dst, 0, outWidth * outHeight)
-        } else {
-            val srcCount = buffer.remaining()
-            val src = scratch.acquireSourceBytes(srcCount)
-            buffer.get(src, 0, srcCount)
-            var d = 0
-            for (oy in 0 until outHeight) {
-                val base = rowTerms[oy]
-                for (ox in 0 until outWidth) {
-                    val s = base + columnTerms[ox]
-                    out[d] = src[s]
-                    out[d + 1] = src[s + 1]
-                    out[d + 2] = src[s + 2]
-                    out[d + 3] = src[s + 3]
-                    d += 4
-                }
+        // Little-endian order packs R, G, B, A at bytes 0..3 into bits 0..31 of each int.
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        var d = 0
+        for (oy in 0 until outHeight) {
+            val base = rowTerms[oy]
+            for (ox in 0 until outWidth) {
+                val px = buffer.getInt(base + columnTerms[ox])
+                out[d] = px.toByte()
+                out[d + 1] = (px ushr 8).toByte()
+                out[d + 2] = (px ushr 16).toByte()
+                out[d + 3] = (px ushr 24).toByte()
+                d += 4
             }
         }
         return ExtractedFrame(outWidth, outHeight, out)
@@ -139,9 +116,6 @@ object RgbaFrameTransform {
 /** Buffers reused across frames by [RgbaFrameTransform]. Not thread-safe. */
 class RgbaBufferHolder {
     private var frameBuffer = ByteArray(0)
-    private var sourceInts = IntArray(0)
-    private var sourceBytes = ByteArray(0)
-    private var outputInts = IntArray(0)
     private var columnTable = IntArray(0)
     private var rowTable = IntArray(0)
 
@@ -149,21 +123,6 @@ class RgbaBufferHolder {
     fun acquire(size: Int): ByteArray {
         if (frameBuffer.size != size) frameBuffer = ByteArray(size)
         return frameBuffer
-    }
-
-    internal fun acquireSourceInts(size: Int): IntArray {
-        if (sourceInts.size < size) sourceInts = IntArray(size)
-        return sourceInts
-    }
-
-    internal fun acquireSourceBytes(size: Int): ByteArray {
-        if (sourceBytes.size < size) sourceBytes = ByteArray(size)
-        return sourceBytes
-    }
-
-    internal fun acquireOutputInts(size: Int): IntArray {
-        if (outputInts.size < size) outputInts = IntArray(size)
-        return outputInts
     }
 
     internal fun acquireColumnTable(size: Int): IntArray {

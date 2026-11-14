@@ -33,9 +33,9 @@ enum class PngFilterOption(
     companion object {
         /**
          * The strategy used until one is chosen in the settings. The other strategies cost the
-         * component much more per frame (PNG filtering in `reloadPixels`, unfiltering in
-         * `renderRgba`): on the host JVM at 540p, AdaptiveFast and Paeth add 50 to 75 ms to a
-         * frame, so the live preview defaults to None.
+         * component much more per frame (PNG filtering and unfiltering in `processFrame`): on the
+         * host JVM at 540p, AdaptiveFast and Paeth add 50 to 75 ms to a frame, so the live preview
+         * defaults to None.
          */
         val DEFAULT: PngFilterOption = NONE
     }
@@ -120,23 +120,20 @@ class GlitchEngine : AutoCloseable {
                 is WitResult.Err -> return Result.failure(IllegalStateException(formatError(setRes.error)))
             }
         }
-        when (val applyRes = FrameTrace.asyncSection(FrameTrace.APPLY) { session.apply() }) {
-            is WitResult.Ok -> Unit
+        when (val applyRes = FrameTrace.asyncSection(FrameTrace.PROCESS_FRAME) { session.processFrame(rgba) }) {
+            is WitResult.Ok -> {
+                val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000.0
+                return Result.success(
+                    GlitchFrameOutput(
+                        rgbaBytes = applyRes.value,
+                        width = width,
+                        height = height,
+                        processingTimeMs = elapsedMs,
+                    ),
+                )
+            }
             is WitResult.Err -> return Result.failure(IllegalStateException(formatError(applyRes.error)))
         }
-        val outRgba = when (val renderRes = FrameTrace.asyncSection(FrameTrace.RENDER_RGBA) { session.renderRgba() }) {
-            is WitResult.Ok -> renderRes.value
-            is WitResult.Err -> return Result.failure(IllegalStateException(formatError(renderRes.error)))
-        }
-        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000.0
-        Result.success(
-            GlitchFrameOutput(
-                rgbaBytes = outRgba,
-                width = width,
-                height = height,
-                processingTimeMs = elapsedMs,
-            ),
-        )
     }
 
     suspend fun captureSnapshotPng(): Result<ByteArray> = mutex.withLock {
@@ -173,15 +170,9 @@ class GlitchEngine : AutoCloseable {
         }
         val results = LinkedHashMap<String, ByteArray>(recipes.size)
         try {
-            var isFirst = true
             for ((key, yaml) in recipes) {
-                if (!isFirst) {
-                    if (thumbSession.reloadPixels(baseRgba) is WitResult.Err) continue
-                }
-                isFirst = false
                 if (thumbSession.setRecipe(yaml, seed, SeedMode.FIXED) is WitResult.Err) continue
-                if (thumbSession.apply() is WitResult.Err) continue
-                when (val rendered = thumbSession.renderRgba()) {
+                when (val rendered = thumbSession.processFrame(baseRgba)) {
                     is WitResult.Ok -> results[key] = rendered.value
                     is WitResult.Err -> continue
                 }
@@ -195,10 +186,7 @@ class GlitchEngine : AutoCloseable {
     private suspend fun ensureLiveSessionLocked(width: Int, height: Int, rgba: ByteArray): Result<LiveSession> {
         val existing = liveSession
         if (existing != null && !existing.isClosed && currentWidth == width && currentHeight == height) {
-            return when (val reloadRes = FrameTrace.asyncSection(FrameTrace.RELOAD_PIXELS) { existing.reloadPixels(rgba) }) {
-                is WitResult.Ok -> Result.success(existing)
-                is WitResult.Err -> Result.failure(IllegalStateException(formatError(reloadRes.error)))
-            }
+            return Result.success(existing)
         }
         existing?.close()
         liveSession = null
