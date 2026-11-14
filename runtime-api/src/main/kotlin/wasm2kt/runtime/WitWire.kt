@@ -1,5 +1,7 @@
 package wasm2kt.runtime
 
+private val EMPTY_BYTES = ByteArray(0)
+
 /**
  * Writes WIT values in the binary format generated bindings and backends exchange (ADR-0015).
  *
@@ -20,7 +22,11 @@ package wasm2kt.runtime
  * scalar value) are [IllegalArgumentException]s raised while writing (ADR-0007).
  */
 class WitWriter(initialCapacity: Int = 64) {
-    private var buf = ByteArray(maxOf(initialCapacity, 8))
+    private var buf = when {
+        initialCapacity < 0 -> throw IllegalArgumentException("Negative initial capacity $initialCapacity")
+        initialCapacity == 0 -> EMPTY_BYTES
+        else -> ByteArray(maxOf(initialCapacity, 8))
+    }
 
     /** Number of bytes written. */
     var size: Int = 0
@@ -31,9 +37,9 @@ class WitWriter(initialCapacity: Int = 64) {
 
     private fun ensure(extra: Int) {
         val needed = size + extra
+        if (extra < 0 || needed < 0) throw IllegalArgumentException("WIT value too large")
         if (needed <= buf.size) return
-        if (needed < 0) throw IllegalArgumentException("WIT value too large")
-        buf = buf.copyOf(maxOf(needed, buf.size * 2))
+        buf = buf.copyOf(maxOf(needed, maxOf(buf.size * 2, 8)))
     }
 
     fun bool(v: Boolean) = byte(if (v) 1 else 0)
@@ -236,6 +242,7 @@ class WitReader(private val buf: ByteArray, offset: Int = 0, private val end: In
     fun bytes(): ByteArray {
         val n = length()
         val at = need(n)
+        if (n == 0) return EMPTY_BYTES
         return buf.copyOfRange(at, at + n)
     }
 
