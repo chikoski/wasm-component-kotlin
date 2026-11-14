@@ -546,10 +546,33 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
         }
     }
 
-    /** Copies [byteLength] already-bounds-checked bytes from [memory] at [ptr] directly into [w], returning the start offset in [w]. */
+    companion object {
+        private const val BULK_COPY_THRESHOLD = 256
+        private const val BULK_COPY_CHUNK = 65536
+    }
+
+    /**
+     * Copies [byteLength] already-bounds-checked bytes from [memory] at [ptr] directly into [w],
+     * returning the start offset in [w].
+     *
+     * `com.dylibso.chicory.runtime.Memory` only provides bulk reads via `readBytes(addr, len)`
+     * (there is no overload writing into an existing `ByteArray`), so payloads of at least
+     * [BULK_COPY_THRESHOLD] bytes are copied in [BULK_COPY_CHUNK]-byte chunks to bound temporary
+     * allocation while avoiding per-byte or per-long calls.
+     */
     private fun copyFromMemory(memory: Memory, ptr: Int, byteLength: Int): Int {
         val start = w.reserve(byteLength)
         val buf = w.buffer
+        if (byteLength >= BULK_COPY_THRESHOLD) {
+            var offset = 0
+            while (offset < byteLength) {
+                val chunkLen = minOf(byteLength - offset, BULK_COPY_CHUNK)
+                val chunk = memory.readBytes(ptr + offset, chunkLen)
+                System.arraycopy(chunk, 0, buf, start + offset, chunkLen)
+                offset += chunkLen
+            }
+            return start
+        }
         var dst = start
         var src = ptr
         val end8 = ptr + (byteLength and -8)

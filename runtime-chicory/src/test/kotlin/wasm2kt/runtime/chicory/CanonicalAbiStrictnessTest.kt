@@ -1,5 +1,8 @@
 package wasm2kt.runtime.chicory
 
+import com.dylibso.chicory.runtime.ByteArrayMemory
+import com.dylibso.chicory.runtime.Memory
+import com.dylibso.chicory.wasm.types.MemoryLimits
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -7,9 +10,11 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.WitWriter
 import wasm2kt.testing.JsonBackend
 import java.nio.file.Paths
 import kotlin.test.assertEquals
@@ -108,5 +113,66 @@ class CanonicalAbiStrictnessTest {
             }
             assertEquals("🎌", c.invoke("echo-char", JsonArray(listOf(JsonPrimitive("🎌")))).jsonPrimitive.content)
         }
+    }
+
+    @Test
+    fun `lifting u8 and u32 lists and utf8 strings matches payload across bulk copy boundaries`() {
+        val mem = ByteArrayMemory(MemoryLimits(4, 4))
+        val cx = object : AbiContext {
+            override val memory: Memory = mem
+            override val encoding: StringEncoding = StringEncoding.UTF8
+            override fun realloc(align: Int, size: Int): Int = error("unused")
+            override fun lowerOwn(table: Int, id: Int): Int = error("unused")
+            override fun lowerBorrow(table: Int, id: Int): Int = error("unused")
+            override fun liftOwn(table: Int, handle: Int): Int = error("unused")
+            override fun liftBorrow(table: Int, handle: Int): Int = error("unused")
+        }
+        val lengths = intArrayOf(0, 7, 8, 255, 256, 257, 65535, 65536, 65537, 131072, 131073, 150_000)
+        for (len in lengths) {
+            val payload = ByteArray(len) { i -> ((i * 31 + len) and 0xFF).toByte() }
+            val dataPtr = 11
+            mem.writeI32(0, dataPtr)
+            mem.writeI32(4, len)
+            if (len > 0) mem.write(dataPtr, payload)
+
+            val listWriter = WitWriter()
+            Lifter(cx, listWriter).load(WitType.ListOf(WitType.U8), 0)
+            assertArrayEquals(payload, listWriter.toReader().bytes())
+
+            val strBytes = ByteArray(len) { i -> ('a'.code + (i % 26)).toByte() }
+            if (len > 0) mem.write(dataPtr, strBytes)
+            val strWriter = WitWriter()
+            Lifter(cx, strWriter).load(WitType.Str, 0)
+            assertEquals(strBytes.decodeToString(), strWriter.toReader().string())
+        }
+
+        // Raw integer list of multi-byte elements (list<u32>, 100 elements = 400 bytes >= 256).
+        val u32Ptr = 12
+        val u32Count = 100
+        for (i in 0 until u32Count) {
+            mem.writeI32(u32Ptr + i * 4, i * 17 - 3)
+        }
+        mem.writeI32(0, u32Ptr)
+        mem.writeI32(4, u32Count)
+        val u32Writer = WitWriter()
+        Lifter(cx, u32Writer).load(WitType.ListOf(WitType.U32), 0)
+        val u32Reader = u32Writer.toReader()
+        assertEquals(u32Count, u32Reader.length())
+        for (i in 0 until u32Count) {
+            assertEquals(i * 17 - 3, u32Reader.int())
+        }
+
+        // Invalid UTF-8 in bulk path traps with ComponentTrapException.
+        val badUtf8 = ByteArray(300) { 'a'.code.toByte() }
+        badUtf8[280] = 0xFF.toByte()
+        mem.writeI32(0, 12)
+        mem.writeI32(4, badUtf8.size)
+        mem.write(12, badUtf8)
+        assertThrows<ComponentTrapException> { Lifter(cx, WitWriter()).load(WitType.Str, 0) }
+
+        // Out-of-bounds bulk read traps with ComponentTrapException before touching readBytes.
+        mem.writeI32(0, 4 * 65536 - 100)
+        mem.writeI32(4, 300)
+        assertThrows<ComponentTrapException> { Lifter(cx, WitWriter()).load(WitType.ListOf(WitType.U8), 0) }
     }
 }

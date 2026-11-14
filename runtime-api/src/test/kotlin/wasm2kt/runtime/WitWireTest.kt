@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** The binary value format (ADR-0015). */
 class WitWireTest {
@@ -74,5 +75,36 @@ class WitWireTest {
         kotlin.test.assertSame(backingBefore, w.buffer)
         assertContentEquals(byteArrayOf(10, 11, 12, 13, 14), w.toReader().bytes())
         assertThrows<IllegalArgumentException> { w.reserve(-1) }
+    }
+
+    @Test
+    fun `zero initial capacity starts empty and grows to minimum step`() {
+        val w = WitWriter(0)
+        assertEquals(0, w.buffer.size)
+        assertEquals(0, w.size)
+        w.byte(42)
+        assertTrue(w.buffer.size >= 8)
+        assertEquals(42, w.toReader().byte().toInt())
+        assertThrows<IllegalArgumentException> { WitWriter(-1) }
+    }
+
+    @Test
+    fun `empty byte array reads back as empty`() {
+        val empty = WitWriter(0)
+        empty.bytes(ByteArray(0))
+        assertEquals(0, empty.toReader().bytes().size)
+    }
+
+    @Test
+    fun `reset truncates visible slice and reserve guards integer overflow`() {
+        val w = WitWriter(8)
+        w.bytes(byteArrayOf(1, 2, 3, 4, 5, 6))
+        w.reset()
+        w.bytes(byteArrayOf(9, 8))
+        assertContentEquals(byteArrayOf(9, 8), w.toReader().bytes())
+
+        val small = WitWriter(8)
+        small.byte(1)
+        assertThrows<IllegalArgumentException> { small.reserve(Int.MAX_VALUE) }
     }
 }

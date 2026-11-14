@@ -3177,6 +3177,7 @@ class WitToKotlinPoetConverter(
     private fun buildBackendWasmtimeSessionTypeSpec(): TypeSpec {
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
         val backendClass = ClassName("wasm2kt.runtime", "ComponentBackend")
+        val atomicRefClass = ClassName("java.util.concurrent.atomic", "AtomicReference")
         val anyNullable = ClassName("kotlin", "Any").copy(nullable = true)
         val synchronizedAnnotation = ClassName("kotlin.jvm", "Synchronized")
         val typeR = TypeVariableName("R")
@@ -3200,6 +3201,11 @@ class WitToKotlinPoetConverter(
             .addProperty(
                 PropertySpec.builder("writer", witWriterClass, KModifier.PRIVATE)
                     .initializer("%T()", witWriterClass)
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("suspendingWriter", atomicRefClass.parameterizedBy(witWriterClass.copy(nullable = true)), KModifier.PRIVATE)
+                    .initializer("%T(null)", atomicRefClass)
                     .build(),
             )
             .addFunction(
@@ -3253,10 +3259,14 @@ class WitToKotlinPoetConverter(
                     .addKdoc("Not serialized: the backend runs suspending calls on its own scheduler, several at once (ADR-0019).\n")
                     .addStatement("check(!isClosed) { %S }", closedMessage)
                     .beginControlFlow("return backend.bindSuspending")
-                    .addStatement("val w = %T()", witWriterClass)
+                    .addStatement("val w = suspendingWriter.getAndSet(null) ?: %T()", witWriterClass)
+                    .addStatement("w.reset()")
                     .addStatement("encode(w)")
                     .addStatement("val index = synchronized(this) { functionIndices.getOrPut(functionName) { backend.resolve(functionName) } }")
-                    .addStatement("decode(backend.invokeSuspending(index, w.toReader()))")
+                    .addStatement("val result = decode(backend.invokeSuspending(index, w.toReader()))")
+                    .addStatement("w.reset()")
+                    .addStatement("suspendingWriter.compareAndSet(null, w)")
+                    .addStatement("result")
                     .endControlFlow()
                     .build(),
             )

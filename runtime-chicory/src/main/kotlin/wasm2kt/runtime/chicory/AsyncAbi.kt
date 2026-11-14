@@ -434,7 +434,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             if (flat == null) {
                 done(Result.failure(CancellationException("'$functionName' was cancelled")))
             } else {
-                val results = WitWriter()
+                val results = writerFor(type.results)
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
                 if (CanonicalAbi.flattenAll(type.results).size > limit) {
@@ -483,9 +483,12 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return job
     }
 
+    private fun writerFor(types: List<*>): WitWriter =
+        if (types.isEmpty()) WitWriter(0) else WitWriter()
+
     /** The guest's arguments for a call of host import [t], lifted into the binary format. */
     private fun liftImportArgs(t: Trampoline.LowerImport, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
-        val args = WitWriter()
+        val args = writerFor(t.type.params)
         val lifter = Lifter(cx, args)
         val paramTypes = t.type.params.map { it.second }
         if (CanonicalAbi.flattenAll(paramTypes).size > maxFlat) {
@@ -519,7 +522,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val retPtr = if (t.type.results.isNotEmpty()) coreArgs[coreArgs.size - 1].toInt() else null
         val fn = if (t.type.async) c.asyncHostImport(t.import) else null
         if (fn == null) {
-            val results = WitWriter()
+            val results = writerFor(t.type.results)
             c.bind { c.hostImport(t.import).call(args.toReader(), results) }
             val reader = results.toReader()
             if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
@@ -530,7 +533,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val subtask = Subtask()
         subtask.state = Subtask.State.STARTED
         val subtaski = caller.task.inst.handles.add(subtask)
-        val results = WitWriter()
+        val results = writerFor(t.type.results)
         val job = launchHostImport(fn, args.toReader(), results) { cause ->
             if (subtask.resolved()) return@launchHostImport
             when {
