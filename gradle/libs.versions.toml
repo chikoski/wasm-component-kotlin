@@ -5,6 +5,7 @@ kotlinx-serialization = "1.8.0"
 clikt = "5.0.3"
 junit = "5.11.4"
 chicory = "1.7.5"
+asm = "9.9.1"
 kotlinx-coroutines = "1.10.2"
 android-gradle-api = "8.7.3"
 
@@ -18,6 +19,10 @@ chicory-wasi = { module = "com.dylibso.chicory:wasi", version.ref = "chicory" }
 chicory-compiler = { module = "com.dylibso.chicory:compiler", version.ref = "chicory" }
 chicory-build-time-compiler = { module = "com.dylibso.chicory:build-time-compiler", version.ref = "chicory" }
 chicory-wasm = { module = "com.dylibso.chicory:wasm", version.ref = "chicory" }
+asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
+asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }
+asm-analysis = { module = "org.ow2.asm:asm-analysis", version.ref = "asm" }
+asm-util = { module = "org.ow2.asm:asm-util", version.ref = "asm" }
 android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "android-gradle-api" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 # Generated bindings of worlds with streams or futures use Flow and Deferred (ADR-0006, #16).

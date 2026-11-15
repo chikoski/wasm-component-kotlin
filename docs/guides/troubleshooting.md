@@ -59,9 +59,18 @@
 * **原因**: コンポーネントが Chicory バックエンドの未対応機能（`map<K, V>` などの型、未対応の組み込み関数）を含んでいます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)）
 * **対処**: 該当するコード経路を実行時に呼ばなければ動作しますが、呼ぶと例外になります。ビルド時点で失敗させたい場合は `wasm2kt { failOnUnsupportedFeatures.set(true) }` を設定してください
 
-### ビルド時に `are too large for a JVM method and will be interpreted` と警告が出る / 大きな wasm 関数を含むコンポーネントが遅い
+### ビルド時にメソッドサイズに関する警告が出る
 
-* **原因**:
-  1. コンパイル後の JVM バイトコードが 64 KB を超える関数は、JVM のクラスファイル制限によりインタプリタ実行にフォールバックします
-  2. 8,000 バイトを超えるメソッドは、HotSpot JVM の既定では JIT コンパイルされません（[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57)）
-* **対処**: デスクトップ / サーバーの HotSpot JVM で実行する場合は、JVM 引数に `-XX:-DontCompileHugeMethods` を追加すると 8,000 バイト超のメソッドも JIT コンパイルされます（[性能とサイズ](../explanation/performance.md#3-計算の性能heavy)）
+ビルド時の `wasm2ktCompileWarnings<Name>` タスクは、Chicory コンパイル後のサイズ制限に関する 3 種類の警告を出力します。
+
+* インタプリタフォールバック警告
+* Android ART コンパイラ命令数上限の警告
+* HotSpot JIT 上限の警告
+
+インタプリタフォールバック警告である `are too large for a JVM method and will be interpreted` は、変換前の wasm 関数が JVM の 64 KB メソッド上限を超えた場合に出ます。この段階を超えた関数は Chicory 自身がバイトコードを出力しないため、`JvmMethodSplitter` でも分割できません。wasm 側の該当関数を小さく分割すると解消できます。
+
+ART 上限の警告である `exceed ART's compiler instruction limit` は、自動分割後も DEX コード単位の上限である 16,383 を超えるおそれがあるメソッドが残った場合に出ます。`JvmMethodSplitter` は 7,500 JVM バイトを目安に自動分割を行いますが、ディスパッチ用メソッドなど名前フィルタにより分割対象外となるメソッドや、切り出し条件を満たせない大きなメソッドでは上限を超える場合があります。そのようなメソッドは実機やエミュレーターの `dex2oat` と JIT でスキップされ、ART のインタプリタで動きます。
+
+HotSpot JIT 上限の警告である `exceed HotSpot's 8,000-byte JIT limit` は、分割後も JVM バイトコードで 8,000 バイトを超えるメソッドが残った場合に出ます。たとえばテーブル分岐を含むディスパッチ用メソッドなどが該当します。デスクトップやサーバーの JVM で実行する場合は、JVM 引数に `-XX:-DontCompileHugeMethods` を追加してください。
+
+Android 上で計算性能を検証する場合は、`debug` ビルドではなく `nonMinifiedRelease` などの非 `debuggable` ビルドを使う必要があります。`debuggable` が有効なビルドでは、端末側で `cmd package compile -m everything` を実行しても `dexopt` が `verify` 状態に留まり、AOT コンパイルが効きません。詳細は [ADR-0021](../adr/0021-split-large-chicory-methods.md) と [性能とサイズ](../explanation/performance.md) にまとめています。

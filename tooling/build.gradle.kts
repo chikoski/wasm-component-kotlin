@@ -13,6 +13,10 @@ dependencies {
     implementation(libs.chicory.wasi)
     implementation(libs.chicory.compiler)
     implementation(libs.chicory.build.time.compiler)
+    implementation(libs.asm)
+    implementation(libs.asm.tree)
+    implementation(libs.asm.analysis)
+    implementation(libs.asm.util)
 
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))

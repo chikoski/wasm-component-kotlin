@@ -69,9 +69,9 @@ wasm2kt {
 | タスク名 | 型 | 内容 |
 | :--- | :--- | :--- |
 | `wasm2ktDecompose<Cap>` | `Wasm2KtDecomposeTask` | 同梱の `wasm2kt-decompose.wasm` を Chicory 上で実行し、`.wasm` を `core*.wasm`・`plan.json`・`wit.json` に分解して未対応機能を検査します |
-| `wasm2ktCompile<Cap>` | `Wasm2KtCompileTask` | Chicory のビルド時コンパイラで各 core モジュールを JVM バイトコードへコンパイルし、`wasm2kt-<name>.jar` を出力します |
+| `wasm2ktCompile<Cap>` | `Wasm2KtCompileTask` | Chicory のビルド時コンパイラで各 core モジュールを JVM バイトコードへコンパイルします。生成された大きなメソッドは ASM で自動分割され、`wasm2kt-<name>.jar` を出力します |
 | `wasm2ktGenerate<Cap>`（Android ではバリアントごとに配線） | `Wasm2KtGenerateTask` | `wit.json` と `plan.json` から Kotlin ソースコードを生成します |
-| `wasm2ktDecomposeWarnings<Cap>` / `wasm2ktCompileWarnings<Cap>` | `Wasm2KtWarningsTask` | 分解・コンパイル時の警告（未対応機能や 64 KB 超の関数によるインタプリタフォールバック）を表示します |
+| `wasm2ktDecomposeWarnings<Cap>` / `wasm2ktCompileWarnings<Cap>` | `Wasm2KtWarningsTask` | 分解時の未対応機能に加え、コンパイル後の 64 KB 超によるインタプリタフォールバック、ART の 16,383 DEX コード単位上限、HotSpot の 8,000 バイト上限の超過を表示します |
 
 ---
 
