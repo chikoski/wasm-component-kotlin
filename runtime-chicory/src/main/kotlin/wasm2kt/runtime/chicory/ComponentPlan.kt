@@ -217,7 +217,9 @@ class PlanExport(
     val func: CoreDef,
     val options: Int,
     val type: FuncType,
-)
+) {
+    internal val qualifiedName: String = instance?.let { "$it#$name" } ?: name
+}
 
 /**
  * Canonical options. [instance] is the component instance they belong to (whose handle table the

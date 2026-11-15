@@ -43,6 +43,8 @@
 
 ### 3.1 バイナリ境界（JVM と ART）
 
+以下の表は `#58` の最適化前に GitHub Actions CI 上で取得した計測値です。最適化前後の比較値は同じ節の後半に掲載しています。
+
 | 呼び出し | Chicory AOT (JVM) | Wasmtime 汎用 FFM (JVM) | Chicory AOT (ART) |
 | :--- | ---: | ---: | ---: |
 | `add(s32, s32)`（core 直接） | 50 ns | — | 43〜49 ns |
@@ -58,11 +60,26 @@
 
 64 KiB の `echo-bytes`（JVM Chicory AOT: 12.4 µs）の内訳は、生成コード側の `WitWriter` / `WitReader` 変換が 5.3 µs、`ComponentBackend.invoke`（lower / lift と wasm 実行）が 6.9 µs です。
 
-5 文字の文字列を渡す `echo-name` は、16 B の `echo-bytes` より Chicory 上の JVM と ART の双方で時間がかかります。上表の GitHub Actions 計測値では、`echo-bytes` の 16 B が JVM で 0.76 µs、ART で 3.9〜4.8 µs です。同じ表で `echo-name` は JVM で 1.5 µs、ART で 8.3〜29 µs となっています。
+上表の取得時点では、5 文字の文字列を渡す `echo-name` が 16 B の `echo-bytes` より時間を要していました。`echo-bytes` の 16 B は JVM で 0.76 µs、ART で 3.9〜4.8 µs でした。同じ表で `echo-name` は JVM で 1.5 µs、ART で 8.3〜29 µs でした。
 
-この時間差にはいくつかの実装上の違いが関係していると考えられます。Chicory 経路のホスト境界では `WitWriter.string` が UTF-16 を UTF-8 へ変換し、`WitReader.string` が UTF-8 バイト列から `String` を生成します。`echo-name` の WIT 署名は `option<string>` であるため、variant 判別子の処理も加わります。さらに Canonical ABI の lower と lift が `Utf8.isValid` による UTF-8 妥当性検証を行い、ゲストの `wit-bindgen` 側でも `Option<String>` の受け渡しが発生します。なお、各処理の具体的な時間割合は Android ART 上のメソッドトレースでまだ切り分けていません。
+原因の切り分けと最適化前後の比較は、ローカルの Android 16 ARM64 エミュレーター上の非 debuggable な release テスト APK で実施しました。変更前のトレースでは、`WitWriter.string` や `Utf8.isValid` のほかに `echo-name` の `option<string>` を扱う `CanonicalAbi` のレイアウト計算と `Intrinsics.areEqual` 連鎖が繰り返し実行されていました。`echoName5_aot_dsl` のトレースには `Intrinsics.areEqual` が 430 回、`WitType$Str.equals` が 221 回、`WitType$Variant.equals` が 169 回、`WitType$Tuple.equals` が 39 回、`Arrays$ArrayItr.hasNext` が 51 回、`Integer.valueOf` が 44 回含まれていました。
 
-単一コンポーネントを扱う上記の `echo-name` とは別経路として、複数のメモリを持つコンポーネントを合成する際には `Transcoder` が使われます。`echo-name` 自体は `Transcoder` を通りませんが、関連課題の整理として `Transcoder` の実装を変更しました。以前は UTF-8 検証で生成していた `CharsetDecoder` と、UTF-16 から UTF-8 への変換で確保していた中間 `String` を削除しています。現在は `Utf8.isValid` と `Utf8.isValidUtf16` を使い、UTF-8 バイト列を直接メモリへ書き出します。なお、`readUtf16` の `CharArray` や `ByteArrayOutputStream` の確保は残ります。この `Transcoder` 変更後の Android ART 上での再計測は未実施です。
+この結果を受けて `runtime-chicory` の境界処理を最適化しました。`WitType` のアラインメント、サイズ、フラット化表現、および `FuncType` の引数型とフラット要素数を各インスタンスに遅延キャッシュしています。これにより呼び出しごとの型レイアウト再計算と `equals` の連鎖を省きました。あわせて `Lowerer` と `Lifter` で `variant` やリスト処理における `MutableList<Long>`、`LongArray`、`Pair`、`Triple` の一時確保を減らしました。ただし `WitReader.region` は非インライン関数のため `storeString` の戻り値で `Long` のボックス化は残ります。さらに `ChicoryComponentInstance` では `resolve` 時に `ExportFunction`、`CanonOptions`、`Memory`、`cabi_realloc`、`post_return` を保持します。`Context` 内のリソース追跡用コレクションもハンドルが渡されたときだけ生成する形へ改めました。
+
+同じ Android 16 ARM64 エミュレーター上の比較では、再計算の削減と一時確保の抑制により実行時間とアロケーション回数が減少しました。
+
+| 指標 | `echoName5_aot_dsl` 変更前 | `echoName5_aot_dsl` 変更後 | `echoBytes16_aot_dsl` 変更前 | `echoBytes16_aot_dsl` 変更後 |
+| :--- | ---: | ---: | ---: | ---: |
+| 最小値 | 8,309 ns | 770.71 ns | 5,170 ns | 721.58 ns |
+| 中央値 | 11,331.95 ns | 846.18 ns | 6,899.99 ns | 794.56 ns |
+| アロケーション | 113.0 回 | 26.0 回 | 61.0 回 | 25.0 回 |
+| メソッドエントリ | 2,915 回 | 1,229 回 | 1,877 回 | 1,147 回 |
+
+変更後のエミュレーター計測で `echoName5_aot_dsl` と `echoBytes16_aot_dsl` の差は最小値で 49.13 ns、アロケーション回数で 1 回になりました。これにより `#58` が対象とした文字列受け渡しの追加コストは解消しています。なお上記の結果はエミュレーター上の値です。実機での検証やセクション 3.1 全体の CI 基準表の更新は、セクション 7 の手順による定常更新として別に対応します。
+
+変更後の実装について Apple Silicon 機上の Host JVM でも `echo` 系ベンチマークを計測しました。macOS 上の OpenJDK 21 環境における `chicory-aot/dsl` の計測結果は、`echo-name` が 355 ns、`echo-bytes` の 16 B が 328 ns、1 KiB が 354 ns、64 KiB が 7.17 µs、`echo-blob` の 1 KiB レコードが 713 ns です。同じ環境で `echo-name` は `wasmtime-jni/dsl` が 638 ns、`wasmtime-ffm/dsl` が 853 ns でした。同じ Apple Silicon 機での最適化前ベンチマークは取得していません。そのため CI の 1.5 µs との前後比較ではなく、変更後の同一環境での参照値として記載しています。
+
+単一コンポーネントを扱う `echo-name` とは別経路として、複数のメモリを持つコンポーネントを合成する際には `Transcoder` が使われます。`echo-name` 自体は `Transcoder` を通りませんが、関連課題の整理として `Transcoder` の実装も変更しました。以前は UTF-8 検証で生成していた `CharsetDecoder` と、UTF-16 から UTF-8 への変換で確保していた中間 `String` を削除しています。現在は `Utf8.isValid` と `Utf8.isValidUtf16` を使い、UTF-8 バイト列を直接メモリへ書き出します。なお `readUtf16` の `CharArray` や `ByteArrayOutputStream` の確保は残ります。この `Transcoder` 変更後の Android ART 上での再計測は未実施です。
 
 ### 3.2 Wasmtime の汎用ブリッジと型付きブリッジの比較（JVM）
 

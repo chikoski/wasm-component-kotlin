@@ -41,6 +41,7 @@ internal class HostValueException(cause: Throwable) : RuntimeException(cause)
  */
 internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private val plan get() = c.plan
+    private val errorMessageTuple = WitType.Tuple(listOf(WitType.Str))
 
     val store = AsyncStore()
 
@@ -413,16 +414,22 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val inst = state(opts.instance)
         lateinit var task: Task
         val cx = c.context(opts, ChicoryComponentInstance.Direction.HOST_TO_GUEST) { task }
-        val paramTypes = type.params.map { it.second }
+        val paramTypes = type.paramTypes
+        val flatParamCount = type.flatParamCount
         val onStart = {
             // Lowering the host's arguments: errors in the values are the host's, not traps (ADR-0007).
-            val coreArgs = ArrayList<Long>()
+            val coreArgs: LongArray
             try {
                 val lowerer = Lowerer(cx, args)
-                if (CanonicalAbi.flattenAll(paramTypes).size > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    coreArgs += lowerer.storeTuple(paramTypes).toLong()
+                coreArgs = if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                    longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
+                } else if (flatParamCount == 0) {
+                    CanonicalAbi.EMPTY_LONG_ARRAY
                 } else {
-                    paramTypes.forEach { lowerer.lowerFlat(it, coreArgs) }
+                    LongArray(flatParamCount).also { out ->
+                        var pos = 0
+                        for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                    }
                 }
                 if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
             } catch (e: ComponentTrapException) {
@@ -437,7 +444,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 throw HostValueException(e)
             }
             cx.commitMoves()
-            coreArgs.toLongArray()
+            coreArgs
         }
         val onResolve = { flat: LongArray? ->
             cx.releaseLends()
@@ -447,8 +454,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 val results = writerFor(type.results)
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
-                if (CanonicalAbi.flattenAll(type.results).size > limit) {
-                    lifter.loadTuple(flat[0].toInt(), type.results)
+                if (type.flatResultCount > limit) {
+                    lifter.loadTuple(flat[0].toInt(), type.resultTuple)
                 } else {
                     val reader = Lifter.FlatReader(flat)
                     type.results.forEach { lifter.liftFlat(it, reader) }
@@ -500,9 +507,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private fun liftImportArgs(t: Trampoline.LowerImport, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
         val args = writerFor(t.type.params)
         val lifter = Lifter(cx, args)
-        val paramTypes = t.type.params.map { it.second }
-        if (CanonicalAbi.flattenAll(paramTypes).size > maxFlat) {
-            lifter.loadTuple(coreArgs[0].toInt(), paramTypes)
+        val paramTypes = t.type.paramTypes
+        if (t.type.flatParamCount > maxFlat) {
+            lifter.loadTuple(coreArgs[0].toInt(), t.type.paramTuple)
         } else {
             val reader = Lifter.FlatReader(coreArgs)
             paramTypes.forEach { lifter.liftFlat(it, reader) }
@@ -535,7 +542,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val results = writerFor(t.type.results)
             c.bind { c.hostImport(t.import).call(args.toReader(), results) }
             val reader = results.toReader()
-            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
             checkImportResults(reader, key)
             return longArrayOf(Subtask.State.RETURNED.toLong())
         }
@@ -551,7 +558,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     try {
                         c.guest {
                             val reader = results.toReader()
-                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
                             checkImportResults(reader, key)
                         }
                     } catch (e: Throwable) {
@@ -763,7 +770,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val opts = plan.options.getValue(t.options!!)
             val w = WitWriter().apply { string(e.debugMessage) }
             Lowerer(c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST), w.toReader())
-                .storeTupleAt(listOf(WitType.Str), args[1].toInt())
+                .storeTupleAt(errorMessageTuple, args[1].toInt())
             null
         }
         "error-context-drop" -> WasmFunctionHandle { _, args ->
@@ -1600,13 +1607,13 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         override var progress = 0
             private set
 
-        private val size = element?.let { CanonicalAbi.sizeOf(it) } ?: 0
+        private val size = element?.size ?: 0
 
         init {
             if (unsigned(length) > HandleTable.MAX_LENGTH) trap("Stream buffer length exceeds the maximum")
             if (element != null) {
                 val memory = opts.memory?.let { c.memories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
-                checkRange(memory, ptr, unsigned(length) * size, CanonicalAbi.alignOf(element), "stream buffer")
+                checkRange(memory, ptr, unsigned(length) * size, element.align, "stream buffer")
             }
         }
 
