@@ -41,6 +41,19 @@
 
 ### 主な追加・改善
 
+* 合成コンポーネントの共有テーブルと借用貸与追跡
+* `Transcoder` のデコーダー生成削除と文字列処理要因の整理
+* 大規模メソッド分割後の制約と回避策の文書化
+* プルリクエストテンプレートの整備
+
+[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) では、`ChicoryComponent` に共有テーブルビューとアダプターモジュールを追加し、異なる型インデックスを持つモジュール間の間接呼び出しとデストラクター呼び出しを修正しました。あわせて `AsyncAbi` と `Task` に借用中の貸与追跡を追加し、同期トラップ時の `StackSwitching` 後始末も実装しています。これにより Component Model 公式テストの `resources/` は全 36 件が通過します。
+
+[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、`Transcoder` から `CharsetDecoder` と中間 `String` の確保を削除しました。`echo-name` と `echo-bytes` の時間差に関わる要因は [performance.md](docs/explanation/performance.md) へ追記しています。
+
+[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` の分割後に残る制約と回避策を [architecture.md](docs/explanation/architecture.md) と [gradle-plugin.md](docs/reference/gradle-plugin.md) へ明文化しました。
+
+[#95](https://github.com/chikoski/wasm-component-kotlin/issues/95) では、`.github/pull_request_template.md` を追加し、`CONTRIBUTING.md` へ案内を記載しました。
+
 * WASI 0.3 ホスト設定 API、Gradle 連携、および結合フィクスチャの追加 [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) [#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) [#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) [#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) [#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) [#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) [#125](https://github.com/chikoski/wasm-component-kotlin/issues/125) [#126](https://github.com/chikoski/wasm-component-kotlin/issues/126) [#127](https://github.com/chikoski/wasm-component-kotlin/issues/127) [#128](https://github.com/chikoski/wasm-component-kotlin/issues/128) [ADR-0020](docs/adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) [ADR-0022](docs/adr/0022-wasi03-scope-and-host-configuration.md)
 
 `runtime-wasi` に `wasi03Imports`、パッケージ群ごとの有効化フラグ、セッション単位の入出力ストリームプロバイダ、文字列ベースの `stdin` オーバーロード、`runWasiCommand` を追加しました。`runtime-api` には `WitResultValue`、`ComponentExitException`、`Linker.addAll`、`ImportsFactory.plus` を導入しました。生成コードには `withSessionBlocking` とマッピング済み interface 向けの `imports` `base` オーバーロードを追加しています。`ComponentBuild.run` もライブラリ参照によるマッピング指定を受け付けます。Gradle プラグインには `addWasiDependency` プロパティを追加しました。結合テストに加えて非同期ストリームの `examples/06-async-streams` と WASI 0.3 CLI の `examples/07-wasi-cli` も整備しています。あわせて Chicory での終了後再利用診断を改善しました。また、`wasi-cli` ゲストフィクスチャのパス解決検証や終了系 E2E テストの拡充も行いました。さらに共有 WIT 定義を統合し、事前分解コンポーネントのドリフト検証を追加しています。`wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) へ、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) の P2 課題へ分離しました。

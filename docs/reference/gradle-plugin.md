@@ -70,9 +70,13 @@ wasm2kt {
 | タスク名 | 型 | 内容 |
 | :--- | :--- | :--- |
 | `wasm2ktDecompose<Cap>` | `Wasm2KtDecomposeTask` | 同梱の `wasm2kt-decompose.wasm` を Chicory 上で実行し、`.wasm` を `core*.wasm`・`plan.json`・`wit.json` に分解して未対応機能を検査します |
-| `wasm2ktCompile<Cap>` | `Wasm2KtCompileTask` | Chicory のビルド時コンパイラで各 core モジュールを JVM バイトコードへコンパイルします。生成された大きなメソッドは ASM で自動分割され、`wasm2kt-<name>.jar` を出力します |
+| `wasm2ktCompile<Cap>` | `Wasm2KtCompileTask` | Chicory のビルド時コンパイラで各 core モジュールを JVM バイトコードへコンパイルします。7,500 バイト超の `func_<N>` メソッドを `JvmMethodSplitter` で分割して `wasm2kt-<name>.jar` を出力します |
 | `wasm2ktGenerate<Cap>`（Android ではバリアントごとに配線） | `Wasm2KtGenerateTask` | `wit.json` と `plan.json` から Kotlin ソースコードを生成します |
-| `wasm2ktDecomposeWarnings<Cap>` / `wasm2ktCompileWarnings<Cap>` | `Wasm2KtWarningsTask` | 分解時の未対応機能に加え、コンパイル後の 64 KB 超によるインタプリタフォールバック、ART の 16,383 DEX コード単位上限、HotSpot の 8,000 バイト上限の超過を表示します |
+| `wasm2ktDecomposeWarnings<Cap>` / `wasm2ktCompileWarnings<Cap>` | `Wasm2KtWarningsTask` | 分解時の未対応機能に加え、Chicory の 64 KB インタプリタフォールバック、ART の 16,383 DEX コード単位上限、HotSpot の 8,000 バイト上限の 3 種類の警告を表示します |
+
+`wasm2ktCompile<Cap>` は [ADR-0021](../adr/0021-split-large-chicory-methods.md) に基づいて `JvmMethodSplitter` を実行し、7,500 JVM バイトを超える `func_<N>` メソッドを静的な補助メソッドへ自動分割します。一方で、JVM の 64 KB メソッド上限を超えて Chicory 本体が `InterpreterFallback.SILENT` によりインタプリタ実行へ落とした関数と、Chicory が単一メソッドとして生成する `call_dispatch_0` は分割対象外です。
+
+`wasm2ktCompileWarnings<Cap>` は分割後のクラス群を検査し、3 種類の警告を出力します。1 つ目は Chicory が 64 KB 上限でインタプリタ実行にした関数数です。2 つ目は Android ART の 16,383 DEX コード単位上限に対応する保守的閾値である 21,000 JVM バイト以上のメソッド数です。3 つ目は HotSpot JVM の 8,000 バイト `DontCompileHugeMethods` 上限を超えるメソッド数です。`call_dispatch_0` などにより 8,000 バイト超の警告が出た場合でも、デスクトップ JVM であれば `-XX:-DontCompileHugeMethods` を指定することで JIT コンパイルの対象にできます。
 
 ---
 

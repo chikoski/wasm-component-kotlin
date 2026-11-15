@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-15。対象ブランチは `feat/async-and-wasi-cli-examples`、主な変更点は非同期ストリームサンプル `06-async-streams`、WASI 0.3 CLI サンプル `07-wasi-cli`、`WitResultValue` と `withSessionBlocking`、`ComponentExitException`、共有 WIT 定義の統合、E2E 検証と事前分解ドリフト検査の追加です。
+> 最終更新: 2026-11-15。対象ブランチは `feat/phase3-runtime-and-docs`、主な変更点は共有テーブル適合と借用貸与追跡による公式テスト `resources/` 全件通過、`Transcoder` の `CharsetDecoder` と中間 `String` 確保の削除、`echo-name` の時間差に関わる要因の追記、大規模メソッド分割後の制約文書化、PR テンプレートの追加です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -49,7 +49,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 検証済み
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
-* Component Model の公式テストスイート（`values/`、`resources/`、`async/`。[ADR-0017](adr/0017-component-model-conformance-suite.md)、#30）: Chicory で `values/` と `resources/` は 191 のコマンドのうち 188、`async/` は 514 のうち 480 が通る。残りは `conformance/skip.txt` に理由つきで載せている（#70 共有テーブル経由のデストラクター、wasmtime-environ 48 が再入をトラップにする項目、wasmparser 0.254 の検証）
+* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 480 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目と wasmparser 0.254 の検証差
 * async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future、ホストの `suspend fun` の import、並行の呼び出しと取り消し（ADR-0019）は、`async-stream` と `async-import` フィクスチャの E2E テストで確認
 * 差分テストは、Wasmtime の FFM と JNI の両方で流す。型付きブリッジでは、結果とブリッジ自身のエラーメッセージが汎用ブリッジと同じであることも確かめる（Wasmtime の lift のエラーは、種類だけを比べる）。境界値（空と 256 KiB の list、サロゲートペア、char の端、長い list<option>）も含む
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
@@ -112,13 +112,11 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 | [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
-| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。64 KB 超による Chicory インタプリタ実行とディスパッチメソッドの残存分を継続課題として維持 |
-| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い（`Transcoder` の UTF-8 検査も残っている） |
-| [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) | — | Chicory: 合成したコンポーネントの間の resource。組み込み関数は #16 で実装した。共有テーブル経由で呼ぶデストラクターが `indirect call type mismatch` になる 2 コマンドが残る |
+| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。architecture.md と gradle-plugin.md へ未分割の `call_dispatch_0` と 64 KB 上限および `-XX:-DontCompileHugeMethods` を明記した。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは継続課題として維持 |
+| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。`Transcoder` から `CharsetDecoder` と中間 `String` の確保を削除し、`echo-name` と `echo-bytes` の時間差に関わる要因を [performance.md](explanation/performance.md) へ追記した。Android ART 上でのメソッドトレースと `echoName5_aot_dsl` の再計測が残る |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない）。LICENSE、Dokka、英語版（#50 の残り）と、rust-bridge の複数プラットフォーム向けのビルド（#59 を統合）も含む |
-| [#95](https://github.com/chikoski/wasm-component-kotlin/issues/95) | — | PR テンプレート（#50 の D-25） |
 
 ### 閉じたもの（対応しない）
 
@@ -130,6 +128,19 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* 合成コンポーネントの共有テーブルと借用貸与追跡
+* `Transcoder` のデコーダー生成削除と文字列処理要因の整理
+* 大規模メソッド分割後の制約と回避策の文書化
+* プルリクエストテンプレートの整備
+
+[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) では、`ChicoryComponent` に共有テーブルビューとアダプターモジュールを導入しました。これにより、異なる型インデックスを持つモジュール間の間接呼び出しとデストラクター呼び出しを解決しています。あわせて `AsyncAbi` と `Task` に借用中の貸与追跡を追加し、同期トラップ時の `StackSwitching` 後始末も入れました。その結果、`resources/` の公式テストは 36 件すべてが通過するようになり、`conformance/skip.txt` から該当 2 件を削除しています。
+
+[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、`Transcoder` の文字列検証と UTF-16 から UTF-8 への変換から `CharsetDecoder` と中間 `String` の確保を取り除きました。`echo-name` が `echo-bytes` より時間を要する要因も [performance.md](explanation/performance.md) へ追記しています。Android ART 上でのメソッドトレースと再計測は未実施のため、残件を P2 に残しています。
+
+[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは P2 で継続して管理します。
+
+[#95](https://github.com/chikoski/wasm-component-kotlin/issues/95) では、PR テンプレートを `.github/pull_request_template.md` に追加し、`CONTRIBUTING.md` から参照しました。
+
 * 設計・実装レビュー改善と E2E 検証の拡充
 
 [#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) では `runtime-api` に共通インタフェース `WitResultValue` を導入しました。生成される `WitResult` がこの契約を実装し、`runWasiCommand` で直接受け取れるようにしています。[#125](https://github.com/chikoski/wasm-component-kotlin/issues/125) では同期呼び出し向けに非インラインの `withSessionBlocking` ヘルパーを生成しました。これに合わせて `examples/06-async-streams` と `examples/07-wasi-cli` のコードも簡潔に更新しています。
@@ -140,7 +151,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 * [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) ART でコンパイル上限を超える大きな wasm 関数の対策 — [ADR-0021](adr/0021-split-large-chicory-methods.md)。`JvmMethodSplitter` による 7,500 バイト単位のバイトコード自動分割と、HotSpot 8,000 バイト / ART 16,383 DEX コード単位 / 64 KB インタプリタのビルド時警告を実装。`samples/android-glitch-camera` で `dex2oat64` 上限超過を 4 件から 0 件へ解消
 
-* [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) Component Model Async（Chicory のみ）— [ADR-0018](adr/0018-async-abi-on-chicory.md)（参照定義の移植、継続をスレッドで表す。plan v5。生成コードの `suspend fun` / `Flow` / `Deferred`。公式テストの `async/`。fused adapter の resource の受け渡しも実装し、#70 は共有テーブル経由のデストラクターだけが残る）
+* [#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) Component Model Async（Chicory のみ）— [ADR-0018](adr/0018-async-abi-on-chicory.md)（参照定義の移植、継続をスレッドで表す。plan v5。生成コードの `suspend fun` / `Flow` / `Deferred`。公式テストの `async/`。fused adapter の resource の受け渡しも実装し、共有テーブル経由のデストラクターは別項の #70 で完了）
 * [#50](https://github.com/chikoski/wasm-component-kotlin/issues/50) ドキュメントの組み直し（読者別の構成、古い記述の修正、`examples/05-chicory-gradle-plugin` の追加、`examples/*/Main.kt` のコンパイル・実行検査と Markdown 相対リンク検査の CI 組み込み）— #89、#90（KDoc / Dokka、LICENSE、英語版は #10、PR テンプレートは #95 へ移した）
 * [#30](https://github.com/chikoski/wasm-component-kotlin/issues/30) Component Model の公式テストスイートの取り込み — #72（[ADR-0017](adr/0017-component-model-conformance-suite.md)）
 * [#63](https://github.com/chikoski/wasm-component-kotlin/issues/63) 分解タスクがまれに `Stream closed` で失敗する — #73（jar のキャッシュを使わずに読む。原因は推定）

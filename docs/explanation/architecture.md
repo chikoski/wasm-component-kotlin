@@ -52,8 +52,16 @@ flowchart TD
 Android やネイティブライブラリを使わない環境向けのバックエンドです（[ADR-0001](../adr/0001-chicory-backend-for-android.md)）。
 
 1. **分解 (`decomposer`)**: `wasmtime-environ`（Wasmtime 48 LTS）でコンポーネントを平坦化し、core モジュール群（`core0.wasm` …）、インスタンス化手順（`plan.json`）、WIT 定義（`wit.json`）を出力します。分解ツール自体を `wasm32-wasip1` にコンパイルして `tooling` に同梱し、ビルド時に Chicory 上で動かすため、利用者に Rust や `wasm-tools` は不要です
-2. **AOT コンパイル (`CoreModuleCompiler`)**: Chicory の build-time compiler で各 core モジュールを JVM バイトコード（`Machine` クラス）と `.meta` に変換し、jar にまとめます
+2. **AOT コンパイル (`CoreModuleCompiler` + `JvmMethodSplitter`)**: Chicory の build-time compiler とメソッド分割により、各 core モジュールを JVM バイトコードの `Machine` クラスと `.meta` に変換して jar にまとめます
 3. **実行 (`ChicoryComponent`)**: `plan.json` に従って core インスタンス・メモリ・テーブル・トランポリン（ホスト import、resource 操作、multi-memory の文字列 / list transcoder など）を配線し、仕様の `trap_if` に沿って Canonical ABI の lift / lower を行います（[ADR-0007](../adr/0007-canonical-abi-validation.md)、[ADR-0013](../adr/0013-multi-memory-adapters.md)）
+
+Chicory 本体は `InterpreterFallback.SILENT` 指定により、JVM の 64 KB 上限を超える Wasm 関数を AOT 生成の対象から外します。対象外の関数は Chicory のインタプリタで実行されます。
+
+64 KB 未満で AOT 生成されたメソッドにも、実行環境ごとのコンパイル制限があります。HotSpot JVM の JIT コンパイラは既定で `-XX:+DontCompileHugeMethods` を有効にしています。そのため 8,000 バイトを超えるメソッドは JIT コンパイルされません。Android の ART も、`dex2oat` によるコンパイル時に DEX コード単位で 16,383 を超えるメソッドを除外します。除外されたメソッドはインタプリタへフォールバックします。
+
+この制約を緩和するため、`CoreModuleCompiler` は [ADR-0021](../adr/0021-split-large-chicory-methods.md) に基づいて `JvmMethodSplitter` を呼び出します。`JvmMethodSplitter` は 7,500 JVM バイトを超える `func_<N>` 形式の生成メソッドを静的な補助メソッドへ分割します。一方で、Chicory が 64 KB 上限でインタプリタへ落とした関数は分割対象外です。Chicory の `com.dylibso.chicory.compiler.internal.CompilerUtil` が単一メソッドとして生成する `call_dispatch_0` ディスパッチャも分割対象外として残ります。`call_dispatch_0` が 8,000 バイトを超える場合は、デスクトップ JVM に `-XX:-DontCompileHugeMethods` を指定すると JIT コンパイルの対象に含められます。
+
+分割後も上限を超える箇所は、Gradle タスクの `wasm2ktCompileWarnings<Cap>` が 3 種類の警告として出力します。対象となるのは、Chicory の 64 KB 上限によるインタプリタフォールバック関数数、ART の 16,383 DEX コード単位に相当する保守的閾値である 21,000 JVM バイト以上のメソッド数、HotSpot の 8,000 バイト上限を超えるメソッド数の 3 つです。
 
 ## 5. Wasmtime バックエンド (`runtime-wasmtime` + `rust-bridge`)
 

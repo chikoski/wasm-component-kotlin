@@ -17,9 +17,16 @@ import com.dylibso.chicory.runtime.TableInstance
 import com.dylibso.chicory.wasm.ChicoryException
 import com.dylibso.chicory.wasm.Parser
 import com.dylibso.chicory.wasm.WasmModule
+import com.dylibso.chicory.wasm.types.CodeSection
+import com.dylibso.chicory.wasm.types.FunctionBody
 import com.dylibso.chicory.wasm.types.FunctionImport
+import com.dylibso.chicory.wasm.types.FunctionSection
 import com.dylibso.chicory.wasm.types.FunctionType
 import com.dylibso.chicory.wasm.types.MutabilityType
+import com.dylibso.chicory.wasm.types.Table
+import com.dylibso.chicory.wasm.types.TableLimits
+import com.dylibso.chicory.wasm.types.TypeSection
+import com.dylibso.chicory.wasm.types.ValType
 import com.dylibso.chicory.wasm.types.Value
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.ComponentBackendFactory
@@ -34,6 +41,7 @@ import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.WitHostImportDispatcher
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.IdentityHashMap
 import java.util.function.Function
 
 /**
@@ -96,6 +104,9 @@ internal class ChicoryComponentInstance(
     private val imports: WitHostImportDispatcher?,
 ) : ComponentBackend {
     private val instances = HashMap<Int, Instance>()
+    private val adaptedInstances = IdentityHashMap<WasmModule, IdentityHashMap<Instance, Instance>>()
+    private val canonicalInstances = IdentityHashMap<Instance, Instance>()
+    private val hasSharedTables: Boolean = plan.modules.any { m -> m.imports.any { it.kind == "table" } }
     internal val memories = HashMap<Int, Memory>()
     internal val reallocs = HashMap<Int, ExportFunction>()
     internal val postReturns = HashMap<Int, ExportFunction>()
@@ -201,6 +212,7 @@ internal class ChicoryComponentInstance(
         val type = export.type
         val opts = plan.options.getValue(export.options)
         val cx = Context(opts, Direction.HOST_TO_GUEST)
+        val syncDepth = async.syncCallDepth()
         entered = true
         try {
             // Lowering the host's arguments: errors in the values are the host's (not traps), but
@@ -239,6 +251,7 @@ internal class ChicoryComponentInstance(
             opts.postReturn?.let { pr -> guest { withoutLeaving { postReturns.getValue(pr).apply(*coreResults) } } }
             return results.toReader()
         } finally {
+            async.cleanupSyncCalls(syncDepth)
             cx.releaseLends()
             entered = false
         }
@@ -367,6 +380,7 @@ internal class ChicoryComponentInstance(
     private fun instantiateModule(init: Initializer.Instantiate) {
         val core = modules.getValue(init.module)
         val builder = ImportValues.builder()
+        val moduleTables = ArrayList<SharedTableInstance>()
         for (arg in init.args) {
             val kind = plan.modules.first { it.index == init.module }.imports
                 .first { it.module == arg.module && it.name == arg.name }.kind
@@ -376,7 +390,16 @@ internal class ChicoryComponentInstance(
                     when (kind) {
                         "func" -> builder.addFunction(ImportFunction.exportAsImport(arg.module, arg.name, src, def.ref.name))
                         "memory" -> builder.addMemory(ImportMemory(arg.module, arg.name, src.exports().memory(def.ref.name)))
-                        "table" -> builder.addTable(ImportTable(arg.module, arg.name, src.exports().table(def.ref.name)))
+                        "table" -> {
+                            val srcTable = src.exports().table(def.ref.name)
+                            if (hasSharedTables) {
+                                val view = sharedTableView(srcTable, core.module)
+                                moduleTables.add(view)
+                                builder.addTable(ImportTable(arg.module, arg.name, view))
+                            } else {
+                                builder.addTable(ImportTable(arg.module, arg.name, srcTable))
+                            }
+                        }
                         "global" -> builder.addGlobal(ImportGlobal(arg.module, arg.name, src.exports().global(def.ref.name)))
                         else -> throw UnsupportedOperationException("Cannot import a core '$kind'")
                     }
@@ -399,6 +422,12 @@ internal class ChicoryComponentInstance(
         val instance = Instance.builder(core.module)
             .withImportValues(builder.build())
             .apply {
+                if (hasSharedTables) {
+                    withTableFactory { table, initVal ->
+                        SharedTableInstance(null, initVal, core.module, table, ::adaptInstanceForCaller)
+                            .also { moduleTables.add(it) }
+                    }
+                }
                 if (plan.usesAsync) {
                     // Guest threads of one instance interleave (ADR-0018), and Chicory's machines keep
                     // their operand and call stacks per machine: give every JVM thread its own.
@@ -408,8 +437,70 @@ internal class ChicoryComponentInstance(
                 }
             }
             .build()
+        for (t in moduleTables) {
+            t.ownerInstance = instance
+        }
         instances[init.instance] = instance
     }
+
+    private fun sharedTableView(source: TableInstance, ownerModule: WasmModule): SharedTableInstance {
+        val backing = (source as? SharedTableInstance)?.backing ?: source
+        val emptyTable = Table(backing.elementType(), TableLimits(0, 0))
+        return SharedTableInstance(backing, -1, ownerModule, emptyTable, ::adaptInstanceForCaller)
+    }
+
+    /**
+     * Builds a lightweight [Instance] view over [raw] whose [TypeSection] and function type
+     * indices live in [ownerModule]'s index space. Chicory validates `call_indirect` signatures
+     * against `targetInst.module().typeSection()` using the caller's type index (#70).
+     */
+    private fun adaptInstanceForCaller(ownerModule: WasmModule, raw: Instance): Instance =
+        synchronized(adaptedInstances) {
+            val canonicalRaw = canonicalInstances[raw] ?: raw
+            val byTarget = adaptedInstances.getOrPut(ownerModule) { IdentityHashMap() }
+            byTarget.getOrPut(canonicalRaw) {
+                val ownerTypes = ownerModule.typeSection()
+                val rawTypes = canonicalRaw.module().typeSection()
+                val typeBuilder = TypeSection.builder()
+                for (i in 0 until ownerTypes.typeCount()) {
+                    typeBuilder.addRecType(ownerTypes.getRecType(i))
+                }
+                // Chicory validates call_indirect by structural canonical equivalence against the target
+                // module's type section; a function type with maxParams + 1 parameters cannot match any
+                // signature in ownerModule, so unmapped functions still trap with a type mismatch.
+                val maxParams = ownerTypes.types().maxOfOrNull { it.params().size } ?: 0
+                val unmatchedType = FunctionType.of(List(maxParams + 1) { ValType.I32 }, emptyList())
+                val unmatchedTypeIdx = ownerTypes.subTypeCount()
+                typeBuilder.addFunctionType(unmatchedType)
+
+                val ownerSubTypeCount = ownerTypes.subTypeCount()
+                val fnSection = FunctionSection.builder()
+                val codeSection = CodeSection.builder()
+                val emptyBody = FunctionBody(emptyList(), emptyList())
+                for (funcIdx in 0 until canonicalRaw.functionCount()) {
+                    val rawTypeIdx = canonicalRaw.functionType(funcIdx)
+                    val mapped = (0 until ownerSubTypeCount).firstOrNull { callerTypeIdx ->
+                        TypeSection.crossModuleCanonicallyEquivalent(rawTypes, rawTypeIdx, ownerTypes, callerTypeIdx)
+                    } ?: unmatchedTypeIdx
+                    fnSection.addFunctionType(mapped)
+                    codeSection.addFunctionBody(emptyBody)
+                }
+
+                val adaptedModule = WasmModule.builder()
+                    .withValidation(false)
+                    .setTypeSection(typeBuilder.build())
+                    .setFunctionSection(fnSection.build())
+                    .setCodeSection(codeSection.build())
+                    .build()
+
+                Instance.builder(adaptedModule)
+                    .withInitialize(false)
+                    .withStart(false)
+                    .withMachineFactory(Function { Machine { funcId, args -> canonicalRaw.getMachine().call(funcId, args) } })
+                    .build()
+                    .also { canonicalInstances[it] = canonicalRaw }
+            }
+        }
 
     private fun importFunctionType(module: WasmModule, importModule: String, name: String): FunctionType {
         val section = module.importSection()
@@ -623,6 +714,7 @@ internal class ChicoryComponentInstance(
             inserted.clear()
             borrowsIn.clear()
             moves.clear()
+            releaseLends()
         }
 
         /** The spec's `trap_if(num_borrows != 0)` when a call returns: the callee must drop borrows it received. */
@@ -780,5 +872,48 @@ internal class ResourceTable(private val handles: HandleTable, private val table
         val slot = slotOrNull(handle) ?: trap("Unknown resource handle $handle")
         handles.remove(handle)
         return slot
+    }
+}
+
+/**
+ * A [TableInstance] view for a core module that either owns or imports a shared `funcref` table.
+ * When `call_indirect` looks up the target [Instance] of an entry defined by another core module,
+ * [instance] returns an adapted view whose type table matches [ownerModule]'s indices (#70).
+ */
+private class SharedTableInstance(
+    val backing: TableInstance?,
+    initialElement: Int,
+    private val ownerModule: WasmModule,
+    table: Table,
+    private val adapt: (WasmModule, Instance) -> Instance,
+) : TableInstance(table, initialElement) {
+    var ownerInstance: Instance? = null
+
+    override fun size(): Int = backing?.size() ?: super.size()
+
+    override fun elementType(): ValType = backing?.elementType() ?: super.elementType()
+
+    override fun limits(): TableLimits = backing?.limits() ?: super.limits()
+
+    override fun grow(size: Int, value: Int, instance: Instance?): Int =
+        backing?.grow(size, value, instance ?: ownerInstance) ?: super.grow(size, value, instance ?: ownerInstance)
+
+    override fun ref(index: Int): Int = backing?.ref(index) ?: super.ref(index)
+
+    override fun requiredRef(index: Int): Int = backing?.requiredRef(index) ?: super.requiredRef(index)
+
+    override fun setRef(index: Int, value: Int, instance: Instance?) {
+        val targetInstance = instance ?: ownerInstance
+        if (backing != null) backing.setRef(index, value, targetInstance) else super.setRef(index, value, targetInstance)
+    }
+
+    override fun instance(index: Int): Instance? {
+        val raw = if (backing != null) backing.instance(index) else super.instance(index)
+        val effective = raw ?: (backing as? SharedTableInstance)?.ownerInstance ?: ownerInstance ?: return null
+        return if (effective.module() === ownerModule) effective else adapt(ownerModule, effective)
+    }
+
+    override fun reset() {
+        if (backing == null) super.reset()
     }
 }

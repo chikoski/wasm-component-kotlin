@@ -2,12 +2,6 @@
 # `<file>` skips a whole file, `<file>:<line>` one command (the line of the command in the .wast).
 # A listed command that passes fails ConformanceTest, so remove it once fixed.
 
-# Resources passed between nested components (#70): the adapter intrinsics work, but these
-# components call the destructor through a funcref table shared between core instances, where
-# Chicory reports an indirect call type mismatch.
-resources/borrows.wast:159  # destructor through a shared table: indirect call type mismatch (#70)
-resources/multiple-resources.wast:170  # destructor through a shared table: indirect call type mismatch (#70)
-
 # wasmtime-environ 48 (ADR-0010) compiles a call from a component instance into itself or an ancestor
 # to an unconditional trap ("cannot enter component instance"); newer Component Model versions allow it.
 async/cancel-delivery.wast:515  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48

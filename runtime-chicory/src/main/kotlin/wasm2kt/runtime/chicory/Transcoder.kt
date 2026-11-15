@@ -17,7 +17,7 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
         TranscodeOp.UTF8_TO_UTF8 -> {
             val len = u(a[1])
             val bytes = read(from, u(a[0]), len)
-            if (!isValidUtf8(bytes)) trap("invalid utf8 encoding")
+            checkUtf8(bytes)
             write(to, u(a[2]), bytes)
             null
         }
@@ -121,10 +121,32 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
                 cp = c.code; width = 1
             }
             if (firstPass && cp >= 0x80) break
-            val encoded = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8)
+            val utf8Len = when {
+                cp < 0x80 -> 1
+                cp < 0x800 -> 2
+                cp < 0x10000 -> 3
+                else -> 4
+            }
             val remaining = dstLen - out.size()
-            if (remaining < 4 && remaining < encoded.size) break
-            out.write(encoded)
+            if (remaining < 4 && remaining < utf8Len) break
+            when (utf8Len) {
+                1 -> out.write(cp)
+                2 -> {
+                    out.write(0xC0 or (cp shr 6))
+                    out.write(0x80 or (cp and 0x3F))
+                }
+                3 -> {
+                    out.write(0xE0 or (cp shr 12))
+                    out.write(0x80 or ((cp shr 6) and 0x3F))
+                    out.write(0x80 or (cp and 0x3F))
+                }
+                else -> {
+                    out.write(0xF0 or (cp shr 18))
+                    out.write(0x80 or ((cp shr 12) and 0x3F))
+                    out.write(0x80 or ((cp shr 6) and 0x3F))
+                    out.write(0x80 or (cp and 0x3F))
+                }
+            }
             i += width
             read = i
         }
@@ -181,27 +203,15 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
     }
 
     private fun checkUtf16(units: CharArray) {
-        var i = 0
-        while (i < units.size) {
-            val c = units[i]
-            if (Character.isHighSurrogate(c) && i + 1 < units.size && Character.isLowSurrogate(units[i + 1])) i += 2
-            else if (Character.isSurrogate(c)) trap("invalid utf16 encoding")
-            else i += 1
-        }
+        if (!Utf8.isValidUtf16(units)) trap("invalid utf16 encoding")
     }
 
-    private fun isValidUtf8(bytes: ByteArray): Boolean = try {
-        Charsets.UTF_8.newDecoder()
-            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-            .decode(java.nio.ByteBuffer.wrap(bytes))
-        true
-    } catch (e: java.nio.charset.CharacterCodingException) {
-        false
+    private fun checkUtf8(bytes: ByteArray) {
+        if (!Utf8.isValid(bytes, 0, bytes.size)) trap("invalid utf8 encoding")
     }
 
     private fun decodeUtf8(bytes: ByteArray): String {
-        if (!isValidUtf8(bytes)) trap("invalid utf8 encoding")
+        checkUtf8(bytes)
         return String(bytes, Charsets.UTF_8)
     }
 

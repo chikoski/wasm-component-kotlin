@@ -414,8 +414,14 @@ internal class Task(
 
     var state = State.INITIAL
     var numBorrows = 0
+    val lenders = ArrayList<ResourceHandle>()
     var implicitThread: GuestThread? = null
     val threads = ArrayList<GuestThread>()
+
+    fun releaseLenders() {
+        for (h in lenders) h.numLends--
+        lenders.clear()
+    }
 
     /** Wasmtime's rule (ADR-0018): only a task of an `async` function may block before it returns. */
     fun mayBlock(): Boolean = ftAsync || state == State.RESOLVED
@@ -494,6 +500,7 @@ internal class Task(
     fun return_(result: LongArray) {
         if (state == State.RESOLVED) trap("task.return was already called, or the task was cancelled")
         if (numBorrows > 0) trap("Borrowed resource handles must be dropped before the task returns")
+        releaseLenders()
         onResolve(result)
         state = State.RESOLVED
     }
@@ -501,6 +508,7 @@ internal class Task(
     fun cancel() {
         if (state != State.CANCEL_DELIVERED) trap("task.cancel called without a pending cancellation")
         if (numBorrows > 0) trap("Borrowed resource handles must be dropped before the task is cancelled")
+        releaseLenders()
         onResolve(null)
         state = State.RESOLVED
     }

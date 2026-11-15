@@ -64,3 +64,5 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decom
 * コミットメッセージは Conventional Commits 形式（`feat(scope): ...`、`fix(scope): ...`、破壊的変更は `!` を付与）で書き、本文に背景と理由を記載してください
 * 作業は GitHub Issues（優先度ラベル `P0` / `P1` / `P2`、分野ラベル `area:*`）で管理します。コミットや PR では `#番号` で関連 Issue を参照してください
 * プロジェクトの現状が変わったら [docs/STATUS.md](docs/STATUS.md) を、破壊的変更や主要な変更があれば [CHANGELOG.md](CHANGELOG.md) を更新し、重要な設計判断を行った場合は [docs/adr/](docs/adr/README.md) に新しい ADR を追加してください
+
+PR を作成する際は [.github/pull_request_template.md](.github/pull_request_template.md) を使用します。関連する Issue 番号やドキュメントの更新有無をテンプレートの項目に沿って確認してください。変更箇所に応じたテストも実行し、テンプレートのチェックリストで確認します。

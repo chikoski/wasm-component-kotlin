@@ -342,6 +342,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     /** After a trap: guest threads still blocked can never run again; host calls in progress fail with the trap. */
     fun abandon() {
         store.abandon()
+        cleanupSyncCalls(0)
     }
 
     fun close() {
@@ -429,6 +430,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             } catch (e: RuntimeException) {
                 if (e !is IllegalArgumentException && e !is IllegalStateException) throw e
                 cx.rollbackLowering()
+                task.releaseLenders()
                 // The task never started: it leaves the instance as if it had not been called.
                 task.state = Task.State.RESOLVED
                 task.exitImplicitThread()
@@ -1049,39 +1051,67 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         StringEncoding.LATIN1_UTF16 -> 2
     }
 
+    private class SyncCallFrame(val caller: GuestThread?, val callee: GuestThread)
+
+    /** The synchronous guest-to-guest calls in progress on this JVM thread. */
+    private val syncCalls = ThreadLocal.withInitial { ArrayList<SyncCallFrame>() }
+
     /** Fused adapters call this around a synchronous guest-to-guest call: the callee's task. */
     private fun enterSyncCall(calleeAsync: Boolean, calleeInstance: Int) {
         val task = Task(state(calleeInstance), calleeAsync, false, false, { _, _ -> false }, { LongArray(0) }, {})
         val thread = GuestThread(task, null)
-        val handler = StackSwitching.currentHandler() ?: StackSwitching.installHostHandler(thread)
-        syncCallers.get() += handler.currentThread
-        if (handler.currentThread !== thread) thread.syncCaller = handler.currentThread
+        val existing = StackSwitching.currentHandler()
+        val caller = existing?.currentThread
+        val handler = existing ?: StackSwitching.installHostHandler(thread)
+        syncCalls.get() += SyncCallFrame(caller, thread)
+        if (caller != null) thread.syncCaller = caller
         handler.currentThread = thread
         store.onSwitch(thread)
         if (!task.enterImplicitThread(thread)) trap("The call was cancelled before it started")
         task.state = Task.State.STARTED
     }
 
-    /** The callers of the synchronous guest-to-guest calls in progress on this JVM thread. */
-    private val syncCallers = ThreadLocal.withInitial { ArrayList<GuestThread>() }
+    private fun finishSyncCall(frame: SyncCallFrame, handler: Handler?) {
+        val thread = frame.callee
+        val task = thread.task
+        try {
+            task.releaseLenders()
+            task.state = Task.State.RESOLVED
+            if (task.implicitThread === thread && thread in task.threads) {
+                task.exitImplicitThread()
+            }
+        } finally {
+            thread.running = false
+            val caller = frame.caller
+            if (caller == null) {
+                // The host's own stack: nothing ran below the call.
+                StackSwitching.removeHostHandler()
+                store.onSwitch(null)
+            } else {
+                handler?.currentThread = caller
+                store.onSwitch(caller)
+            }
+        }
+    }
 
     private fun exitSyncCall() {
         val handler = StackSwitching.currentHandler() ?: throw IllegalStateException("exit-sync-call without enter-sync-call")
-        val thread = handler.currentThread
-        val task = thread.task
-        if (task.numBorrows > 0) trap("borrow handles still remain at the end of the call")
-        task.state = Task.State.RESOLVED
-        task.exitImplicitThread()
-        thread.running = false
-        val callers = syncCallers.get()
-        val caller = callers.removeAt(callers.size - 1)
-        if (caller === thread) {
-            // The host's own stack: nothing ran below the call.
-            StackSwitching.removeHostHandler()
-            store.onSwitch(null)
-        } else {
-            handler.currentThread = caller
-            store.onSwitch(caller)
+        val frames = syncCalls.get()
+        if (frames.isEmpty()) throw IllegalStateException("exit-sync-call without enter-sync-call")
+        val frame = frames.removeAt(frames.size - 1)
+        try {
+            if (frame.callee.task.numBorrows > 0) trap("borrow handles still remain at the end of the call")
+        } finally {
+            finishSyncCall(frame, handler)
+        }
+    }
+
+    internal fun syncCallDepth(): Int = syncCalls.get().size
+
+    internal fun cleanupSyncCalls(baseDepth: Int) {
+        val frames = syncCalls.get()
+        while (frames.size > baseDepth) {
+            finishSyncCall(frames.removeAt(frames.size - 1), StackSwitching.currentHandler())
         }
     }
 
@@ -1098,11 +1128,15 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     private fun transferBorrow(handle: Int, srcTable: Int, dstTable: Int): Int {
         val h = c.table(srcTable).slotOrNull(handle) ?: trap("Unknown resource handle $handle")
+        val scope = currentThreadOrNull()?.task
+        if (h.own && scope != null) {
+            h.numLends++
+            scope.lenders.add(h)
+        }
         val dst = plan.resourceTables[dstTable]
         // Borrowing into the instance that defines the resource passes its representation.
         val definedIn = plan.initializers.filterIsInstance<Initializer.Resource>().firstOrNull { it.resource == dst?.resource }?.instance
         if (dst != null && !dst.imported && definedIn == dst.instance) return h.rep
-        val scope = currentThreadOrNull()?.task
         scope?.let { it.numBorrows++ }
         return c.table(dstTable).insert(h.rep, own = false, scope = scope)
     }
