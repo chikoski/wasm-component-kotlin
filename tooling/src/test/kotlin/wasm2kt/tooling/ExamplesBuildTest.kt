@@ -133,6 +133,279 @@ class ExamplesBuildTest {
         )
     }
 
+    @Test
+    fun `async-pipeline partial stream consumption and wasi-cli error exit and mount cases run on Chicory`(@TempDir tempDir: Path) {
+        val asyncBuilt = ComponentBuild.run(
+            component = fixtures.resolve("async-pipeline.wasm"),
+            componentName = "async-pipeline",
+            packageName = "com.example.asyncedge",
+            workDir = tempDir.resolve("async-build"),
+        )
+        val cliBuilt = ComponentBuild.run(
+            component = fixtures.resolve("wasi-cli.wasm"),
+            componentName = "wasi-cli",
+            packageName = "com.example.cliedge",
+            workDir = tempDir.resolve("cli-build"),
+            libraryClasspath = listOf(wasiLibraryEntry()),
+        )
+
+        val harness = tempDir.resolve("EdgeHarness.kt")
+        Files.writeString(
+            harness,
+            """
+            package harness
+
+            import com.example.asyncedge.AsyncPipelineComponent
+            import com.example.asyncedge.WitResult as AsyncWitResult
+            import com.example.asyncedge.example.async_pipeline.enricher.Enricher
+            import com.example.asyncedge.imports as asyncImports
+            import com.example.asyncedge.processItems
+            import com.example.asyncedge.produceNumbers
+            import com.example.asyncedge.sumStream
+            import com.example.asyncedge.withSessionBlocking as withAsyncSessionBlocking
+            import com.example.cliedge.WasiCliComponent
+            import com.example.cliedge.exports.wasi.cli.run.run as cliRun
+            import com.example.cliedge.openSession as openCliSession
+            import com.example.cliedge.withSessionBlocking as withCliSessionBlocking
+            import kotlinx.coroutines.async
+            import kotlinx.coroutines.flow.flowOf
+            import kotlinx.coroutines.flow.take
+            import kotlinx.coroutines.flow.toList
+            import kotlinx.coroutines.runBlocking
+            import wasm2kt.runtime.ComponentExitException
+            import wasm2kt.runtime.ComponentTrapException
+            import wasm2kt.runtime.WitResultException
+            import wasm2kt.runtime.WitResultValue
+            import wasm2kt.wasi.WasiExitException
+            import wasm2kt.wasi.runWasiCommand
+            import wasm2kt.wasi.wasi03Imports
+            import java.io.ByteArrayOutputStream
+            import java.nio.file.Files
+
+            fun main() {
+                // 0. WitResultValue runtime contract & Ok/Err behavior on generated WitResult
+                val okResult: WitResultValue<Int, String> = AsyncWitResult.Ok(42)
+                check(okResult.isOk && !okResult.isErr)
+                check(okResult.getOrNull() == 42 && okResult.errorOrNull() == null)
+                check(okResult.getOrThrow() == 42)
+                val errResult: WitResultValue<Int, String> = AsyncWitResult.Err("boom")
+                check(!errResult.isOk && errResult.isErr)
+                check(errResult.getOrNull() == null && errResult.errorOrNull() == "boom")
+                val errThrown = runCatching { errResult.getOrThrow() }.exceptionOrNull()
+                check(errThrown is WitResultException && errThrown.error == "boom") { "unexpected errThrown: ${'$'}errThrown" }
+
+                // 1. async-pipeline partial consumption: take(2) cancels output stream cleanly, countDeferred resolves to 2,
+                //    and subsequent calls on the same session still succeed.
+                val enricher = asyncImports(
+                    exampleAsyncPipelineEnricher = {
+                        object : Enricher {
+                            override suspend fun formatItem(id: UInt, payload: String): String =
+                                "#${'$'}id:${'$'}{payload.uppercase()}"
+                        }
+                    },
+                )
+                withAsyncSessionBlocking(AsyncPipelineComponent, enricher) {
+                    val (outFlow, countDeferred) = processItems(flowOf("one", "two", "three", "four"))
+                    val collectedJob = async { outFlow.take(2).toList() }
+                    val countJob = async { countDeferred.await() }
+                    val collected = collectedJob.await()
+                    val count = countJob.await()
+                    check(collected == listOf("#1:ONE", "#2:TWO")) { "partial stream mismatch: ${'$'}collected" }
+                    check(count == 2u) { "partial count mismatch: ${'$'}count" }
+
+                    check(produceNumbers(1u, 3u).toList() == listOf(1u, 2u, 3u)) { "same session produceNumbers failed" }
+                    check(sumStream(flowOf(5u, 10u, 15u)) == 30u) { "same session sumStream failed" }
+                }
+
+                // 2. wasi-cli missing arguments
+                val missingArgsErr = ByteArrayOutputStream()
+                val missingArgsCode = runWasiCommand {
+                    withCliSessionBlocking(
+                        WasiCliComponent,
+                        wasi03Imports {
+                            args("wasi-cli")
+                            stderr = missingArgsErr
+                        },
+                    ) { cliRun() }
+                }
+                check(missingArgsCode == 1) { "expected exit 1 for missing args, got ${'$'}missingArgsCode" }
+                check("usage:" in missingArgsErr.toString(Charsets.UTF_8)) {
+                    "unexpected missing-args stderr: ${'$'}{missingArgsErr.toString(Charsets.UTF_8)}"
+                }
+
+                // 3. wasi-cli missing input file
+                val emptyWork = Files.createTempDirectory("wasm2kt-cli-empty")
+                try {
+                    val missingInputErr = ByteArrayOutputStream()
+                    val missingInputCode = runWasiCommand {
+                        withCliSessionBlocking(
+                            WasiCliComponent,
+                            wasi03Imports {
+                                args("wasi-cli", "missing.txt", "out.txt")
+                                stderr = missingInputErr
+                                mounts { readWrite("/work", emptyWork) }
+                            },
+                        ) { cliRun() }
+                    }
+                    check(missingInputCode == 1) { "expected exit 1 for missing input, got ${'$'}missingInputCode" }
+                    check("failed to open" in missingInputErr.toString(Charsets.UTF_8)) {
+                        "unexpected missing-input stderr: ${'$'}{missingInputErr.toString(Charsets.UTF_8)}"
+                    }
+                } finally {
+                    emptyWork.toFile().deleteRecursively()
+                }
+
+                // 4. wasi-cli no preopened directory
+                val noMountErr = ByteArrayOutputStream()
+                val noMountCode = runWasiCommand {
+                    withCliSessionBlocking(
+                        WasiCliComponent,
+                        wasi03Imports {
+                            args("wasi-cli", "in.txt", "out.txt")
+                            stderr = noMountErr
+                        },
+                    ) { cliRun() }
+                }
+                check(noMountCode == 1) { "expected exit 1 for no mount, got ${'$'}noMountCode" }
+                check("no preopened directory" in noMountErr.toString(Charsets.UTF_8)) {
+                    "unexpected no-mount stderr: ${'$'}{noMountErr.toString(Charsets.UTF_8)}"
+                }
+
+                // 5. wasi-cli guest fixture `resolve_path` longest-prefix routing across `/`, `/work`, `/out`
+                val rootDir = Files.createTempDirectory("wasm2kt-cli-root")
+                val workDir = Files.createTempDirectory("wasm2kt-cli-work")
+                val outDir = Files.createTempDirectory("wasm2kt-cli-out")
+                try {
+                    Files.writeString(workDir.resolve("in.txt"), "alpha\nbeta\n")
+                    val multiOut = ByteArrayOutputStream()
+                    val multiCode = runWasiCommand {
+                        withCliSessionBlocking(
+                            WasiCliComponent,
+                            wasi03Imports {
+                                args("wasi-cli", "/work/in.txt", "/out/result.txt")
+                                env("TAG" to "multi")
+                                stdout = multiOut
+                                mounts {
+                                    readWrite("/", rootDir)
+                                    readWrite("/work", workDir)
+                                    readWrite("/out", outDir)
+                                }
+                            },
+                        ) { cliRun() }
+                    }
+                    check(multiCode == 0) { "expected exit 0 for multi-mount, got ${'$'}multiCode" }
+                    check(Files.exists(outDir.resolve("result.txt"))) { "result.txt missing in /out mount" }
+                    check(!Files.exists(rootDir.resolve("out"))) { "root mount should not receive /out/result.txt" }
+                    val written = Files.readString(outDir.resolve("result.txt"))
+                    check(written == "[multi] 1: alpha\n[multi] 2: beta\n") { "unexpected multi-mount output: ${'$'}written" }
+                    check("wrote 2 line(s) from /work/in.txt to /out/result.txt tag=multi" in multiOut.toString(Charsets.UTF_8)) {
+                        "unexpected multi-mount stdout: ${'$'}{multiOut.toString(Charsets.UTF_8)}"
+                    }
+
+                    // Prefix boundary check: `/work` must not match `/workshop/in.txt`
+                    val boundaryErr = ByteArrayOutputStream()
+                    val boundaryCode = runWasiCommand {
+                        withCliSessionBlocking(
+                            WasiCliComponent,
+                            wasi03Imports {
+                                args("wasi-cli", "/workshop/in.txt", "/out/result.txt")
+                                stderr = boundaryErr
+                                mounts {
+                                    readOnly("/work", workDir)
+                                    readWrite("/out", outDir)
+                                }
+                            },
+                        ) { cliRun() }
+                    }
+                    check(boundaryCode == 1) { "expected exit 1 on prefix boundary mismatch, got ${'$'}boundaryCode" }
+                    check("no preopened directory matches '/workshop/in.txt'" in boundaryErr.toString(Charsets.UTF_8)) {
+                        "unexpected prefix-boundary stderr: ${'$'}{boundaryErr.toString(Charsets.UTF_8)}"
+                    }
+
+                    // Trailing slash mounts: `/work/` and `/out/`
+                    val slashCode = runWasiCommand {
+                        withCliSessionBlocking(
+                            WasiCliComponent,
+                            wasi03Imports {
+                                args("wasi-cli", "/work/in.txt", "/out/slash.txt")
+                                env("TAG" to "slash")
+                                mounts {
+                                    readOnly("/work/", workDir)
+                                    readWrite("/out/", outDir)
+                                }
+                            },
+                        ) { cliRun() }
+                    }
+                    check(slashCode == 0) { "expected exit 0 for trailing-slash mounts, got ${'$'}slashCode" }
+                    check(Files.readString(outDir.resolve("slash.txt")) == "[slash] 1: alpha\n[slash] 2: beta\n")
+                } finally {
+                    rootDir.toFile().deleteRecursively()
+                    workDir.toFile().deleteRecursively()
+                    outDir.toFile().deleteRecursively()
+                }
+
+                // 6. wasi-cli `--exit 0`, `--exit 42`, and post-exit reuse diagnostics
+                val exit0Imports = wasi03Imports { args("wasi-cli", "--exit", "0") }
+                check(runWasiCommand { withCliSessionBlocking(WasiCliComponent, exit0Imports) { cliRun() } } == 0)
+                openCliSession(WasiCliComponent, exit0Imports).use { session ->
+                    context(session) {
+                        val first = runBlocking { runCatching { cliRun() }.exceptionOrNull() }
+                        check(first is ComponentExitException && first.statusCode == 0) { "expected ComponentExitException(0), got ${'$'}first" }
+                        check(first is WasiExitException && first.statusCode == 0) { "expected WasiExitException(0), got ${'$'}first" }
+                        val reuse = runBlocking { runCatching { cliRun() }.exceptionOrNull() }
+                        check(reuse is ComponentTrapException && reuse.message!!.contains("has already exited")) {
+                            "expected post-exit message, got ${'$'}reuse"
+                        }
+                        check(!reuse.message!!.contains("earlier trap")) { "unexpected trap wording: ${'$'}{reuse.message}" }
+                    }
+                }
+
+                val exit42Imports = wasi03Imports { args("wasi-cli", "--exit", "42") }
+                check(runWasiCommand { withCliSessionBlocking(WasiCliComponent, exit42Imports) { cliRun() } } == 42)
+
+                // 7. wasi-cli `--spawn-exit 19` from spawned guest task + post-exit reuse
+                val spawnExitImports = wasi03Imports { args("wasi-cli", "--spawn-exit", "19") }
+                check(runWasiCommand { withCliSessionBlocking(WasiCliComponent, spawnExitImports) { cliRun() } } == 19)
+                openCliSession(WasiCliComponent, spawnExitImports).use { session ->
+                    context(session) {
+                        val first = runBlocking { runCatching { cliRun() }.exceptionOrNull() }
+                        check(first is WasiExitException && first.statusCode == 19) { "expected WasiExitException(19), got ${'$'}first" }
+                        val reuse = runBlocking { runCatching { cliRun() }.exceptionOrNull() }
+                        check(reuse is ComponentTrapException && reuse.message!!.contains("has already exited")) {
+                            "expected post-exit message after spawn exit, got ${'$'}reuse"
+                        }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val classesDir = tempDir.resolve("edge-classes")
+        val sources = collectKotlinSources(asyncBuilt.kotlinDir) +
+            collectKotlinSources(cliBuilt.kotlinDir) +
+            listOf(harness)
+        compileSources(
+            sources = sources,
+            classpath = listOf(
+                System.getProperty("java.class.path"),
+                asyncBuilt.classesDir.toString(),
+                cliBuilt.classesDir.toString(),
+            ),
+            classesDir = classesDir,
+            label = "edge-cases",
+        )
+        invokeMain(
+            classpathDirs = listOf(
+                classesDir,
+                asyncBuilt.classesDir,
+                asyncBuilt.resourcesDir,
+                cliBuilt.classesDir,
+                cliBuilt.resourcesDir,
+            ),
+            mainClassName = "harness.EdgeHarnessKt",
+        )
+    }
+
     private fun runChicoryExample(
         tempDir: Path,
         dirName: String,

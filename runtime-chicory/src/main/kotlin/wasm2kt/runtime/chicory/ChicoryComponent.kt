@@ -23,6 +23,7 @@ import com.dylibso.chicory.wasm.types.MutabilityType
 import com.dylibso.chicory.wasm.types.Value
 import wasm2kt.runtime.ComponentBackend
 import wasm2kt.runtime.ComponentBackendFactory
+import wasm2kt.runtime.ComponentExitException
 import wasm2kt.runtime.ComponentTrapException
 import kotlinx.coroutines.flow.Flow
 import wasm2kt.runtime.AsyncHostFunction as WitAsyncHostFunction
@@ -128,8 +129,10 @@ internal class ChicoryComponentInstance(
     private var nextHostHandle = 1
     private var closed = false
 
-    /** Why the instance can no longer be used, once a trap happened. */
-    private var poisoned: String? = null
+    private class PoisonState(val message: String, val isExit: Boolean)
+
+    /** Why the instance can no longer be used, once a trap or exit happened. */
+    private var poisoned: PoisonState? = null
 
     /** A host call into the instance is in progress (the spec's `may_enter` is false). */
     private var entered = false
@@ -298,7 +301,13 @@ internal class ChicoryComponentInstance(
 
     internal fun checkUsable() {
         check(!closed) { "Component instance is already closed" }
-        poisoned?.let { throw ComponentTrapException("Component instance is unusable after an earlier trap ($it); open a new session") }
+        poisoned?.let { state ->
+            if (state.isExit) {
+                throw ComponentTrapException("Component instance has already exited (${state.message}); open a new session")
+            } else {
+                throw ComponentTrapException("Component instance is unusable after an earlier trap (${state.message}); open a new session")
+            }
+        }
     }
 
     /** Traps and poisons the instance. */
@@ -307,9 +316,9 @@ internal class ChicoryComponentInstance(
         throw ComponentTrapException(message)
     }
 
-    private fun markPoisoned(message: String) {
+    private fun markPoisoned(message: String, isExit: Boolean = false) {
         if (poisoned == null) {
-            poisoned = message
+            poisoned = PoisonState(message, isExit)
             // Guest threads still blocked can never run again.
             async.abandon()
         }
@@ -326,7 +335,7 @@ internal class ChicoryComponentInstance(
         throw e.cause!!
     } catch (e: Throwable) {
         val surfaced = asTrap(e)
-        markPoisoned(surfaced.message ?: surfaced.javaClass.name)
+        markPoisoned(surfaced.message ?: surfaced.javaClass.name, surfaced is ComponentExitException)
         throw surfaced
     }
 

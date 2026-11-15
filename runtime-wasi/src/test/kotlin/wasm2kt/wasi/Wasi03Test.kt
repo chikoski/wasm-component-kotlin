@@ -489,12 +489,12 @@ class Wasi03Test {
 
     @Test
     fun `runWasiCommand normalizes exit codes and propagates non-exit exceptions`() {
-        assertEquals(0, runWasiCommand { true })
-        assertEquals(1, runWasiCommand { false })
-        assertEquals(0, runWasiCommand { WasiExit().exit(WitResult.Ok(Unit)); true })
-        assertEquals(1, runWasiCommand { WasiExit().exit(WitResult.Err(Unit)); true })
-        assertEquals(7, runWasiCommand { WasiExit().exitWithCode(7u); true })
-        assertEquals(255, runWasiCommand { WasiExit().exitWithCode(255u); true })
+        assertEquals(0, runWasiCommand { WitResult.Ok(Unit) })
+        assertEquals(1, runWasiCommand { WitResult.Err(Unit) })
+        assertEquals(0, runWasiCommand { WasiExit().exit(WitResult.Ok(Unit)) })
+        assertEquals(1, runWasiCommand { WasiExit().exit(WitResult.Err(Unit)) })
+        assertEquals(7, runWasiCommand { WasiExit().exitWithCode(7u) })
+        assertEquals(255, runWasiCommand { WasiExit().exitWithCode(255u) })
         assertFailsWith<IllegalStateException> {
             runWasiCommand { error("unexpected host failure") }
         }

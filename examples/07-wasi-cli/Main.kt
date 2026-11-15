@@ -1,7 +1,6 @@
 package com.example.wasicli
 
 import com.example.wasicli.exports.wasi.cli.run.run
-import kotlinx.coroutines.runBlocking
 import wasm2kt.wasi.runWasiCommand
 import wasm2kt.wasi.wasi03Imports
 import java.io.ByteArrayOutputStream
@@ -29,8 +28,8 @@ fun main() {
         }
 
         val exitCode = runWasiCommand {
-            withSession(WasiCliComponent, wasiImports) {
-                runBlocking { run().isOk }
+            withSessionBlocking(WasiCliComponent, wasiImports) {
+                run()
             }
         }
 

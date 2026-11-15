@@ -195,4 +195,35 @@ class ComponentBuildTest {
         val result = loader.loadClass("harness.HarnessKt").getDeclaredMethod("run").invoke(null)
         assertEquals("scaled=42,tag=ERR#404,u64Max=true;counter=16", result)
     }
+
+    @Test
+    fun `regenerate-fixtures script lists all decomposed test components without drift`(@TempDir dir: Path) {
+        val repoRoot = fixtures.parent
+        val componentsDir = repoRoot.resolve("runtime-chicory/src/test/resources/components")
+        val regenerateScript = Files.readString(repoRoot.resolve("decomposer/regenerate-fixtures.sh"))
+
+        val discovered = componentsDir.listDirectoryEntries()
+            .filter { Files.isDirectory(it) }
+            .map { it.name }
+            .sorted()
+        val match = Regex("""for\s+name\s+in\s+([^;]+);""").find(regenerateScript)
+            ?: error("Missing component loop in decomposer/regenerate-fixtures.sh")
+        val listed = match.groupValues[1].trim().split(Regex("""\s+""")).sorted()
+        assertEquals(discovered, listed, "Every pre-decomposed test component directory must be listed in decomposer/regenerate-fixtures.sh")
+
+        for (name in listOf("async-pipeline", "wasi-03", "wasi-cli")) {
+            val out = dir.resolve(name)
+            Decomposer.decompose(fixtures.resolve("$name.wasm"), out)
+            val expectedDir = componentsDir.resolve(name)
+            val actualFiles = out.listDirectoryEntries().map { it.name }.sorted()
+            val expectedFiles = expectedDir.listDirectoryEntries().map { it.name }.sorted()
+            assertEquals(expectedFiles, actualFiles, "Decomposed file list drifted for $name")
+            for (fileName in expectedFiles) {
+                assertTrue(
+                    Files.readAllBytes(expectedDir.resolve(fileName)).contentEquals(Files.readAllBytes(out.resolve(fileName))),
+                    "$name/$fileName drifted from decomposed fixtures/$name.wasm",
+                )
+            }
+        }
+    }
 }

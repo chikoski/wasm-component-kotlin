@@ -1,12 +1,13 @@
 wit_bindgen::generate!({
-    world: "wasi-cli",
+    world: "example:wasi-cli/wasi-cli@0.1.0",
+    path: ["../../../runtime-wasi/wit", "wit"],
     generate_all,
 });
 
-use crate::wasi::cli::{environment, stderr, stdin, stdout};
+use crate::wasi::cli::{environment, exit, stderr, stdin, stdout};
 use crate::wasi::filesystem::{
     preopens,
-    types::{DescriptorFlags, OpenFlags, PathFlags},
+    types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags},
 };
 use wit_bindgen::spawn_local;
 
@@ -28,9 +29,81 @@ async fn write_stderr(text: String) {
     let _ = stderr::write_via_stream(rx).await;
 }
 
+fn resolve_path<'a>(
+    preopened: &'a [(Descriptor, String)],
+    raw: &'a str,
+) -> Option<(&'a Descriptor, &'a str)> {
+    if !raw.starts_with('/') {
+        return preopened.first().map(|(dir, _)| (dir, raw));
+    }
+    let mut best: Option<(usize, &'a Descriptor, &'a str)> = None;
+    for (dir, mount) in preopened {
+        let trimmed = mount.trim_end_matches('/');
+        if trimmed.is_empty() && mount.starts_with('/') {
+            let rel = raw.trim_start_matches('/');
+            if best.map_or(true, |(best_score, _, _)| 1 > best_score) {
+                best = Some((1, dir, rel));
+            }
+        } else if !trimmed.is_empty() {
+            let norm = trimmed.trim_start_matches('/');
+            if let Some(rest) = raw.trim_start_matches('/').strip_prefix(norm) {
+                if rest.is_empty() || rest.starts_with('/') {
+                    let rel = rest.trim_start_matches('/');
+                    let score = norm.len() + 1;
+                    if best.map_or(true, |(best_score, _, _)| score > best_score) {
+                        best = Some((score, dir, rel));
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(_, dir, rel)| (dir, rel))
+}
+
+async fn parse_exit_code(arg: Option<&String>, flag: &str) -> Result<u8, ()> {
+    let Some(raw) = arg else {
+        write_stderr(format!("usage: wasi-cli {flag} <0..255>\n")).await;
+        return Err(());
+    };
+    match raw.parse::<u8>() {
+        Ok(code) => Ok(code),
+        Err(_) => {
+            write_stderr(format!("error: invalid exit code '{raw}'\n")).await;
+            Err(())
+        }
+    }
+}
+
+fn trigger_exit(code: u8) {
+    if code == 0 {
+        exit::exit(Ok(()));
+    } else {
+        exit::exit_with_code(code);
+    }
+}
+
 impl exports::wasi::cli::run::Guest for Component {
     async fn run() -> Result<(), ()> {
         let args = environment::get_arguments();
+        match args.get(1).map(String::as_str) {
+            Some("--exit") => {
+                let code = parse_exit_code(args.get(2), "--exit").await?;
+                trigger_exit(code);
+                return Err(());
+            }
+            Some("--spawn-exit") => {
+                let code = parse_exit_code(args.get(2), "--spawn-exit").await?;
+                let (tx, mut rx) = wit_stream::new::<u8>();
+                spawn_local(async move {
+                    let _keep_tx = tx;
+                    trigger_exit(code);
+                });
+                let _ = rx.next().await;
+                return Err(());
+            }
+            _ => {}
+        }
+
         if args.len() < 3 {
             write_stderr("usage: wasi-cli <input-path> <output-path>\n".to_string()).await;
             return Err(());
@@ -50,15 +123,23 @@ impl exports::wasi::cli::run::Guest for Component {
         let footer = String::from_utf8_lossy(&stdin_bytes).trim().to_string();
 
         let preopened = preopens::get_directories();
-        let Some((root_dir, _mount)) = preopened.first() else {
+        if preopened.is_empty() {
             write_stderr("error: no preopened directory configured\n".to_string()).await;
+            return Err(());
+        }
+        let Some((in_root, in_rel)) = resolve_path(&preopened, input_path) else {
+            write_stderr(format!("error: no preopened directory matches '{input_path}'\n")).await;
+            return Err(());
+        };
+        let Some((out_root, out_rel)) = resolve_path(&preopened, output_path) else {
+            write_stderr(format!("error: no preopened directory matches '{output_path}'\n")).await;
             return Err(());
         };
 
-        let in_file = match root_dir
+        let in_file = match in_root
             .open_at(
                 PathFlags::empty(),
-                input_path.clone(),
+                in_rel.to_string(),
                 OpenFlags::empty(),
                 DescriptorFlags::READ,
             )
@@ -104,10 +185,10 @@ impl exports::wasi::cli::run::Guest for Component {
             rendered.push('\n');
         }
 
-        let out_file = match root_dir
+        let out_file = match out_root
             .open_at(
                 PathFlags::empty(),
-                output_path.clone(),
+                out_rel.to_string(),
                 OpenFlags::CREATE | OpenFlags::TRUNCATE,
                 DescriptorFlags::READ | DescriptorFlags::WRITE,
             )

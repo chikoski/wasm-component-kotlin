@@ -66,7 +66,7 @@ class WitToKotlinPoetConverterTest {
 
         // Verify WitSupport contains sealed interfaces WitOption, WitResult, Tuple2, and WasmtimeSession
         assertTrue(supportFile.contains("sealed interface WitOption<out T>"))
-        assertTrue(supportFile.contains("sealed interface WitResult<out T, out E>"))
+        assertTrue(supportFile.contains("sealed interface WitResult<out T, out E> : WitResultValue<T, E>"))
         assertTrue(supportFile.contains("data class Tuple2<out T0, out T1>"))
         assertTrue(supportFile.contains("interface WasmtimeSession : AutoCloseable"))
         assertTrue(supportFile.contains("class JniWasmtimeSession"))
@@ -74,6 +74,8 @@ class WitToKotlinPoetConverterTest {
 
         // The world object; the types of the `types` interface live in its own package
         assertTrue(worldFile.contains("class Session internal constructor("))
+        assertTrue(worldFile.contains("fun <R> withSessionBlocking("))
+        assertTrue(worldFile.contains("fun <R> withPrecompiledSessionBlocking("))
         assertTrue(typesFile.startsWith("package com.example.wasm.example.calc.types\n"))
         assertTrue(typesFile.contains("data class Point("))
         assertTrue(typesFile.contains("enum class Color"))

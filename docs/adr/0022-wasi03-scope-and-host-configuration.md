@@ -98,3 +98,39 @@ world が [ADR-0014](0014-interface-mappings.md) で外部ライブラリや `wi
 * `addWasiDependency` のプロジェクト単位適用と明示有効化
 
 `wasi:http` と `wasi:sockets` については P2 の Issue #117 と Issue #118 が完了するまで利用できません。`imports` の `base` オーバーロードを使う場合は、マップ済みインターフェースが `base` 側で無効化されていないかの検証がセッション開始時の `requireDefined` で行われます。
+
+## 追補として確定した関連設計
+
+2026-11-15 の設計と実装レビューに基づき、サンプル整備から派生した 5 つの周辺仕様も関連決定として確定しました。それぞれの課題番号は GitHub Issue #124、#125、#126、#127、#128 です。
+
+* `WitResultValue` の導入と `runWasiCommand` の契約統一
+* ブロッキング用セッションヘルパー `withSessionBlocking`
+* 終了例外 `ComponentExitException` の階層分離
+* ゲスト側フィクスチャのパス解決と部分消費の検証
+* フィクスチャと事前分解コンポーネントの単一ソース維持
+
+### `WitResultValue` の導入と `runWasiCommand` の契約統一
+
+生成される `WitResult` 型を `runtime-wasi` などの共通モジュールから横断的に扱えるよう、`runtime-api` に共通インタフェース `WitResultValue` を追加します。`WitToKotlinPoetConverter` は `WitResult` が `WitResultValue` を実装する形でコードを生成します。これに伴い `isOk`、`isErr`、`getOrNull`、`errorOrNull`、`getOrThrow` は拡張宣言ではなく `WitResult` のメンバー宣言へ統合します。既存のトップレベル拡張を直接インポートしていた箇所や事前コンパイル済みの呼び出し元は修正と再コンパイルが必要です。
+
+`runWasiCommand` は `Boolean` ではなく `WitResultValue` を返すラムダを受け取る単一の関数へ統一します。当初検討した `Boolean` オーバーロードとの併用案は採用しません。両方のオーバーロードを並べると、`WasiExit.exit` や `error` のように `Nothing` を返すラムダでオーバーロード解決の曖昧さや `Boolean` 側への推論の偏りが生じるためです。また、`wasi:cli/run` の戻り値型そのものを受け取る契約にする方が呼び出し側の `.isOk` 変換漏れを防げます。単一シグネチャであれば `Nothing` を返す終了処理も `WitResultValue` の部分型として曖昧さなくコンパイルできます。
+
+### ブロッキング用セッションヘルパー `withSessionBlocking`
+
+同期エントリーポイントで `runBlocking` と `withSession` の二重ネストを避けるため、ワールドごとに `withSessionBlocking` を追加生成します。Wasmtime 用セッション出力を有効にしている場合は、事前コンパイル済みイメージ向けの `withPrecompiledSessionBlocking` も生成します。
+
+これらのヘルパーは通常の非インライン関数として生成し、内部で `runBlocking` を呼び出します。そのため `withSession` とは異なり、ラムダ内から外側関数への非ローカル `return` は使えません。また、呼び出し元のスレッドをブロックするため、UI スレッドや既存のコルーチン内では使わず非ブロッキング版の `withSession` または `withPrecompiledSession` を選択する前提です。既存のコルーチン内でネストして呼び出すとスレッド枯渇やデッドロックの原因になります。
+
+### 終了例外 `ComponentExitException` の階層分離
+
+`wasi:cli/exit` による意図的な終了と一般の Wasm トラップを区別するため、`runtime-api` に `ComponentExitException` を追加します。後方互換性を保つため `ComponentExitException` は `ComponentTrapException` を継承します。`WasiExitException` はその `ComponentExitException` を継承する階層にします。
+
+Chicory ランタイムの `ChicoryComponentInstance` は停止状態の中で終了フラグを区別して保持します。これにより正常終了後にセッションを再利用した際は、トラップ後ではなく終了済みであることを示す診断メッセージを送出します。`runWasiCommand` は `ComponentExitException` を捕捉して終了コードへ変換します。一方、再利用時に発生する `ComponentTrapException` は捕捉せずそのまま伝播させます。なお、この例外型の保持は Chicory バックエンドとホスト直結呼び出しで保証します。一方、Wasmtime のネイティブブリッジはゲストのトラップやホスト失敗を `IllegalStateException` として報告します。将来 Wasmtime で終了コードを特別扱いする場合はブリッジ側のエラー分類の拡張が必要です。また、WASI 0.3 の非同期エクスポートの実行対象は ADR-0005 および ADR-0018 に従い Chicory のみです。
+
+### ゲスト側フィクスチャのパス解決と部分消費の検証
+
+`runtime-wasi` 本体の `wasi03Imports` はホスト設定の事前オープン一覧を `/` 始まりの仮想パスとともにゲストへそのまま返します。最長一致によるマウントディレクトリの選択ロジックは、ホスト側ではなくゲスト側の結合フィクスチャである `wasi-cli` の `resolve_path` 関数に実装します。ホストの `runtime-wasi` に暗黙のパス解決を持たせないことで、WASI 0.3 仕様どおりのシンプルなディレクトリ公開責務を保ちます。あわせて `--exit` と `--spawn-exit` の経路および複数ストリームの部分消費を E2E テストで継続検証します。
+
+### フィクスチャと事前分解コンポーネントの単一ソース維持
+
+`fixtures/src/wasi-03` と `fixtures/src/wasi-cli` が保持していた重複 `wit/deps` ディレクトリは削除します。代わって共有正本である `runtime-wasi/wit` を `wit_bindgen::generate!` から直接参照する構成へ統一します。あわせて `ComponentBuildTest` で `decomposer/regenerate-fixtures.sh` の対象一覧と事前分解済み成果物の全ファイルをバイト単位で比較します。これによりフィクスチャ更新漏れや生成バイナリの乖離をビルド時に検出できます。

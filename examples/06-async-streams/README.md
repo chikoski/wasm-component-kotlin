@@ -29,13 +29,14 @@ world async-pipeline {
 このプロジェクトに含まれる主要な機能は次のとおりです。
 
 - ホストの `suspend fun` インポート実装
+- `withSessionBlocking` によるブロッキング実行
 - `Flow` による双方向ストリームの送受信
 - `Deferred` による `future` 値の非同期待機
-- `coroutineScope` を用いたストリームと future の並行消費
+- `async` を用いたストリームと future の並行消費
 
 ホストの実装では、`Enricher.formatItem` が `suspend fun` として生成されます。サンプル内の [Main.kt](Main.kt) では `delay` を挟んで非同期処理を行い、結果を返却しています。
 
-コンポーネントが返す `stream` は `kotlinx.coroutines.flow.Flow` に、`future` は `kotlinx.coroutines.Deferred` に写像されます。`processItems` が返す `Pair` のうち、`Flow` をすべて収集するとゲスト側の書き込みが完了し、対となる `Deferred` も解決します。両者を `coroutineScope` 内の別々のコルーチンで並行に消費することで、デッドロックを避けて完了を待機できます。
+コンポーネントが返す `stream` は `kotlinx.coroutines.flow.Flow` に、`future` は `kotlinx.coroutines.Deferred` に写像されます。`withSessionBlocking` はセッションをコンテキストに置き、`CoroutineScope` をレシーバとしてブロックを実行します。`processItems` が返す `Pair` のうち、`Flow` をすべて収集するとゲスト側の書き込みが完了し、対となる `Deferred` も解決します。両者を `async` による別々のコルーチンで並行に消費することで、デッドロックを避けて完了を待機できます。
 
 ## 実行手順
 

@@ -23,7 +23,7 @@
 
 ホストコードでは `wasi03Imports` ビルダを使って CLI 環境を構築しています。`stdin` に文字列を直接渡せるオーバーロードを使用し、UTF-8 バイト列への変換を省略しています。`mounts` ブロック内では `readWrite` を指定し、一時作業ディレクトリをゲスト側の `/work` へ公開しています。
 
-セッション実行部は `runWasiCommand` ヘルパで囲んでいます。`run` が正常終了を返せば `0`、エラーを返せば `1` に変換されます。ゲストが `wasi:cli/exit` を呼び出して `WasiExitException` を送出した場合はその終了コードを取り出します。
+セッション実行部は `runWasiCommand` と `withSessionBlocking` を組み合わせて記述しています。`withSessionBlocking` がセッションとコルーチンスコープの中で `run` を実行し、`runWasiCommand` が戻り値の `WitResultValue` から終了コードを判定します。`run` が `Ok` を返せば `0`、`Err` を返せば `1` に変換されます。ゲストが `wasi:cli/exit` を呼び出して `WasiExitException` を送出した場合はその終了コードを取り出します。
 
 ## 実行手順
 
