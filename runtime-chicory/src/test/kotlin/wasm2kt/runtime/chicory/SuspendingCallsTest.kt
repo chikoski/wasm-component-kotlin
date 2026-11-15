@@ -1,6 +1,7 @@
 package wasm2kt.runtime.chicory
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.AsyncHostFunction
 import wasm2kt.runtime.ComponentBackend
+import wasm2kt.runtime.ComponentExitException
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.HostFunction
 import wasm2kt.runtime.WitHostImportDispatcher
@@ -149,6 +151,96 @@ class SuspendingCallsTest {
                 repeat(r.length()) { values += r.int() }
             }
             assertEquals((0 until 6).toList(), values)
+        }
+    }
+
+    @Test
+    fun `ComponentExitException distinguishes post-exit reuse from an earlier trap`(): Unit = runBlocking {
+        // Suspending host import exiting with status 0 (`launchHostImport` -> `importFailed`)
+        open("async-import", Imports { throw ComponentExitException(0, "exit 0") }).use { c ->
+            val exit = assertThrows<ComponentExitException> { runBlocking { c.call("fetch-plus-one", 1) } }
+            assertEquals(0, exit.statusCode)
+            val reuse = assertThrows<ComponentTrapException> { runBlocking { c.call("fetch-plus-one", 1) } }
+            assertTrue("has already exited" in reuse.message!!, reuse.message)
+            assertTrue("earlier trap" !in reuse.message!!, reuse.message)
+        }
+
+        // Suspending host import exiting with non-zero status via synchronous invocation
+        open("async-import", Imports { throw ComponentExitException(9, "exit 9") }).use { c ->
+            val exit = assertThrows<ComponentExitException> {
+                c.invoke(c.resolve("blocking-fetch"), WitWriter().apply { int(1) }.toReader())
+            }
+            assertEquals(9, exit.statusCode)
+            val reuse = assertThrows<ComponentTrapException> {
+                c.invoke(c.resolve("blocking-fetch"), WitWriter().apply { int(1) }.toReader())
+            }
+            assertTrue("has already exited" in reuse.message!!, reuse.message)
+        }
+
+        // Normal trap keeps "earlier trap" diagnostic and stays trap-poisoned even if an exit import throws later
+        var throwExit = false
+        val trapImports = Imports {
+            if (throwExit) throw ComponentExitException(1) else throw IllegalStateException("no network")
+        }
+        open("async-import", trapImports).use { c ->
+            val trap = assertThrows<ComponentTrapException> { runBlocking { c.call("fetch-plus-one", 1) } }
+            assertTrue(trap !is ComponentExitException)
+            throwExit = true
+            val reuse = assertThrows<ComponentTrapException> { runBlocking { c.call("fetch-plus-one", 1) } }
+            assertTrue("earlier trap" in reuse.message!!, reuse.message)
+            assertTrue("has already exited" !in reuse.message!!, reuse.message)
+        }
+    }
+
+    @Test
+    fun `a component returning both a stream and a future does not falsely deadlock between stream reads`(): Unit = runBlocking {
+        val enricher = object : WitHostImportDispatcher {
+            override fun hostFunction(key: String): HostFunction? = null
+
+            override fun asyncHostFunction(key: String): AsyncHostFunction? =
+                if (key == "example:async-pipeline/enricher@0.1.0#format-item") {
+                    AsyncHostFunction { a, r ->
+                        val id = a.int()
+                        val payload = a.string()
+                        r.string("#$id:${payload.uppercase()}")
+                    }
+                } else {
+                    null
+                }
+        }
+        open("async-pipeline", enricher).use { c ->
+            val items = flow {
+                for (value in listOf("one", "two", "three", "four")) {
+                    emit(WitStreamChunk(1, WitWriter().apply { string(value) }.toByteArray()))
+                    delay(1)
+                }
+            }
+            val stream = c.newStream(items)
+            val result = c.invokeSuspending(c.resolve("process-items"), WitWriter().apply { int(stream) }.toReader())
+            val outHandle = result.int()
+            val countHandle = result.int()
+
+            val futureJob = async(Dispatchers.Default) { c.readFutureSuspending(countHandle)!!.int() }
+            val readJob = async(Dispatchers.Default) {
+                val collected = mutableListOf<String>()
+                repeat(2) {
+                    val reader = c.readStreamSuspending(outHandle, 1)!!
+                    repeat(reader.length()) { collected += reader.string() }
+                    delay(10)
+                }
+                c.dropReadable(outHandle)
+                collected
+            }
+
+            assertEquals(listOf("#1:ONE", "#2:TWO"), readJob.await())
+            assertEquals(2, futureJob.await())
+
+            val sumInput = c.newStream(
+                flow {
+                    emit(WitStreamChunk(2, WitWriter().apply { int(5); int(10) }.toByteArray()))
+                },
+            )
+            assertEquals(15, c.invokeSuspending(c.resolve("sum-stream"), WitWriter().apply { int(sumInput) }.toReader()).int())
         }
     }
 }

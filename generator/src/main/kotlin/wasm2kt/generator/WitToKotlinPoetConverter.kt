@@ -505,6 +505,14 @@ class WitToKotlinPoetConverter(
             returnType = typeVarR,
             contextParameters = listOf(sessionClassName),
         )
+        val coroutineScopeClass = ClassName("kotlinx.coroutines", "CoroutineScope")
+        val runBlockingMember = MemberName("kotlinx.coroutines", "runBlocking")
+        val blockingContextLambdaType = LambdaTypeName.get(
+            receiver = coroutineScopeClass,
+            parameters = emptyList(),
+            returnType = typeVarR,
+            contextParameters = listOf(sessionClassName),
+        ).copy(suspending = true)
         for ((paramName, paramType) in listOf("wasmPath" to pathClass, "component" to backendFactoryClass, "wasmBytes" to byteArrayClass)) {
             worldObjBuilder.addFunction(
                 FunSpec.builder("withSession")
@@ -515,6 +523,26 @@ class WitToKotlinPoetConverter(
                     .addParameter("block", contextLambdaType)
                     .returns(typeVarR)
                     .addStatement("return openSession($paramName, imports).use { session -> context(session) { block() } }")
+                    .build(),
+            )
+            worldObjBuilder.addFunction(
+                FunSpec.builder("withSessionBlocking")
+                    .addKdoc(
+                        "Opens a session, runs [block] inside `runBlocking` with [Session] in context and " +
+                            "`CoroutineScope` as receiver, and closes the session.\n\n" +
+                            "Blocks the calling thread via `runBlocking` until [block] returns; do not call " +
+                            "from a UI/main thread (such as Android's main thread) or from inside an existing " +
+                            "coroutine (use `withSession` instead).\n",
+                    )
+                    .addTypeVariable(typeVarR)
+                    .addParameter(paramName, paramType)
+                    .addParameter(importsParam())
+                    .addParameter("block", blockingContextLambdaType)
+                    .returns(typeVarR)
+                    .addStatement(
+                        "return openSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
+                        runBlockingMember,
+                    )
                     .build(),
             )
         }
@@ -548,6 +576,25 @@ class WitToKotlinPoetConverter(
                         .addParameter("block", contextLambdaType)
                         .returns(typeVarR)
                         .addStatement("return openPrecompiledSession($paramName, imports).use { session -> context(session) { block() } }")
+                        .build(),
+                )
+                worldObjBuilder.addFunction(
+                    FunSpec.builder("withPrecompiledSessionBlocking")
+                        .addKdoc(
+                            PRECOMPILED_TRUST_KDOC +
+                                "\nBlocks the calling thread via `runBlocking` until [block] returns; do not call " +
+                                "from a UI/main thread or from inside an existing coroutine (use " +
+                                "`withPrecompiledSession` instead).\n",
+                        )
+                        .addTypeVariable(typeVarR)
+                        .addParameter(paramName, paramType)
+                        .addParameter(importsParam())
+                        .addParameter("block", blockingContextLambdaType)
+                        .returns(typeVarR)
+                        .addStatement(
+                            "return openPrecompiledSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
+                            runBlockingMember,
+                        )
                         .build(),
                 )
             }
@@ -1039,7 +1086,10 @@ class WitToKotlinPoetConverter(
             "Session", "Imports", "WitSession", "WitExports", "WitOption", "WitResult", "CodePoint", "WasmtimeSession",
             "FfmWasmtimeSession", "JniWasmtimeSession", "InMemoryWasmtimeSession", "BackendWasmtimeSession", "HostResourceBoundSession",
         )
-        val reservedFunctions = setOf("imports", "openSession", "withSession", "openPrecompiledSession", "withPrecompiledSession")
+        val reservedFunctions = setOf(
+            "imports", "openSession", "withSession", "withSessionBlocking",
+            "openPrecompiledSession", "withPrecompiledSession", "withPrecompiledSessionBlocking",
+        )
         val clashes = mutableListOf<String>()
         resolve.types.forEachIndexed { idx, def ->
             val name = def.name ?: return@forEachIndexed
@@ -2351,7 +2401,6 @@ class WitToKotlinPoetConverter(
         // 2. WitResult<out T, out E> and its helpers
         fileBuilder.addType(buildWitResultTypeSpec())
         buildWitResultHelpers().forEach { fileBuilder.addFunction(it) }
-        buildWitResultProperties().forEach { fileBuilder.addProperty(it) }
 
         // 2b. CodePoint (WIT char)
         fileBuilder.addType(buildCodePointTypeSpec())
@@ -2547,6 +2596,8 @@ class WitToKotlinPoetConverter(
 
     private fun buildWitResultTypeSpec(): TypeSpec {
         val witResultClass = ClassName(targetPackage, "WitResult")
+        val witResultValueClass = ClassName("wasm2kt.runtime", "WitResultValue")
+        val exception = ClassName("wasm2kt.runtime", "WitResultException")
         val typeT = TypeVariableName("T", KModifier.OUT)
         val typeE = TypeVariableName("E", KModifier.OUT)
         val typeTInvariant = TypeVariableName("T")
@@ -2584,17 +2635,54 @@ class WitToKotlinPoetConverter(
             )
             .build()
 
-
         return TypeSpec.interfaceBuilder("WitResult")
             .addModifiers(KModifier.SEALED)
             .addTypeVariable(typeT)
             .addTypeVariable(typeE)
+            .addSuperinterface(witResultValueClass.parameterizedBy(typeTInvariant, typeEInvariant))
+            .addProperty(
+                PropertySpec.builder("isOk", BOOLEAN, KModifier.OVERRIDE)
+                    .getter(FunSpec.getterBuilder().addStatement("return this is Ok<*>").build())
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("isErr", BOOLEAN, KModifier.OVERRIDE)
+                    .getter(FunSpec.getterBuilder().addStatement("return this is Err<*>").build())
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("getOrNull")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addKdoc("The `ok` value, or `null` for `err`.\n")
+                    .returns(typeTInvariant.copy(nullable = true))
+                    .addStatement("return (this as? Ok)?.value")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("errorOrNull")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addKdoc("The `err` value, or `null` for `ok`.\n")
+                    .returns(typeEInvariant.copy(nullable = true))
+                    .addStatement("return (this as? Err)?.error")
+                    .build(),
+            )
+            .addFunction(
+                FunSpec.builder("getOrThrow")
+                    .addModifiers(KModifier.OVERRIDE)
+                    .addKdoc("The `ok` value; throws [%T] carrying the `err` value otherwise.\n", exception)
+                    .returns(typeTInvariant)
+                    .beginControlFlow("return when (this)")
+                    .addStatement("is Ok -> value")
+                    .addStatement("is Err -> throw %T(error)", exception)
+                    .endControlFlow()
+                    .build(),
+            )
             .addType(okClass)
             .addType(errClass)
             .build()
     }
 
-    /** `kotlin.Result`-style helpers that keep the WIT error type (ADR-0006). */
+    /** `kotlin.Result`-style inline helpers that keep the WIT error type (ADR-0006). */
     private fun buildWitResultHelpers(): List<FunSpec> {
         val result = ClassName(targetPackage, "WitResult")
         val t = TypeVariableName("T")
@@ -2602,23 +2690,10 @@ class WitToKotlinPoetConverter(
         val f = TypeVariableName("F")
         val rv = TypeVariableName("R")
         val receiver = result.parameterizedBy(t, e)
-        val exception = ClassName("wasm2kt.runtime", "WitResultException")
         fun fn(name: String, vararg vars: TypeVariableName) =
             FunSpec.builder(name).receiver(receiver).addTypeVariables(listOf(t, e) + vars)
         fun lambda(param: TypeName, ret: TypeName) = LambdaTypeName.get(parameters = listOf(ParameterSpec.unnamed(param)), returnType = ret)
         return listOf(
-            fn("getOrNull").returns(t.copy(nullable = true))
-                .addKdoc("The `ok` value, or `null` for `err`.\n")
-                .addStatement("return (this as? %T.Ok)?.value", result).build(),
-            fn("errorOrNull").returns(e.copy(nullable = true))
-                .addKdoc("The `err` value, or `null` for `ok`.\n")
-                .addStatement("return (this as? %T.Err)?.error", result).build(),
-            fn("getOrThrow").returns(t)
-                .addKdoc("The `ok` value; throws [%T] carrying the `err` value otherwise.\n", exception)
-                .beginControlFlow("return when (this)")
-                .addStatement("is %T.Ok -> value", result)
-                .addStatement("is %T.Err -> throw %T(error)", result, exception)
-                .endControlFlow().build(),
             fn("getOrElse").addModifiers(KModifier.INLINE).returns(t)
                 .addParameter("onErr", lambda(e, t))
                 .beginControlFlow("return when (this)")
@@ -2644,16 +2719,6 @@ class WitToKotlinPoetConverter(
                 .addStatement("is %T.Ok -> onOk(value)", result)
                 .addStatement("is %T.Err -> onErr(error)", result)
                 .endControlFlow().build(),
-        )
-    }
-
-    private fun buildWitResultProperties(): List<PropertySpec> {
-        val star = ClassName(targetPackage, "WitResult").parameterizedBy(STAR, STAR)
-        return listOf(
-            PropertySpec.builder("isOk", BOOLEAN).receiver(star)
-                .getter(FunSpec.getterBuilder().addStatement("return this is %T.Ok", ClassName(targetPackage, "WitResult")).build()).build(),
-            PropertySpec.builder("isErr", BOOLEAN).receiver(star)
-                .getter(FunSpec.getterBuilder().addStatement("return this is %T.Err", ClassName(targetPackage, "WitResult")).build()).build(),
         )
     }
 

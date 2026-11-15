@@ -1,0 +1,135 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        }
+      },
+      "exports": {
+        "produce-numbers": {
+          "function": {
+            "name": "produce-numbers",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "start",
+                "type": "u32"
+              },
+              {
+                "name": "count",
+                "type": "u32"
+              }
+            ],
+            "result": 0
+          }
+        },
+        "process-items": {
+          "function": {
+            "name": "process-items",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "items",
+                "type": 1
+              }
+            ],
+            "result": 3
+          }
+        },
+        "sum-stream": {
+          "function": {
+            "name": "sum-stream",
+            "kind": "async-freestanding",
+            "params": [
+              {
+                "name": "values",
+                "type": 0
+              }
+            ],
+            "result": "u32"
+          }
+        }
+      },
+      "package": 1
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "enricher",
+      "types": {},
+      "functions": {
+        "format-item": {
+          "name": "format-item",
+          "kind": "async-freestanding",
+          "params": [
+            {
+              "name": "id",
+              "type": "u32"
+            },
+            {
+              "name": "payload",
+              "type": "string"
+            }
+          ],
+          "result": "string"
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "stream": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": "u32"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            1,
+            2
+          ]
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "example:async-pipeline@0.1.0",
+      "interfaces": {
+        "enricher": 0
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

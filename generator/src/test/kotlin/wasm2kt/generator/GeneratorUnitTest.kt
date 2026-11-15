@@ -5,6 +5,7 @@ import wasm2kt.ast.WitResolve
 import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -229,5 +230,56 @@ class GeneratorUnitTest {
             .content
         assertTrue("baseImports_: ImportsFactory" in doubleCollisionWorld, doubleCollisionWorld)
         assertTrue("Linker().addAll(baseImports_.newLinker()).addAll(__overrides, overwrite = true)" in doubleCollisionWorld, doubleCollisionWorld)
+    }
+
+    @Test
+    fun `WitResult implements WitResultValue and moves core helpers onto the interface`() {
+        val support = generate("types").getValue("WitSupport")
+        assertTrue("sealed interface WitResult<out T, out E> : WitResultValue<T, E>" in support, support)
+        assertTrue("override val isOk: Boolean" in support, support)
+        assertTrue("override val isErr: Boolean" in support, support)
+        assertTrue("override fun getOrNull(): T?" in support, support)
+        assertTrue("override fun errorOrNull(): E?" in support, support)
+        assertTrue("override fun getOrThrow(): T" in support, support)
+        assertFalse("val WitResult<*, *>.isOk: Boolean" in support, support)
+        assertFalse("fun <T, E> WitResult<T, E>.getOrNull(): T?" in support, support)
+        assertTrue("fun <T, E, R> WitResult<T, E>.fold(" in support, support)
+    }
+
+    @Test
+    fun `withSessionBlocking overloads are generated and reserved as a world export name`() {
+        val world = generate("calculator").getValue("CalculatorWorld")
+        assertTrue(Regex("""fun <R> withSessionBlocking\(\s*wasmPath: Path,""").containsMatchIn(world), world)
+        assertTrue(Regex("""fun <R> withSessionBlocking\(\s*component: ComponentBackendFactory,""").containsMatchIn(world), world)
+        assertTrue(Regex("""fun <R> withSessionBlocking\(\s*wasmBytes: ByteArray,""").containsMatchIn(world), world)
+        assertTrue("runBlocking { context(session) { block() } }" in world, world)
+        assertTrue(Regex("""fun <R> withPrecompiledSessionBlocking\(\s*cwasmPath: Path,""").containsMatchIn(world), world)
+        assertTrue(Regex("""fun <R> withPrecompiledSessionBlocking\(\s*cwasmBytes: ByteArray,""").containsMatchIn(world), world)
+
+        val chicoryOnlyWorld = generate("calculator", emitWasmtimeSessions = false).getValue("CalculatorWorld")
+        assertFalse("withPrecompiledSessionBlocking" in chicoryOnlyWorld, chicoryOnlyWorld)
+        assertTrue("withSessionBlocking" in chicoryOnlyWorld, chicoryOnlyWorld)
+
+        for (reservedName in listOf("with-session-blocking", "with-precompiled-session-blocking")) {
+            val collidingWit = WitResolve(
+                worlds = listOf(
+                    wasm2kt.ast.WitWorld(
+                        name = "app",
+                        exports = mapOf(
+                            reservedName to wasm2kt.ast.WitWorldItem.FunctionItem(
+                                wasm2kt.ast.WitFunction(
+                                    name = reservedName,
+                                    kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            val err = assertFailsWith<IllegalArgumentException> {
+                WitToKotlinPoetConverter(collidingWit, "com.example.app").generate()
+            }
+            assertTrue(reservedName in err.message.orEmpty(), err.message)
+        }
     }
 }

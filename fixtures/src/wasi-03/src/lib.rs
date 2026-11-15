@@ -1,5 +1,6 @@
 wit_bindgen::generate!({
-    world: "wasi-app",
+    world: "example:wasi-app/wasi-app",
+    path: ["../../../runtime-wasi/wit", "wit"],
     generate_all,
 });
 

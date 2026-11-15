@@ -6,6 +6,10 @@
 
 ### 破壊的変更 (Breaking Changes)
 
+* `WitResult` の共通契約化と `runWasiCommand` の契約統一
+
+[#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) により、生成される `WitResult` インタフェースは `wasm2kt.runtime.WitResultValue` を実装する形へ変更しました。これに伴い `isOk`、`isErr`、`getOrNull`、`errorOrNull`、`getOrThrow` はパッケージトップレベルの拡張宣言からメンバー宣言へ移動しています。通常のメンバー呼び出し構文はそのまま記述できます。ただし、この変更にはバイナリ互換性がありません。バインディングを再生成してください。あわせて既存の呼び出し側コードも再コンパイルが必要です。パッケージ直下の拡張宣言を明示的に `import` していた箇所は削除してください。また、`runWasiCommand` は `Boolean` ではなく `WitResultValue` を返すラムダを受け取る単一の署名へ統一しました。
+
 * **Component Model の async に対応し、`plan.json` を v5 へ更新** ([#16](https://github.com/chikoski/wasm-component-kotlin/issues/16), [ADR-0018](docs/adr/0018-async-abi-on-chicory.md))
   * Chicory バックエンドで、async lift（callback 形式と stackful 形式）、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しを実行できるようにしました
   * 生成コードでは、export の `async func` を `suspend fun`、`future<T>` を `Deferred<T>`、`stream<T>` を `Flow<T>`（`stream<u8>` は `Flow<ByteArray>`）にしました（ADR-0006）。これらを使う world の生成コードは `kotlinx-coroutines-core` に依存します
@@ -37,9 +41,9 @@
 
 ### 主な追加・改善
 
-* WASI 0.3 ホスト設定 API、Gradle 連携、および結合フィクスチャの追加 [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) [#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) [#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) [#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) [#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) [ADR-0020](docs/adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) [ADR-0022](docs/adr/0022-wasi03-scope-and-host-configuration.md)
+* WASI 0.3 ホスト設定 API、Gradle 連携、および結合フィクスチャの追加 [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) [#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) [#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) [#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) [#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) [#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) [#125](https://github.com/chikoski/wasm-component-kotlin/issues/125) [#126](https://github.com/chikoski/wasm-component-kotlin/issues/126) [#127](https://github.com/chikoski/wasm-component-kotlin/issues/127) [#128](https://github.com/chikoski/wasm-component-kotlin/issues/128) [ADR-0020](docs/adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) [ADR-0022](docs/adr/0022-wasi03-scope-and-host-configuration.md)
 
-`runtime-wasi` に `wasi03Imports`、パッケージ群ごとの有効化フラグ、セッション単位の入出力ストリームプロバイダを追加しました。`runtime-api` には `Linker.addAll` と `ImportsFactory.plus` を導入し、マッピング済み interface を含む生成ワールドには `imports` の `base` オーバーロードを生成するようにしました。Gradle プラグインには `addWasiDependency` プロパティを追加し、`wasi-03` フィクスチャと機能テストを含む結合テストを整備しています。`wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117)、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) の P2 課題へ分離しました。
+`runtime-wasi` に `wasi03Imports`、パッケージ群ごとの有効化フラグ、セッション単位の入出力ストリームプロバイダ、文字列ベースの `stdin` オーバーロード、`runWasiCommand` を追加しました。`runtime-api` には `WitResultValue`、`ComponentExitException`、`Linker.addAll`、`ImportsFactory.plus` を導入しました。生成コードには `withSessionBlocking` とマッピング済み interface 向けの `imports` `base` オーバーロードを追加しています。`ComponentBuild.run` もライブラリ参照によるマッピング指定を受け付けます。Gradle プラグインには `addWasiDependency` プロパティを追加しました。結合テストに加えて非同期ストリームの `examples/06-async-streams` と WASI 0.3 CLI の `examples/07-wasi-cli` も整備しています。あわせて Chicory での終了後再利用診断を改善しました。また、`wasi-cli` ゲストフィクスチャのパス解決検証や終了系 E2E テストの拡充も行いました。さらに共有 WIT 定義を統合し、事前分解コンポーネントのドリフト検証を追加しています。`wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) へ、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) の P2 課題へ分離しました。
 
 * **Wasmtime の型付きブリッジ (`wasm2kt bridge`) とクラスパスからの読み込み** ([#64](https://github.com/chikoski/wasm-component-kotlin/pull/64), [#67](https://github.com/chikoski/wasm-component-kotlin/pull/67), [ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md))
 * **既存のパッケージへの interface 対応付け（`with` / `--interfaces-only` / マニフェスト自動検出）** ([#55](https://github.com/chikoski/wasm-component-kotlin/pull/55), [#54](https://github.com/chikoski/wasm-component-kotlin/issues/54), [ADR-0014](docs/adr/0014-interface-mappings.md))

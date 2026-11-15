@@ -305,7 +305,15 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 pendingCalls.removeAll { it.cancelled }
                 if (pendingCalls.isEmpty() && hostReads.isEmpty()) return
             }
-            if ((pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) && hostWork == 0 && !loop.hasQueued()) {
+            // Readable ends whose peer writer is actively COPYING still await host reads or drop
+            // between `witStream` chunk calls; exclude ends already tracked in `hostReads` so an
+            // active read cannot mask itself when `hostReads` is non-empty. Trade-off: if the host
+            // leaks an unread returned end while awaiting a dependent call, the wait remains
+            // suspended until cancelled or closed rather than trapping immediately as a deadlock.
+            val hostCanRead = hostObjects.values.any {
+                it is End && it.isReadable && it.other?.state == End.EndState.COPYING && hostReads.none { r -> r.end === it }
+            }
+            if ((pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) && hostWork == 0 && !loop.hasQueued() && !hostCanRead) {
                 val waiting = pendingCalls.joinToString { "'${it.name}'" }.ifEmpty { "a stream or future the host reads" }
                 c.poison("deadlock detected: $waiting cannot finish because every task is waiting")
             }

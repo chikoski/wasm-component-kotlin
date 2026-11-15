@@ -1,0 +1,840 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        },
+        "interface-2": {
+          "interface": {
+            "id": 2
+          }
+        },
+        "interface-3": {
+          "interface": {
+            "id": 3
+          }
+        },
+        "interface-4": {
+          "interface": {
+            "id": 4
+          }
+        },
+        "interface-5": {
+          "interface": {
+            "id": 5
+          }
+        },
+        "interface-6": {
+          "interface": {
+            "id": 6
+          }
+        },
+        "interface-7": {
+          "interface": {
+            "id": 7
+          }
+        }
+      },
+      "exports": {
+        "interface-8": {
+          "interface": {
+            "id": 8
+          }
+        }
+      },
+      "package": 2
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "environment",
+      "types": {},
+      "functions": {
+        "get-environment": {
+          "name": "get-environment",
+          "kind": "freestanding",
+          "params": [],
+          "result": 1
+        },
+        "get-arguments": {
+          "name": "get-arguments",
+          "kind": "freestanding",
+          "params": [],
+          "result": 2
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "exit",
+      "types": {},
+      "functions": {
+        "exit": {
+          "name": "exit",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "status",
+              "type": 3
+            }
+          ]
+        },
+        "exit-with-code": {
+          "name": "exit-with-code",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "status-code",
+              "type": "u8"
+            }
+          ]
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "error-code": 4
+      },
+      "functions": {},
+      "package": 0
+    },
+    {
+      "name": "stdin",
+      "types": {
+        "error-code": 5
+      },
+      "functions": {
+        "read-via-stream": {
+          "name": "read-via-stream",
+          "kind": "freestanding",
+          "params": [],
+          "result": 9
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "stdout",
+      "types": {
+        "error-code": 10
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 11
+            }
+          ],
+          "result": 13
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "stderr",
+      "types": {
+        "error-code": 14
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 15
+            }
+          ],
+          "result": 17
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "descriptor": 18,
+        "path-flags": 19,
+        "open-flags": 20,
+        "descriptor-flags": 21,
+        "error-code": 23,
+        "filesize": 24
+      },
+      "functions": {
+        "[method]descriptor.read-via-stream": {
+          "name": "[method]descriptor.read-via-stream",
+          "kind": {
+            "method": 18
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 25
+            },
+            {
+              "name": "offset",
+              "type": 24
+            }
+          ],
+          "result": 29
+        },
+        "[method]descriptor.write-via-stream": {
+          "name": "[method]descriptor.write-via-stream",
+          "kind": {
+            "method": 18
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 25
+            },
+            {
+              "name": "data",
+              "type": 26
+            },
+            {
+              "name": "offset",
+              "type": 24
+            }
+          ],
+          "result": 28
+        },
+        "[method]descriptor.open-at": {
+          "name": "[method]descriptor.open-at",
+          "kind": {
+            "async-method": 18
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 25
+            },
+            {
+              "name": "path-flags",
+              "type": 19
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "open-flags",
+              "type": 20
+            },
+            {
+              "name": "flags",
+              "type": 21
+            }
+          ],
+          "result": 31
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "preopens",
+      "types": {
+        "descriptor": 32
+      },
+      "functions": {
+        "get-directories": {
+          "name": "get-directories",
+          "kind": "freestanding",
+          "params": [],
+          "result": 35
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "run",
+      "types": {},
+      "functions": {
+        "run": {
+          "name": "run",
+          "kind": "async-freestanding",
+          "params": [],
+          "result": 36
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            "string",
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 0
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "io"
+            },
+            {
+              "name": "illegal-byte-sequence"
+            },
+            {
+              "name": "pipe"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 2
+      }
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "interface": 3
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 5
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 7
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            6,
+            8
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "interface": 4
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 10
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 12
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 4
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 14
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 16
+      },
+      "owner": null
+    },
+    {
+      "name": "descriptor",
+      "kind": "resource",
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": "path-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "symlink-follow"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": "open-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "create"
+            },
+            {
+              "name": "directory"
+            },
+            {
+              "name": "exclusive"
+            },
+            {
+              "name": "truncate"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": "descriptor-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "read"
+            },
+            {
+              "name": "write"
+            },
+            {
+              "name": "file-integrity-sync"
+            },
+            {
+              "name": "data-integrity-sync"
+            },
+            {
+              "name": "requested-write-sync"
+            },
+            {
+              "name": "mutate-directory"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "access",
+              "type": null
+            },
+            {
+              "name": "already",
+              "type": null
+            },
+            {
+              "name": "bad-descriptor",
+              "type": null
+            },
+            {
+              "name": "busy",
+              "type": null
+            },
+            {
+              "name": "deadlock",
+              "type": null
+            },
+            {
+              "name": "quota",
+              "type": null
+            },
+            {
+              "name": "exist",
+              "type": null
+            },
+            {
+              "name": "file-too-large",
+              "type": null
+            },
+            {
+              "name": "illegal-byte-sequence",
+              "type": null
+            },
+            {
+              "name": "in-progress",
+              "type": null
+            },
+            {
+              "name": "interrupted",
+              "type": null
+            },
+            {
+              "name": "invalid",
+              "type": null
+            },
+            {
+              "name": "io",
+              "type": null
+            },
+            {
+              "name": "is-directory",
+              "type": null
+            },
+            {
+              "name": "loop",
+              "type": null
+            },
+            {
+              "name": "too-many-links",
+              "type": null
+            },
+            {
+              "name": "message-size",
+              "type": null
+            },
+            {
+              "name": "name-too-long",
+              "type": null
+            },
+            {
+              "name": "no-device",
+              "type": null
+            },
+            {
+              "name": "no-entry",
+              "type": null
+            },
+            {
+              "name": "no-lock",
+              "type": null
+            },
+            {
+              "name": "insufficient-memory",
+              "type": null
+            },
+            {
+              "name": "insufficient-space",
+              "type": null
+            },
+            {
+              "name": "not-directory",
+              "type": null
+            },
+            {
+              "name": "not-empty",
+              "type": null
+            },
+            {
+              "name": "not-recoverable",
+              "type": null
+            },
+            {
+              "name": "unsupported",
+              "type": null
+            },
+            {
+              "name": "no-tty",
+              "type": null
+            },
+            {
+              "name": "no-such-device",
+              "type": null
+            },
+            {
+              "name": "overflow",
+              "type": null
+            },
+            {
+              "name": "not-permitted",
+              "type": null
+            },
+            {
+              "name": "pipe",
+              "type": null
+            },
+            {
+              "name": "read-only",
+              "type": null
+            },
+            {
+              "name": "invalid-seek",
+              "type": null
+            },
+            {
+              "name": "text-file-busy",
+              "type": null
+            },
+            {
+              "name": "cross-device",
+              "type": null
+            },
+            {
+              "name": "other",
+              "type": 22
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": "filesize",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 18
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 23
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 27
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            26,
+            28
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 18
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 30,
+          "err": 23
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "descriptor",
+      "kind": {
+        "type": 18
+      },
+      "owner": {
+        "interface": 7
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 32
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            33,
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 34
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "wasi:cli@0.3.0",
+      "interfaces": {
+        "environment": 0,
+        "exit": 1,
+        "types": 2,
+        "stdin": 3,
+        "stdout": 4,
+        "stderr": 5,
+        "run": 8
+      },
+      "worlds": {}
+    },
+    {
+      "name": "wasi:filesystem@0.3.0",
+      "interfaces": {
+        "types": 6,
+        "preopens": 7
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

@@ -9,9 +9,11 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import wasm2kt.runtime.ComponentExitException
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.ImportsFactory
 import wasm2kt.runtime.Linker
+import wasm2kt.runtime.WitResultValue
 import wasm2kt.wasi.wasi.cli.environment.Environment
 import wasm2kt.wasi.wasi.cli.environment.add
 import wasm2kt.wasi.wasi.cli.exit.Exit
@@ -49,9 +51,9 @@ import java.time.ZoneId
 
 /**
  * Thrown when a component invokes `wasi:cli/exit.exit` or `wasi:cli/exit.exit-with-code`.
- * Extends [ComponentTrapException] so the runtime terminates the call and surfaces [statusCode].
+ * Extends [ComponentExitException] so the runtime terminates the call and surfaces [statusCode].
  */
-class WasiExitException(val statusCode: Int) : ComponentTrapException("WASI exit with status code $statusCode")
+class WasiExitException(statusCode: Int) : ComponentExitException(statusCode, "WASI exit with status code $statusCode")
 
 /** Host implementation of `wasi:cli/environment@0.3.0`. */
 class WasiEnvironment(
@@ -281,6 +283,10 @@ class Wasi03 private constructor(
             stdin = { ByteArrayInputStream(bytes) }
         }
 
+        fun stdin(text: String) {
+            stdin(text.encodeToByteArray())
+        }
+
         fun stdin(provider: () -> InputStream) {
             stdin = provider
         }
@@ -401,3 +407,21 @@ fun Linker.addWasi03(configure: Wasi03.Builder.() -> Unit = {}): Linker =
  */
 fun wasi03Imports(configure: Wasi03.Builder.() -> Unit = {}): ImportsFactory =
     ImportsFactory { Linker().addWasi03(configure) }
+
+/**
+ * Executes a WASI CLI entrypoint returning a WIT result (such as `{ run() }`) and converts both
+ * normal completion (`Ok` -> `0`, `Err` -> `1`) and [ComponentExitException] (such as
+ * [WasiExitException]) into an integer status code.
+ *
+ * Because guest `wasi:cli/exit` terminates the component instance (even for status `0`), wrap
+ * `withSession(...)` or `withSessionBlocking(...)` inside [block] rather than reusing a session
+ * after calling `exit`. Other exceptions propagate unchanged. Preserving [ComponentExitException]
+ * across guest calls requires the Chicory backend; the Wasmtime native bridge currently reports
+ * traps and host callback failures as [IllegalStateException].
+ */
+inline fun runWasiCommand(block: () -> WitResultValue<*, *>): Int =
+    try {
+        if (block().isOk) 0 else 1
+    } catch (e: ComponentExitException) {
+        e.statusCode
+    }

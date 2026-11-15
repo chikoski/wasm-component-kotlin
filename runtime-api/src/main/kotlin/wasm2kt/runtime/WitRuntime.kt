@@ -32,6 +32,27 @@ interface WitHostImportDispatcher {
     fun asyncHostFunction(key: String): AsyncHostFunction? = null
 }
 
+/**
+ * Shared contract implemented by every generated `WitResult` interface so modules such as
+ * `runtime-wasi` can inspect results from any generated binding package.
+ */
+interface WitResultValue<out T, out E> {
+    /** Whether this result is `ok`. */
+    val isOk: Boolean
+
+    /** Whether this result is `err`. */
+    val isErr: Boolean
+
+    /** The `ok` value, or `null` for `err`. */
+    fun getOrNull(): T?
+
+    /** The `err` value, or `null` for `ok`. */
+    fun errorOrNull(): E?
+
+    /** The `ok` value; throws [WitResultException] carrying the `err` value otherwise. */
+    fun getOrThrow(): T
+}
+
 /** Thrown by the generated `WitResult.getOrThrow()` for an `err`; [error] is the WIT error value. */
 class WitResultException(val error: Any?) : RuntimeException("WIT result error: $error")
 
@@ -49,3 +70,19 @@ class WitResultException(val error: Any?) : RuntimeException("WIT result error: 
  * Thrown by the Chicory backend; the Wasmtime backend reports traps as [IllegalStateException].
  */
 open class ComponentTrapException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+/**
+ * Thrown when a component exits intentionally via a runtime-defined exit import such as
+ * `wasi:cli/exit`.
+ *
+ * Extends [ComponentTrapException] so callers catching traps still observe termination and cannot
+ * reuse the instance, while distinguishing an intentional exit (including status `0`) from a trap.
+ * Preserved by the Chicory backend and direct host calls; the Wasmtime native bridge currently
+ * surfaces guest traps and host import failures as [IllegalStateException] (and WASI 0.3 async
+ * exports target Chicory per ADR-0005 and ADR-0018).
+ */
+open class ComponentExitException(
+    val statusCode: Int,
+    message: String = "Component exited with status code $statusCode",
+    cause: Throwable? = null,
+) : ComponentTrapException(message, cause)

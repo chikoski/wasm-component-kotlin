@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-15。対象ブランチは `feat/wasi03-phase2-13`、主な変更点は #13、#100、#101、#102 に対応する WASI 0.3 ホスト実装と設定 API の完結です。
+> 最終更新: 2026-11-15。対象ブランチは `feat/async-and-wasi-cli-examples`、主な変更点は非同期ストリームサンプル `06-async-streams`、WASI 0.3 CLI サンプル `07-wasi-cli`、`WitResultValue` と `withSessionBlocking`、`ComponentExitException`、共有 WIT 定義の統合、E2E 検証と事前分解ドリフト検査の追加です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -129,6 +129,12 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * [#68](https://github.com/chikoski/wasm-component-kotlin/issues/68) 数値だけの関数をバイト列を通さずに呼ぶ — 必要な使い方がないため。案は [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 3 に残っている
 
 ### 完了
+
+* 設計・実装レビュー改善と E2E 検証の拡充
+
+[#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) では `runtime-api` に共通インタフェース `WitResultValue` を導入しました。生成される `WitResult` がこの契約を実装し、`runWasiCommand` で直接受け取れるようにしています。[#125](https://github.com/chikoski/wasm-component-kotlin/issues/125) では同期呼び出し向けに非インラインの `withSessionBlocking` ヘルパーを生成しました。これに合わせて `examples/06-async-streams` と `examples/07-wasi-cli` のコードも簡潔に更新しています。
+
+[#126](https://github.com/chikoski/wasm-component-kotlin/issues/126) では `ComponentExitException` を導入し、Chicory ランタイムで終了後再利用とトラップ後再利用の診断を分けました。[#127](https://github.com/chikoski/wasm-component-kotlin/issues/127) では `wasi-cli` ゲストフィクスチャへ最長一致マウント解決と終了フラグを追加し、異常系と終了系および部分ストリーム消費の E2E テストを整備しました。[#128](https://github.com/chikoski/wasm-component-kotlin/issues/128) では重複していたフィクスチャ WIT 定義を `runtime-wasi/wit` へ統合しました。さらに `ComponentBuildTest` へ事前分解コンポーネントのドリフト検証を追加しています。
 
 * [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) WASI 0.3 ホスト実装と設定 API の完結。[#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) と [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) の各パッケージ実装に加え、[#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) の `wasi:http` と `wasi:sockets` の対応方針決定、[#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) のホスト設定・選択 API と Gradle `addWasiDependency` 連携、[#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) の Rust 製フィクスチャ `wasi-03` と結合テストを完了しました。設計詳細は [ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) と [ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) に記録しています。`wasi:http` と `wasi:sockets` はそれぞれ [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) と [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) として P2 に分離しました。
 

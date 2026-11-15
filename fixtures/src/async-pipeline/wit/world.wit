@@ -1,0 +1,13 @@
+package example:async-pipeline@0.1.0;
+
+interface enricher {
+    format-item: async func(id: u32, payload: string) -> string;
+}
+
+world async-pipeline {
+    import enricher;
+
+    export produce-numbers: async func(start: u32, count: u32) -> stream<u32>;
+    export process-items: async func(items: stream<string>) -> tuple<stream<string>, future<u32>>;
+    export sum-stream: async func(values: stream<u32>) -> u32;
+}

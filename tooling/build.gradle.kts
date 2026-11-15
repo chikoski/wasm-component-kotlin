@@ -20,6 +20,7 @@ dependencies {
 
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))
+    testImplementation(project(":runtime-wasi"))
     testImplementation(kotlin("test"))
     testImplementation(kotlin("compiler-embeddable"))
     testImplementation(libs.junit.jupiter)
