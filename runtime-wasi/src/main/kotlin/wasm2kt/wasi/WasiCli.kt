@@ -281,6 +281,10 @@ class Wasi03 private constructor(
             stdin = { ByteArrayInputStream(bytes) }
         }
 
+        fun stdin(text: String) {
+            stdin(text.encodeToByteArray())
+        }
+
         fun stdin(provider: () -> InputStream) {
             stdin = provider
         }
@@ -401,3 +405,18 @@ fun Linker.addWasi03(configure: Wasi03.Builder.() -> Unit = {}): Linker =
  */
 fun wasi03Imports(configure: Wasi03.Builder.() -> Unit = {}): ImportsFactory =
     ImportsFactory { Linker().addWasi03(configure) }
+
+/**
+ * Executes a WASI CLI entrypoint (such as `{ run().isOk }`) and converts both normal completion
+ * (`true` -> `0`, `false` -> `1`) and [WasiExitException] into an integer status code.
+ *
+ * Because guest `wasi:cli/exit` raises a trap that poisons the component instance (even for status
+ * `0`), wrap `withSession(...)` inside [block] rather than reusing a session after calling `exit`.
+ * Other exceptions propagate unchanged.
+ */
+inline fun runWasiCommand(block: () -> Boolean): Int =
+    try {
+        if (block()) 0 else 1
+    } catch (e: WasiExitException) {
+        e.statusCode
+    }

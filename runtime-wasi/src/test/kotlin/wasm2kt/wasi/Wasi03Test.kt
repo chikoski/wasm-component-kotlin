@@ -476,4 +476,27 @@ class Wasi03Test {
         assertEquals("f", fixedOut.toByteArray().decodeToString())
         assertEquals("p", providedOut.toByteArray().decodeToString())
     }
+
+    @Test
+    fun `stdin string overload encodes UTF-8 bytes`() = runBlocking {
+        val wasi = Wasi03.builder().apply {
+            stdin("hello-text")
+        }.build()
+        val (stream, done) = wasi.stdin.readViaStream()
+        assertEquals("hello-text", stream.toList().flatMap { it.toList() }.toByteArray().decodeToString())
+        assertEquals(WitResult.Ok(Unit), done.await())
+    }
+
+    @Test
+    fun `runWasiCommand normalizes exit codes and propagates non-exit exceptions`() {
+        assertEquals(0, runWasiCommand { true })
+        assertEquals(1, runWasiCommand { false })
+        assertEquals(0, runWasiCommand { WasiExit().exit(WitResult.Ok(Unit)); true })
+        assertEquals(1, runWasiCommand { WasiExit().exit(WitResult.Err(Unit)); true })
+        assertEquals(7, runWasiCommand { WasiExit().exitWithCode(7u); true })
+        assertEquals(255, runWasiCommand { WasiExit().exitWithCode(255u); true })
+        assertFailsWith<IllegalStateException> {
+            runWasiCommand { error("unexpected host failure") }
+        }
+    }
 }

@@ -1,0 +1,1841 @@
+{
+  "version": 5,
+  "modules": [
+    {
+      "index": 0,
+      "file": "core0.wasm",
+      "imports": [
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-new-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stderr@0.3.0",
+          "name": "write-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][method]descriptor.open-at",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[subtask-drop]",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[subtask-cancel]",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[resource-drop]descriptor",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/environment@0.3.0",
+          "name": "get-arguments",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/environment@0.3.0",
+          "name": "get-environment",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/preopens@0.3.0",
+          "name": "get-directories",
+          "kind": "func"
+        },
+        {
+          "module": "[export]wasi:cli/run@0.3.0",
+          "name": "[task-return]run",
+          "kind": "func"
+        },
+        {
+          "module": "[export]$root",
+          "name": "[task-cancel]",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][future-write-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][future-read-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-cancel-write-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-cancel-read-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-drop-writable-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-drop-readable-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-new-1]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[context-get-0]",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[context-set-0]",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[method]descriptor.write-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdout@0.3.0",
+          "name": "write-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][future-write-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][future-read-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-cancel-write-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-cancel-read-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-drop-writable-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-drop-readable-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-new-1][method]descriptor.read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][stream-write-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][stream-read-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-cancel-write-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-cancel-read-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-drop-writable-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-drop-readable-0]read-via-stream",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-drop]",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-poll]",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-new]",
+          "kind": "func"
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-join]",
+          "kind": "func"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "file": "core1.wasm",
+      "imports": []
+    },
+    {
+      "index": 2,
+      "file": "core2.wasm",
+      "imports": [
+        {
+          "module": "",
+          "name": "0",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "1",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "2",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "3",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "4",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "5",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "6",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "7",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "8",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "9",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "10",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "11",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "12",
+          "kind": "func"
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "kind": "table"
+        }
+      ]
+    }
+  ],
+  "initializers": [
+    {
+      "op": "instantiate",
+      "instance": 0,
+      "module": 1,
+      "args": []
+    },
+    {
+      "op": "instantiate",
+      "instance": 1,
+      "module": 0,
+      "args": [
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-new-0]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 0
+          }
+        },
+        {
+          "module": "wasi:cli/stderr@0.3.0",
+          "name": "write-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 1
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][method]descriptor.open-at",
+          "def": {
+            "instance": 0,
+            "name": "5",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[subtask-drop]",
+          "def": {
+            "kind": "trampoline",
+            "index": 2
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[subtask-cancel]",
+          "def": {
+            "kind": "trampoline",
+            "index": 3
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[resource-drop]descriptor",
+          "def": {
+            "kind": "trampoline",
+            "index": 4
+          }
+        },
+        {
+          "module": "wasi:cli/environment@0.3.0",
+          "name": "get-arguments",
+          "def": {
+            "instance": 0,
+            "name": "10",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/environment@0.3.0",
+          "name": "get-environment",
+          "def": {
+            "instance": 0,
+            "name": "11",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "0",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:filesystem/preopens@0.3.0",
+          "name": "get-directories",
+          "def": {
+            "instance": 0,
+            "name": "12",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "[export]wasi:cli/run@0.3.0",
+          "name": "[task-return]run",
+          "def": {
+            "kind": "trampoline",
+            "index": 5
+          }
+        },
+        {
+          "module": "[export]$root",
+          "name": "[task-cancel]",
+          "def": {
+            "kind": "trampoline",
+            "index": 6
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][future-write-1]read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "1",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][future-read-1]read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "2",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-cancel-write-1]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 7
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-cancel-read-1]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 8
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-drop-writable-1]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 9
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-drop-readable-1]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 10
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[future-new-1]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 11
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[context-get-0]",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-get-i32-0"
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[context-set-0]",
+          "def": {
+            "kind": "intrinsic",
+            "name": "context-set-i32-0"
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[method]descriptor.read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "6",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[method]descriptor.write-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 12
+          }
+        },
+        {
+          "module": "wasi:cli/stdout@0.3.0",
+          "name": "write-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 13
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][future-write-1][method]descriptor.read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "7",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[async-lower][future-read-1][method]descriptor.read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "8",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-cancel-write-1][method]descriptor.read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 14
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-cancel-read-1][method]descriptor.read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 15
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-drop-writable-1][method]descriptor.read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 16
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-drop-readable-1][method]descriptor.read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 17
+          }
+        },
+        {
+          "module": "wasi:filesystem/types@0.3.0",
+          "name": "[future-new-1][method]descriptor.read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 18
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][stream-write-0]read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "3",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[async-lower][stream-read-0]read-via-stream",
+          "def": {
+            "instance": 0,
+            "name": "4",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-cancel-write-0]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 19
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-cancel-read-0]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 20
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-drop-writable-0]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 21
+          }
+        },
+        {
+          "module": "wasi:cli/stdin@0.3.0",
+          "name": "[stream-drop-readable-0]read-via-stream",
+          "def": {
+            "kind": "trampoline",
+            "index": 22
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-drop]",
+          "def": {
+            "kind": "trampoline",
+            "index": 23
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-poll]",
+          "def": {
+            "instance": 0,
+            "name": "9",
+            "kind": "export"
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-set-new]",
+          "def": {
+            "kind": "trampoline",
+            "index": 24
+          }
+        },
+        {
+          "module": "$root",
+          "name": "[waitable-join]",
+          "def": {
+            "kind": "trampoline",
+            "index": 25
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-memory",
+      "index": 0,
+      "export": {
+        "instance": 1,
+        "name": "memory"
+      }
+    },
+    {
+      "op": "extract-realloc",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "cabi_realloc",
+        "kind": "export"
+      }
+    },
+    {
+      "op": "instantiate",
+      "instance": 2,
+      "module": 2,
+      "args": [
+        {
+          "module": "",
+          "name": "0",
+          "def": {
+            "kind": "trampoline",
+            "index": 26
+          }
+        },
+        {
+          "module": "",
+          "name": "1",
+          "def": {
+            "kind": "trampoline",
+            "index": 27
+          }
+        },
+        {
+          "module": "",
+          "name": "2",
+          "def": {
+            "kind": "trampoline",
+            "index": 28
+          }
+        },
+        {
+          "module": "",
+          "name": "3",
+          "def": {
+            "kind": "trampoline",
+            "index": 29
+          }
+        },
+        {
+          "module": "",
+          "name": "4",
+          "def": {
+            "kind": "trampoline",
+            "index": 30
+          }
+        },
+        {
+          "module": "",
+          "name": "5",
+          "def": {
+            "kind": "trampoline",
+            "index": 31
+          }
+        },
+        {
+          "module": "",
+          "name": "6",
+          "def": {
+            "kind": "trampoline",
+            "index": 32
+          }
+        },
+        {
+          "module": "",
+          "name": "7",
+          "def": {
+            "kind": "trampoline",
+            "index": 33
+          }
+        },
+        {
+          "module": "",
+          "name": "8",
+          "def": {
+            "kind": "trampoline",
+            "index": 34
+          }
+        },
+        {
+          "module": "",
+          "name": "9",
+          "def": {
+            "kind": "trampoline",
+            "index": 35
+          }
+        },
+        {
+          "module": "",
+          "name": "10",
+          "def": {
+            "kind": "trampoline",
+            "index": 36
+          }
+        },
+        {
+          "module": "",
+          "name": "11",
+          "def": {
+            "kind": "trampoline",
+            "index": 37
+          }
+        },
+        {
+          "module": "",
+          "name": "12",
+          "def": {
+            "kind": "trampoline",
+            "index": 38
+          }
+        },
+        {
+          "module": "",
+          "name": "$imports",
+          "def": {
+            "instance": 0,
+            "name": "$imports",
+            "kind": "export"
+          }
+        }
+      ]
+    },
+    {
+      "op": "extract-callback",
+      "index": 0,
+      "def": {
+        "instance": 1,
+        "name": "[callback][async-lift]wasi:cli/run@0.3.0#run",
+        "kind": "export"
+      }
+    }
+  ],
+  "trampolines": [
+    {
+      "kind": "stream-new",
+      "table": 0,
+      "index": 0
+    },
+    {
+      "kind": "lower-import",
+      "import": 1,
+      "type": {
+        "params": [
+          {
+            "name": "data",
+            "type": {
+              "k": "stream",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "future",
+            "table": 0
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 1
+    },
+    {
+      "kind": "subtask-drop",
+      "instance": 0,
+      "index": 2
+    },
+    {
+      "kind": "subtask-cancel",
+      "instance": 0,
+      "async": false,
+      "index": 3
+    },
+    {
+      "kind": "resource-drop",
+      "table": 0,
+      "index": 4
+    },
+    {
+      "kind": "task-return",
+      "instance": 0,
+      "results": [
+        {
+          "k": "result",
+          "ok": null,
+          "err": null
+        }
+      ],
+      "resultsIndex": 17,
+      "options": 2,
+      "index": 5
+    },
+    {
+      "kind": "task-cancel",
+      "instance": 0,
+      "index": 6
+    },
+    {
+      "kind": "future-cancel-write",
+      "table": 0,
+      "async": false,
+      "index": 7
+    },
+    {
+      "kind": "future-cancel-read",
+      "table": 0,
+      "async": false,
+      "index": 8
+    },
+    {
+      "kind": "future-drop-writable",
+      "table": 0,
+      "index": 9
+    },
+    {
+      "kind": "future-drop-readable",
+      "table": 0,
+      "index": 10
+    },
+    {
+      "kind": "future-new",
+      "table": 0,
+      "index": 11
+    },
+    {
+      "kind": "lower-import",
+      "import": 2,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "data",
+            "type": {
+              "k": "stream",
+              "table": 0
+            }
+          },
+          {
+            "name": "offset",
+            "type": {
+              "k": "u64"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "future",
+            "table": 1
+          }
+        ],
+        "async": false
+      },
+      "options": 3,
+      "index": 12
+    },
+    {
+      "kind": "lower-import",
+      "import": 3,
+      "type": {
+        "params": [
+          {
+            "name": "data",
+            "type": {
+              "k": "stream",
+              "table": 0
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "future",
+            "table": 0
+          }
+        ],
+        "async": false
+      },
+      "options": 1,
+      "index": 13
+    },
+    {
+      "kind": "future-cancel-write",
+      "table": 1,
+      "async": false,
+      "index": 14
+    },
+    {
+      "kind": "future-cancel-read",
+      "table": 1,
+      "async": false,
+      "index": 15
+    },
+    {
+      "kind": "future-drop-writable",
+      "table": 1,
+      "index": 16
+    },
+    {
+      "kind": "future-drop-readable",
+      "table": 1,
+      "index": 17
+    },
+    {
+      "kind": "future-new",
+      "table": 1,
+      "index": 18
+    },
+    {
+      "kind": "stream-cancel-write",
+      "table": 0,
+      "async": false,
+      "index": 19
+    },
+    {
+      "kind": "stream-cancel-read",
+      "table": 0,
+      "async": false,
+      "index": 20
+    },
+    {
+      "kind": "stream-drop-writable",
+      "table": 0,
+      "index": 21
+    },
+    {
+      "kind": "stream-drop-readable",
+      "table": 0,
+      "index": 22
+    },
+    {
+      "kind": "waitable-set-drop",
+      "instance": 0,
+      "index": 23
+    },
+    {
+      "kind": "waitable-set-new",
+      "instance": 0,
+      "index": 24
+    },
+    {
+      "kind": "waitable-join",
+      "instance": 0,
+      "index": 25
+    },
+    {
+      "kind": "lower-import",
+      "import": 4,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "tuple",
+            "types": [
+              {
+                "k": "stream",
+                "table": 0
+              },
+              {
+                "k": "future",
+                "table": 0
+              }
+            ]
+          }
+        ],
+        "async": false
+      },
+      "options": 4,
+      "index": 26
+    },
+    {
+      "kind": "future-write",
+      "table": 0,
+      "options": 5,
+      "index": 27
+    },
+    {
+      "kind": "future-read",
+      "table": 0,
+      "options": 5,
+      "index": 28
+    },
+    {
+      "kind": "stream-write",
+      "table": 0,
+      "options": 6,
+      "index": 29
+    },
+    {
+      "kind": "stream-read",
+      "table": 0,
+      "options": 6,
+      "index": 30
+    },
+    {
+      "kind": "lower-import",
+      "import": 5,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "path-flags",
+            "type": {
+              "k": "flags",
+              "names": [
+                "symlink-follow"
+              ]
+            }
+          },
+          {
+            "name": "path",
+            "type": {
+              "k": "string"
+            }
+          },
+          {
+            "name": "open-flags",
+            "type": {
+              "k": "flags",
+              "names": [
+                "create",
+                "directory",
+                "exclusive",
+                "truncate"
+              ]
+            }
+          },
+          {
+            "name": "flags",
+            "type": {
+              "k": "flags",
+              "names": [
+                "read",
+                "write",
+                "file-integrity-sync",
+                "data-integrity-sync",
+                "requested-write-sync",
+                "mutate-directory"
+              ]
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "result",
+            "ok": {
+              "k": "own",
+              "table": 0
+            },
+            "err": {
+              "k": "variant",
+              "cases": [
+                {
+                  "name": "access",
+                  "type": null
+                },
+                {
+                  "name": "already",
+                  "type": null
+                },
+                {
+                  "name": "bad-descriptor",
+                  "type": null
+                },
+                {
+                  "name": "busy",
+                  "type": null
+                },
+                {
+                  "name": "deadlock",
+                  "type": null
+                },
+                {
+                  "name": "quota",
+                  "type": null
+                },
+                {
+                  "name": "exist",
+                  "type": null
+                },
+                {
+                  "name": "file-too-large",
+                  "type": null
+                },
+                {
+                  "name": "illegal-byte-sequence",
+                  "type": null
+                },
+                {
+                  "name": "in-progress",
+                  "type": null
+                },
+                {
+                  "name": "interrupted",
+                  "type": null
+                },
+                {
+                  "name": "invalid",
+                  "type": null
+                },
+                {
+                  "name": "io",
+                  "type": null
+                },
+                {
+                  "name": "is-directory",
+                  "type": null
+                },
+                {
+                  "name": "loop",
+                  "type": null
+                },
+                {
+                  "name": "too-many-links",
+                  "type": null
+                },
+                {
+                  "name": "message-size",
+                  "type": null
+                },
+                {
+                  "name": "name-too-long",
+                  "type": null
+                },
+                {
+                  "name": "no-device",
+                  "type": null
+                },
+                {
+                  "name": "no-entry",
+                  "type": null
+                },
+                {
+                  "name": "no-lock",
+                  "type": null
+                },
+                {
+                  "name": "insufficient-memory",
+                  "type": null
+                },
+                {
+                  "name": "insufficient-space",
+                  "type": null
+                },
+                {
+                  "name": "not-directory",
+                  "type": null
+                },
+                {
+                  "name": "not-empty",
+                  "type": null
+                },
+                {
+                  "name": "not-recoverable",
+                  "type": null
+                },
+                {
+                  "name": "unsupported",
+                  "type": null
+                },
+                {
+                  "name": "no-tty",
+                  "type": null
+                },
+                {
+                  "name": "no-such-device",
+                  "type": null
+                },
+                {
+                  "name": "overflow",
+                  "type": null
+                },
+                {
+                  "name": "not-permitted",
+                  "type": null
+                },
+                {
+                  "name": "pipe",
+                  "type": null
+                },
+                {
+                  "name": "read-only",
+                  "type": null
+                },
+                {
+                  "name": "invalid-seek",
+                  "type": null
+                },
+                {
+                  "name": "text-file-busy",
+                  "type": null
+                },
+                {
+                  "name": "cross-device",
+                  "type": null
+                },
+                {
+                  "name": "other",
+                  "type": {
+                    "k": "option",
+                    "type": {
+                      "k": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "async": true
+      },
+      "options": 7,
+      "index": 31
+    },
+    {
+      "kind": "lower-import",
+      "import": 6,
+      "type": {
+        "params": [
+          {
+            "name": "self",
+            "type": {
+              "k": "borrow",
+              "table": 0
+            }
+          },
+          {
+            "name": "offset",
+            "type": {
+              "k": "u64"
+            }
+          }
+        ],
+        "results": [
+          {
+            "k": "tuple",
+            "types": [
+              {
+                "k": "stream",
+                "table": 0
+              },
+              {
+                "k": "future",
+                "table": 1
+              }
+            ]
+          }
+        ],
+        "async": false
+      },
+      "options": 8,
+      "index": 32
+    },
+    {
+      "kind": "future-write",
+      "table": 1,
+      "options": 5,
+      "index": 33
+    },
+    {
+      "kind": "future-read",
+      "table": 1,
+      "options": 7,
+      "index": 34
+    },
+    {
+      "kind": "waitable-set-poll",
+      "instance": 0,
+      "options": 9,
+      "index": 35
+    },
+    {
+      "kind": "lower-import",
+      "import": 7,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "string"
+            }
+          }
+        ],
+        "async": false
+      },
+      "options": 10,
+      "index": 36
+    },
+    {
+      "kind": "lower-import",
+      "import": 8,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "tuple",
+              "types": [
+                {
+                  "k": "string"
+                },
+                {
+                  "k": "string"
+                }
+              ]
+            }
+          }
+        ],
+        "async": false
+      },
+      "options": 10,
+      "index": 37
+    },
+    {
+      "kind": "lower-import",
+      "import": 9,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "list",
+            "element": {
+              "k": "tuple",
+              "types": [
+                {
+                  "k": "own",
+                  "table": 0
+                },
+                {
+                  "k": "string"
+                }
+              ]
+            }
+          }
+        ],
+        "async": false
+      },
+      "options": 10,
+      "index": 38
+    }
+  ],
+  "options": [
+    {
+      "index": 0,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": 0,
+      "cancellable": false
+    },
+    {
+      "index": 1,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 2,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 3,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": null,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 4,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 5,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 6,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 7,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": true,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 8,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 9,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": null,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    },
+    {
+      "index": 10,
+      "instance": 0,
+      "stringEncoding": "utf8",
+      "memory": 0,
+      "realloc": 0,
+      "postReturn": null,
+      "async": false,
+      "callback": null,
+      "cancellable": false
+    }
+  ],
+  "imports": [
+    {
+      "index": 0,
+      "name": "wasi:filesystem/types@0.3.0",
+      "path": [
+        "descriptor"
+      ]
+    },
+    {
+      "index": 1,
+      "name": "wasi:cli/stderr@0.3.0",
+      "path": [
+        "write-via-stream"
+      ]
+    },
+    {
+      "index": 2,
+      "name": "wasi:filesystem/types@0.3.0",
+      "path": [
+        "[method]descriptor.write-via-stream"
+      ]
+    },
+    {
+      "index": 3,
+      "name": "wasi:cli/stdout@0.3.0",
+      "path": [
+        "write-via-stream"
+      ]
+    },
+    {
+      "index": 4,
+      "name": "wasi:cli/stdin@0.3.0",
+      "path": [
+        "read-via-stream"
+      ]
+    },
+    {
+      "index": 5,
+      "name": "wasi:filesystem/types@0.3.0",
+      "path": [
+        "[method]descriptor.open-at"
+      ]
+    },
+    {
+      "index": 6,
+      "name": "wasi:filesystem/types@0.3.0",
+      "path": [
+        "[method]descriptor.read-via-stream"
+      ]
+    },
+    {
+      "index": 7,
+      "name": "wasi:cli/environment@0.3.0",
+      "path": [
+        "get-arguments"
+      ]
+    },
+    {
+      "index": 8,
+      "name": "wasi:cli/environment@0.3.0",
+      "path": [
+        "get-environment"
+      ]
+    },
+    {
+      "index": 9,
+      "name": "wasi:filesystem/preopens@0.3.0",
+      "path": [
+        "get-directories"
+      ]
+    }
+  ],
+  "resourceTables": [
+    {
+      "index": 0,
+      "resource": 0,
+      "instance": 0,
+      "imported": true,
+      "import": 0
+    }
+  ],
+  "streamTables": [
+    {
+      "index": 0,
+      "instance": 0,
+      "element": {
+        "k": "u8"
+      }
+    }
+  ],
+  "futureTables": [
+    {
+      "index": 0,
+      "instance": 0,
+      "element": {
+        "k": "result",
+        "ok": null,
+        "err": {
+          "k": "enum",
+          "names": [
+            "io",
+            "illegal-byte-sequence",
+            "pipe"
+          ]
+        }
+      }
+    },
+    {
+      "index": 1,
+      "instance": 0,
+      "element": {
+        "k": "result",
+        "ok": null,
+        "err": {
+          "k": "variant",
+          "cases": [
+            {
+              "name": "access",
+              "type": null
+            },
+            {
+              "name": "already",
+              "type": null
+            },
+            {
+              "name": "bad-descriptor",
+              "type": null
+            },
+            {
+              "name": "busy",
+              "type": null
+            },
+            {
+              "name": "deadlock",
+              "type": null
+            },
+            {
+              "name": "quota",
+              "type": null
+            },
+            {
+              "name": "exist",
+              "type": null
+            },
+            {
+              "name": "file-too-large",
+              "type": null
+            },
+            {
+              "name": "illegal-byte-sequence",
+              "type": null
+            },
+            {
+              "name": "in-progress",
+              "type": null
+            },
+            {
+              "name": "interrupted",
+              "type": null
+            },
+            {
+              "name": "invalid",
+              "type": null
+            },
+            {
+              "name": "io",
+              "type": null
+            },
+            {
+              "name": "is-directory",
+              "type": null
+            },
+            {
+              "name": "loop",
+              "type": null
+            },
+            {
+              "name": "too-many-links",
+              "type": null
+            },
+            {
+              "name": "message-size",
+              "type": null
+            },
+            {
+              "name": "name-too-long",
+              "type": null
+            },
+            {
+              "name": "no-device",
+              "type": null
+            },
+            {
+              "name": "no-entry",
+              "type": null
+            },
+            {
+              "name": "no-lock",
+              "type": null
+            },
+            {
+              "name": "insufficient-memory",
+              "type": null
+            },
+            {
+              "name": "insufficient-space",
+              "type": null
+            },
+            {
+              "name": "not-directory",
+              "type": null
+            },
+            {
+              "name": "not-empty",
+              "type": null
+            },
+            {
+              "name": "not-recoverable",
+              "type": null
+            },
+            {
+              "name": "unsupported",
+              "type": null
+            },
+            {
+              "name": "no-tty",
+              "type": null
+            },
+            {
+              "name": "no-such-device",
+              "type": null
+            },
+            {
+              "name": "overflow",
+              "type": null
+            },
+            {
+              "name": "not-permitted",
+              "type": null
+            },
+            {
+              "name": "pipe",
+              "type": null
+            },
+            {
+              "name": "read-only",
+              "type": null
+            },
+            {
+              "name": "invalid-seek",
+              "type": null
+            },
+            {
+              "name": "text-file-busy",
+              "type": null
+            },
+            {
+              "name": "cross-device",
+              "type": null
+            },
+            {
+              "name": "other",
+              "type": {
+                "k": "option",
+                "type": {
+                  "k": "string"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "errorContextTables": [],
+  "exports": [
+    {
+      "instance": "wasi:cli/run@0.3.0",
+      "name": "run",
+      "func": {
+        "instance": 1,
+        "name": "[async-lift]wasi:cli/run@0.3.0#run",
+        "kind": "export"
+      },
+      "options": 0,
+      "type": {
+        "params": [],
+        "results": [
+          {
+            "k": "result",
+            "ok": null,
+            "err": null
+          }
+        ],
+        "async": true
+      }
+    }
+  ]
+}

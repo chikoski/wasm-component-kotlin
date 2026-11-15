@@ -132,7 +132,15 @@ object ComponentCodegen {
 object ComponentBuild {
     class Output(val kotlinDir: Path, val classesDir: Path, val resourcesDir: Path)
 
-    fun run(component: Path, componentName: String, packageName: String, workDir: Path, worldName: String? = null): Output {
+    fun run(
+        component: Path,
+        componentName: String,
+        packageName: String,
+        workDir: Path,
+        worldName: String? = null,
+        interfaceMappings: Map<String, String> = emptyMap(),
+        libraryClasspath: List<Path> = emptyList(),
+    ): Output {
         val decomposed = workDir.resolve("decomposed")
         val classes = workDir.resolve("classes")
         val resources = workDir.resolve("resources")
@@ -141,7 +149,17 @@ object ComponentBuild {
         val internalPackage = internalPackage(packageName, componentName)
         val compiled = CoreModuleCompiler.compile(decomposed, classes, resources, internalPackage)
         val planResource = copyPlan(decomposed, resources, internalPackage)
-        ComponentCodegen.generate(decomposed, kotlin, componentName, packageName, compiled, planResource, worldName)
+        ComponentCodegen.generate(
+            decomposedDir = decomposed,
+            outputDir = kotlin,
+            componentName = componentName,
+            packageName = packageName,
+            compiled = compiled,
+            planResource = planResource,
+            worldName = worldName,
+            interfaceMappings = interfaceMappings,
+            libraryClasspath = libraryClasspath,
+        )
         return Output(kotlin, classes, resources)
     }
 

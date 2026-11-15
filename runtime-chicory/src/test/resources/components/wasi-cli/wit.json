@@ -1,0 +1,797 @@
+{
+  "worlds": [
+    {
+      "name": "root",
+      "imports": {
+        "interface-0": {
+          "interface": {
+            "id": 0
+          }
+        },
+        "interface-1": {
+          "interface": {
+            "id": 1
+          }
+        },
+        "interface-2": {
+          "interface": {
+            "id": 2
+          }
+        },
+        "interface-3": {
+          "interface": {
+            "id": 3
+          }
+        },
+        "interface-4": {
+          "interface": {
+            "id": 4
+          }
+        },
+        "interface-5": {
+          "interface": {
+            "id": 5
+          }
+        },
+        "interface-6": {
+          "interface": {
+            "id": 6
+          }
+        }
+      },
+      "exports": {
+        "interface-7": {
+          "interface": {
+            "id": 7
+          }
+        }
+      },
+      "package": 2
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "environment",
+      "types": {},
+      "functions": {
+        "get-environment": {
+          "name": "get-environment",
+          "kind": "freestanding",
+          "params": [],
+          "result": 1
+        },
+        "get-arguments": {
+          "name": "get-arguments",
+          "kind": "freestanding",
+          "params": [],
+          "result": 2
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "error-code": 3
+      },
+      "functions": {},
+      "package": 0
+    },
+    {
+      "name": "stdin",
+      "types": {
+        "error-code": 4
+      },
+      "functions": {
+        "read-via-stream": {
+          "name": "read-via-stream",
+          "kind": "freestanding",
+          "params": [],
+          "result": 8
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "stdout",
+      "types": {
+        "error-code": 9
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 10
+            }
+          ],
+          "result": 12
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "stderr",
+      "types": {
+        "error-code": 13
+      },
+      "functions": {
+        "write-via-stream": {
+          "name": "write-via-stream",
+          "kind": "freestanding",
+          "params": [
+            {
+              "name": "data",
+              "type": 14
+            }
+          ],
+          "result": 16
+        }
+      },
+      "package": 0
+    },
+    {
+      "name": "types",
+      "types": {
+        "descriptor": 17,
+        "path-flags": 18,
+        "open-flags": 19,
+        "descriptor-flags": 20,
+        "error-code": 22,
+        "filesize": 23
+      },
+      "functions": {
+        "[method]descriptor.read-via-stream": {
+          "name": "[method]descriptor.read-via-stream",
+          "kind": {
+            "method": 17
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "offset",
+              "type": 23
+            }
+          ],
+          "result": 28
+        },
+        "[method]descriptor.write-via-stream": {
+          "name": "[method]descriptor.write-via-stream",
+          "kind": {
+            "method": 17
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "data",
+              "type": 25
+            },
+            {
+              "name": "offset",
+              "type": 23
+            }
+          ],
+          "result": 27
+        },
+        "[method]descriptor.open-at": {
+          "name": "[method]descriptor.open-at",
+          "kind": {
+            "async-method": 17
+          },
+          "params": [
+            {
+              "name": "self",
+              "type": 24
+            },
+            {
+              "name": "path-flags",
+              "type": 18
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "open-flags",
+              "type": 19
+            },
+            {
+              "name": "flags",
+              "type": 20
+            }
+          ],
+          "result": 30
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "preopens",
+      "types": {
+        "descriptor": 31
+      },
+      "functions": {
+        "get-directories": {
+          "name": "get-directories",
+          "kind": "freestanding",
+          "params": [],
+          "result": 34
+        }
+      },
+      "package": 1
+    },
+    {
+      "name": "run",
+      "types": {},
+      "functions": {
+        "run": {
+          "name": "run",
+          "kind": "async-freestanding",
+          "params": [],
+          "result": 35
+        }
+      },
+      "package": 0
+    }
+  ],
+  "types": [
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            "string",
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 0
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "enum": {
+          "cases": [
+            {
+              "name": "io"
+            },
+            {
+              "name": "illegal-byte-sequence"
+            },
+            {
+              "name": "pipe"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 1
+      }
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 3
+      },
+      "owner": {
+        "interface": 2
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 4
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 6
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            5,
+            7
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 3
+      },
+      "owner": {
+        "interface": 3
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 9
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 11
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "type": 3
+      },
+      "owner": {
+        "interface": 4
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 13
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 15
+      },
+      "owner": null
+    },
+    {
+      "name": "descriptor",
+      "kind": "resource",
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": "path-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "symlink-follow"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": "open-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "create"
+            },
+            {
+              "name": "directory"
+            },
+            {
+              "name": "exclusive"
+            },
+            {
+              "name": "truncate"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": "descriptor-flags",
+      "kind": {
+        "flags": {
+          "flags": [
+            {
+              "name": "read"
+            },
+            {
+              "name": "write"
+            },
+            {
+              "name": "file-integrity-sync"
+            },
+            {
+              "name": "data-integrity-sync"
+            },
+            {
+              "name": "requested-write-sync"
+            },
+            {
+              "name": "mutate-directory"
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "option": "string"
+      },
+      "owner": null
+    },
+    {
+      "name": "error-code",
+      "kind": {
+        "variant": {
+          "cases": [
+            {
+              "name": "access",
+              "type": null
+            },
+            {
+              "name": "already",
+              "type": null
+            },
+            {
+              "name": "bad-descriptor",
+              "type": null
+            },
+            {
+              "name": "busy",
+              "type": null
+            },
+            {
+              "name": "deadlock",
+              "type": null
+            },
+            {
+              "name": "quota",
+              "type": null
+            },
+            {
+              "name": "exist",
+              "type": null
+            },
+            {
+              "name": "file-too-large",
+              "type": null
+            },
+            {
+              "name": "illegal-byte-sequence",
+              "type": null
+            },
+            {
+              "name": "in-progress",
+              "type": null
+            },
+            {
+              "name": "interrupted",
+              "type": null
+            },
+            {
+              "name": "invalid",
+              "type": null
+            },
+            {
+              "name": "io",
+              "type": null
+            },
+            {
+              "name": "is-directory",
+              "type": null
+            },
+            {
+              "name": "loop",
+              "type": null
+            },
+            {
+              "name": "too-many-links",
+              "type": null
+            },
+            {
+              "name": "message-size",
+              "type": null
+            },
+            {
+              "name": "name-too-long",
+              "type": null
+            },
+            {
+              "name": "no-device",
+              "type": null
+            },
+            {
+              "name": "no-entry",
+              "type": null
+            },
+            {
+              "name": "no-lock",
+              "type": null
+            },
+            {
+              "name": "insufficient-memory",
+              "type": null
+            },
+            {
+              "name": "insufficient-space",
+              "type": null
+            },
+            {
+              "name": "not-directory",
+              "type": null
+            },
+            {
+              "name": "not-empty",
+              "type": null
+            },
+            {
+              "name": "not-recoverable",
+              "type": null
+            },
+            {
+              "name": "unsupported",
+              "type": null
+            },
+            {
+              "name": "no-tty",
+              "type": null
+            },
+            {
+              "name": "no-such-device",
+              "type": null
+            },
+            {
+              "name": "overflow",
+              "type": null
+            },
+            {
+              "name": "not-permitted",
+              "type": null
+            },
+            {
+              "name": "pipe",
+              "type": null
+            },
+            {
+              "name": "read-only",
+              "type": null
+            },
+            {
+              "name": "invalid-seek",
+              "type": null
+            },
+            {
+              "name": "text-file-busy",
+              "type": null
+            },
+            {
+              "name": "cross-device",
+              "type": null
+            },
+            {
+              "name": "other",
+              "type": 21
+            }
+          ]
+        }
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": "filesize",
+      "kind": {
+        "type": "u64"
+      },
+      "owner": {
+        "interface": 5
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "borrow": 17
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "stream": "u8"
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": 22
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "future": 26
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            25,
+            27
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 17
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": 29,
+          "err": 22
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": "descriptor",
+      "kind": {
+        "type": 17
+      },
+      "owner": {
+        "interface": 6
+      }
+    },
+    {
+      "name": null,
+      "kind": {
+        "handle": {
+          "own": 31
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "tuple": {
+          "types": [
+            32,
+            "string"
+          ]
+        }
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "list": 33
+      },
+      "owner": null
+    },
+    {
+      "name": null,
+      "kind": {
+        "result": {
+          "ok": null,
+          "err": null
+        }
+      },
+      "owner": null
+    }
+  ],
+  "packages": [
+    {
+      "name": "wasi:cli@0.3.0",
+      "interfaces": {
+        "environment": 0,
+        "types": 1,
+        "stdin": 2,
+        "stdout": 3,
+        "stderr": 4,
+        "run": 7
+      },
+      "worlds": {}
+    },
+    {
+      "name": "wasi:filesystem@0.3.0",
+      "interfaces": {
+        "types": 5,
+        "preopens": 6
+      },
+      "worlds": {}
+    },
+    {
+      "name": "root:component",
+      "interfaces": {},
+      "worlds": {
+        "root": 0
+      }
+    }
+  ]
+}

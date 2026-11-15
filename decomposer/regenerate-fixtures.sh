@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --locked --release --manifest-path decomposer/Cargo.toml
-for name in abi-edge arithmetic async-import async-stream composed-str counter host-res live_calc res-edge roundtrip same-name types wasi-03; do
+for name in abi-edge arithmetic async-import async-pipeline async-stream composed-str counter host-res live_calc res-edge roundtrip same-name types wasi-03 wasi-cli; do
   out="runtime-chicory/src/test/resources/components/$name"
   rm -rf "$out"
   decomposer/target/release/wasm2kt-decompose "fixtures/$name.wasm" "$out"
