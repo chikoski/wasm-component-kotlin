@@ -7,11 +7,13 @@
 `wasm2kt` が受け取る `.wasm` は、**WebAssembly Component Model 形式のバイナリ**である必要があります（Core WebAssembly モジュール単体ではありません）。
 対応している WIT の型や機能の詳細は [機能の対応表](../reference/feature-support.md) にまとめています。
 
-特に Chicory バックエンド（Gradle プラグイン / Android）で動かす場合は、以下の点に注意してください。
+Chicory バックエンドを利用する場合は、WASI 0.3 の対応範囲、`flags` の上限、合成コンポーネントの仕様に注意してください。
 
-* **WASI の import**: 現時点では `wasi:cli` や `wasi:io` などのホスト実装を同梱していません（[#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) で WASI 0.3 を予定）。そのため、Rust でゲストを書く場合は `wasm32-unknown-unknown` ターゲット + `wit-bindgen` で WASI に依存しないコンポーネントにするか、import される WASI インターフェースをホスト側で実装して渡す必要があります
-* **33 個以上の `flags`**: `wasm-tools` 1.258 以降は 33 個以上のフラグを持つ `flags` 型を仕様上の制限として拒否します
-* **合成コンポーネント**: メモリを持つ子コンポーネント同士の合成（文字列や `list` の受け渡し）には対応していますが（[ADR-0013](../adr/0013-multi-memory-adapters.md)）、子コンポーネント間で `resource` の所有権を受け渡す組み込み関数（`resource.transfer-own` など）には未対応です（[#70](https://github.com/chikoski/wasm-component-kotlin/issues/70)）
+WASI 0.3 向けのホスト実装は `runtime-wasi` で提供しています。現在は `wasi:random`、`wasi:clocks`、`wasi:cli`、`wasi:filesystem` に対応しており、`wasi:http` と `wasi:sockets` は未対応です。WASI に依存しないライブラリコンポーネントを作る場合は `wasm32-unknown-unknown` ターゲットと `wit-bindgen` を組み合わせてください。
+
+`wasm-tools` 1.258 以降は 33 個以上のフラグを持つ `flags` 型を仕様上の制限として拒否します。
+
+複数の子コンポーネントを合成する場合、メモリを持つコンポーネント間の文字列や `list` の受け渡しに加えて、`resource` の受け渡しと共有テーブルにも対応しています。文字列と `list` の変換の設計は [ADR-0013](../adr/0013-multi-memory-adapters.md) を参照してください。現在の具体的な対応範囲は [機能の対応表](../reference/feature-support.md) にまとめています。
 
 ## 2. Rust でコンポーネントを作る例
 

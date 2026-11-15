@@ -58,6 +58,12 @@
 
 64 KiB の `echo-bytes`（JVM Chicory AOT: 12.4 µs）の内訳は、生成コード側の `WitWriter` / `WitReader` 変換が 5.3 µs、`ComponentBackend.invoke`（lower / lift と wasm 実行）が 6.9 µs です。
 
+5 文字の文字列を渡す `echo-name` は、16 B の `echo-bytes` より Chicory 上の JVM と ART の双方で時間がかかります。上表の GitHub Actions 計測値では、`echo-bytes` の 16 B が JVM で 0.76 µs、ART で 3.9〜4.8 µs です。同じ表で `echo-name` は JVM で 1.5 µs、ART で 8.3〜29 µs となっています。
+
+この時間差にはいくつかの実装上の違いが関係していると考えられます。Chicory 経路のホスト境界では `WitWriter.string` が UTF-16 を UTF-8 へ変換し、`WitReader.string` が UTF-8 バイト列から `String` を生成します。`echo-name` の WIT 署名は `option<string>` であるため、variant 判別子の処理も加わります。さらに Canonical ABI の lower と lift が `Utf8.isValid` による UTF-8 妥当性検証を行い、ゲストの `wit-bindgen` 側でも `Option<String>` の受け渡しが発生します。なお、各処理の具体的な時間割合は Android ART 上のメソッドトレースでまだ切り分けていません。
+
+単一コンポーネントを扱う上記の `echo-name` とは別経路として、複数のメモリを持つコンポーネントを合成する際には `Transcoder` が使われます。`echo-name` 自体は `Transcoder` を通りませんが、関連課題の整理として `Transcoder` の実装を変更しました。以前は UTF-8 検証で生成していた `CharsetDecoder` と、UTF-16 から UTF-8 への変換で確保していた中間 `String` を削除しています。現在は `Utf8.isValid` と `Utf8.isValidUtf16` を使い、UTF-8 バイト列を直接メモリへ書き出します。なお、`readUtf16` の `CharArray` や `ByteArrayOutputStream` の確保は残ります。この `Transcoder` 変更後の Android ART 上での再計測は未実施です。
+
 ### 3.2 Wasmtime の汎用ブリッジと型付きブリッジの比較（JVM）
 
 同じランナー（AMD EPYC 7763）上で、同じブリッジライブラリに対して汎用経路と型付き経路（[ADR-0016](../adr/0016-typed-bridge-from-wit-json.md)）を比較した結果です。
