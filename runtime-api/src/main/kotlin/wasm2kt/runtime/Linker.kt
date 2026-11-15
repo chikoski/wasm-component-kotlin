@@ -45,6 +45,36 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
     fun isDefined(key: String): Boolean = key in handlers
 
     /**
+     * Copies all host import handlers from [other] into this linker.
+     *
+     * When [overwrite] is false (default), any colliding key throws [IllegalArgumentException]
+     * without partial mutation. When [overwrite] is true, existing keys replace both synchronous
+     * handlers and any stale async handlers from earlier definitions.
+     */
+    fun addAll(other: Linker, overwrite: Boolean = false): Linker = apply {
+        if (other === this) {
+            if (!overwrite && handlers.isNotEmpty()) {
+                throw IllegalArgumentException("Host import '${handlers.keys.first()}' is already defined")
+            }
+            return@apply
+        }
+        if (!overwrite) {
+            for (key in other.handlers.keys) {
+                require(key !in handlers) { "Host import '$key' is already defined" }
+            }
+        }
+        for ((key, handler) in other.handlers) {
+            handlers[key] = handler
+            val asyncHandler = other.asyncHandlers[key]
+            if (asyncHandler != null) {
+                asyncHandlers[key] = asyncHandler
+            } else {
+                asyncHandlers.remove(key)
+            }
+        }
+    }
+
+    /**
      * Checks that every key in [required] is defined, so a missing host import fails when the session
      * opens rather than when the component first calls it.
      *
@@ -86,6 +116,17 @@ class Linker : WitHostImportDispatcher, ImportsFactory {
  */
 fun interface ImportsFactory {
     fun newLinker(): Linker
+
+    /**
+     * Combines this factory and [other] into a new [ImportsFactory]. Each session creates a fresh
+     * [Linker] without mutating either operand and rejects colliding keys (ADR-0011, ADR-0022).
+     * Per-session isolation of registered handlers depends on each operand [ImportsFactory]
+     * allocating per-session state inside [newLinker]; if a [Linker] instance is passed as an
+     * operand (whose [newLinker] returns `this`), its handlers remain shared across sessions.
+     */
+    operator fun plus(other: ImportsFactory): ImportsFactory = ImportsFactory {
+        Linker().addAll(this@ImportsFactory.newLinker()).addAll(other.newLinker())
+    }
 
     companion object {
         /** For worlds without imports. */

@@ -1,0 +1,162 @@
+package root:component;
+
+world root {
+  import example:wasi-app/audit;
+  import wasi:random/random@0.3.0;
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/exit@0.3.0;
+  import wasi:cli/types@0.3.0;
+  import wasi:cli/stdin@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+
+  export run-summary: async func() -> string;
+  export exit-with: func(code: u8);
+}
+package example:wasi-app {
+  interface audit {
+    record-step: func(tag: string);
+  }
+}
+
+
+package wasi:random@0.3.0 {
+  interface random {
+    get-random-u64: func() -> u64;
+  }
+}
+
+
+package wasi:clocks@0.3.0 {
+  interface types {
+    type duration = u64;
+  }
+  interface monotonic-clock {
+    use types.{duration};
+
+    type mark = u64;
+
+    now: func() -> mark;
+
+    wait-for: async func(how-long: duration);
+  }
+  interface system-clock {
+    record instant {
+      seconds: s64,
+      nanoseconds: u32,
+    }
+
+    now: func() -> instant;
+  }
+}
+
+
+package wasi:cli@0.3.0 {
+  interface environment {
+    get-environment: func() -> list<tuple<string, string>>;
+
+    get-arguments: func() -> list<string>;
+  }
+  interface exit {
+    exit-with-code: func(status-code: u8);
+  }
+  interface types {
+    enum error-code {
+      io,
+      illegal-byte-sequence,
+      pipe,
+    }
+  }
+  interface stdin {
+    use types.{error-code};
+
+    read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+  }
+  interface stdout {
+    use types.{error-code};
+
+    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+  }
+}
+
+
+package wasi:filesystem@0.3.0 {
+  interface types {
+    variant error-code {
+      access,
+      already,
+      bad-descriptor,
+      busy,
+      deadlock,
+      quota,
+      exist,
+      file-too-large,
+      illegal-byte-sequence,
+      in-progress,
+      interrupted,
+      invalid,
+      io,
+      is-directory,
+      loop,
+      too-many-links,
+      message-size,
+      name-too-long,
+      no-device,
+      no-entry,
+      no-lock,
+      insufficient-memory,
+      insufficient-space,
+      not-directory,
+      not-empty,
+      not-recoverable,
+      unsupported,
+      no-tty,
+      no-such-device,
+      overflow,
+      not-permitted,
+      pipe,
+      read-only,
+      invalid-seek,
+      text-file-busy,
+      cross-device,
+      other(option<string>),
+    }
+
+    resource descriptor {
+      read-via-stream: func(offset: filesize) -> tuple<stream<u8>, future<result<_, error-code>>>;
+      write-via-stream: func(data: stream<u8>, offset: filesize) -> future<result<_, error-code>>;
+      open-at: async func(path-flags: path-flags, path: string, open-flags: open-flags, %flags: descriptor-flags) -> result<descriptor, error-code>;
+    }
+
+    flags path-flags {
+      symlink-follow,
+    }
+
+    flags open-flags {
+      create,
+      directory,
+      exclusive,
+      truncate,
+    }
+
+    flags descriptor-flags {
+      read,
+      write,
+      file-integrity-sync,
+      data-integrity-sync,
+      requested-write-sync,
+      mutate-directory,
+    }
+
+    type filesize = u64;
+  }
+  interface preopens {
+    use types.{descriptor};
+
+    get-directories: func() -> list<tuple<descriptor, string>>;
+  }
+}

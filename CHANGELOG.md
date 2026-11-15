@@ -37,6 +37,10 @@
 
 ### 主な追加・改善
 
+* WASI 0.3 ホスト設定 API、Gradle 連携、および結合フィクスチャの追加 [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) [#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) [#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) [#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) [#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) [ADR-0020](docs/adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) [ADR-0022](docs/adr/0022-wasi03-scope-and-host-configuration.md)
+
+`runtime-wasi` に `wasi03Imports`、パッケージ群ごとの有効化フラグ、セッション単位の入出力ストリームプロバイダを追加しました。`runtime-api` には `Linker.addAll` と `ImportsFactory.plus` を導入し、マッピング済み interface を含む生成ワールドには `imports` の `base` オーバーロードを生成するようにしました。Gradle プラグインには `addWasiDependency` プロパティを追加し、`wasi-03` フィクスチャと機能テストを含む結合テストを整備しています。`wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117)、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) の P2 課題へ分離しました。
+
 * **Wasmtime の型付きブリッジ (`wasm2kt bridge`) とクラスパスからの読み込み** ([#64](https://github.com/chikoski/wasm-component-kotlin/pull/64), [#67](https://github.com/chikoski/wasm-component-kotlin/pull/67), [ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md))
 * **既存のパッケージへの interface 対応付け（`with` / `--interfaces-only` / マニフェスト自動検出）** ([#55](https://github.com/chikoski/wasm-component-kotlin/pull/55), [#54](https://github.com/chikoski/wasm-component-kotlin/issues/54), [ADR-0014](docs/adr/0014-interface-mappings.md))
 * **メモリを持つ子コンポーネント同士の合成（multi-memory アダプターと文字列 transcoder）** ([#53](https://github.com/chikoski/wasm-component-kotlin/pull/53), [#47](https://github.com/chikoski/wasm-component-kotlin/issues/47), [ADR-0013](docs/adr/0013-multi-memory-adapters.md))

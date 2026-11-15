@@ -34,6 +34,7 @@ wasm2kt {
 | `addRuntimeDependency` | `Property<Boolean>` | `true` | プラグインと同じバージョンの `io.github.wasm2kt:runtime-chicory` を `implementation` に追加します。自分で依存関係を管理する場合は `false` にします |
 | `failOnUnsupportedFeatures` | `Property<Boolean>` | `false` | コンポーネントが Chicory バックエンドの未対応機能（未対応の組み込み関数、型）を使っている場合に、分解タスクでビルドを失敗させます。`false` の場合はビルド時に警告のみを表示し、実行時に該当箇所が呼ばれた時点で例外を投げます（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)） |
 | `useLibraryInterfaces` | `Property<Boolean>` | `true` | コンパイルクラスパス上の依存 jar に `META-INF/wasm2kt/interfaces/*.json` マニフェストが含まれている場合、コンポーネントが同じバージョンの interface を import していればコード生成を省略し、ライブラリのパッケージを利用します（[ADR-0014](../adr/0014-interface-mappings.md)） |
+| `addWasiDependency` | `Property<Boolean>` | `false` | プラグインと同じバージョンの `io.github.wasm2kt:runtime-wasi` を `implementation` に追加します。`useLibraryInterfaces` が有効な場合は WASI 0.3 の既定実装と型定義を自動で利用できます。導入背景と仕様は [#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) および [ADR-0022](../adr/0022-wasi03-scope-and-host-configuration.md) を参照してください |
 | `components` | `NamedDomainObjectContainer<Wasm2KtComponent>` | 空 | ビルド対象のコンポーネント定義のコンテナです |
 
 ### `Wasm2KtComponent`（`components.register("<name>")`）のプロパティ・メソッド

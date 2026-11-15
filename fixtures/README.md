@@ -20,8 +20,9 @@ decomposer（`decomposer/regenerate-fixtures.sh`）で共有しています。
 | `async-stream` | async（#16）。callback 形式と stackful 形式の async export、ホストとの間の `stream<u32>` と `future<u32>` | [`src/async-stream`](src/async-stream)（手書きの WAT。`build.sh` で再ビルド） |
 | `async-import` | ホストの `async func` の import（ADR-0019）。async / 同期の lower、async でない export からの呼び出し、callback 形式の export での取り消し | [`src/async-import`](src/async-import)（手書きの WAT。`build.sh` で再ビルド） |
 | `map-type` | Chicory 未対応の型（`map<K, V>`、#71）を使う export。ビルド時の警告（#39）と、使ったときだけ失敗することの確認用 | [`src/map-type`](src/map-type)（手書きの WAT。`build.sh` で再ビルド） |
+| `wasi-03` | Rust 製 WASI 0.3 コンポーネント。カスタム import に加えて `random`、`clocks`、`cli`、`filesystem` の各 WASI 0.3 パッケージと非同期ストリームを利用します | [`src/wasi-03`](src/wasi-03) |
 | `calculator` | WIT のみ（コード生成と InMemory セッションのテスト用）。`calculator.json` は `wasm-tools component wit calculator.wit --json` の出力 | — |
 
 `calculator.json`、`types.json`、`host-res.json`、`roundtrip.json`、`same-name.json` は、`generator` のユニットテストの入力です（`wasm-tools component wit <name>.wit --json` の出力。wasm-tools を使わずに実行できるよう、コミットしています）。`.wit` を変えたら、同じコマンドで作り直してください。
 
-`src/` 以下にソースがあるものは、Rust（`types`、`host-res`、`same-name`）と wasm-tools で再ビルドできます。再ビルドしたら `decomposer/regenerate-fixtures.sh` も実行してください。
+`src/` 以下にソースがあるものは、Rust（`types`、`host-res`、`same-name`、`wasi-03`）と wasm-tools で再ビルドできます。再ビルドしたら `decomposer/regenerate-fixtures.sh` も実行してください。

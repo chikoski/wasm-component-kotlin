@@ -35,6 +35,12 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
     abstract val addRuntimeDependency: Property<Boolean>
 
     /**
+     * Adds the matching `io.github.wasm2kt:runtime-wasi` dependency to `implementation`.
+     * Off by default because configuration time cannot inspect `.wasm` files for WASI imports (ADR-0022).
+     */
+    abstract val addWasiDependency: Property<Boolean>
+
+    /**
      * Fail the build when a component uses features the Chicory backend does not support yet
      * (component intrinsics, types or async). Off by default: the build only warns, and calls that
      * reach those features throw at run time.
@@ -79,6 +85,7 @@ class Wasm2KtPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
         extension.addRuntimeDependency.convention(true)
+        extension.addWasiDependency.convention(false)
         extension.failOnUnsupportedFeatures.convention(false)
         extension.useLibraryInterfaces.convention(true)
 
@@ -98,10 +105,21 @@ class Wasm2KtPlugin : Plugin<Project> {
         project.afterEvaluate {
             // Only projects with a JVM or Android plugin have `implementation`; without one there is
             // nothing to compile against, but the wasm2kt tasks still work on their own.
-            if (extension.addRuntimeDependency.get() && extension.components.isNotEmpty() &&
+            val hasImplementation = extension.components.isNotEmpty() &&
                 project.configurations.findByName("implementation") != null
-            ) {
+            if (extension.addRuntimeDependency.get() && hasImplementation) {
                 project.dependencies.add("implementation", "io.github.wasm2kt:runtime-chicory:${pluginVersion()}")
+            }
+            if (extension.addWasiDependency.get()) {
+                if (!extension.useLibraryInterfaces.get()) {
+                    project.logger.warn(
+                        "wasm2kt: addWasiDependency is enabled while useLibraryInterfaces is false; " +
+                            "WASI 0.3 interfaces will be generated locally instead of sharing runtime-wasi",
+                    )
+                }
+                if (hasImplementation) {
+                    project.dependencies.add("implementation", "io.github.wasm2kt:runtime-wasi:${pluginVersion()}")
+                }
             }
         }
 

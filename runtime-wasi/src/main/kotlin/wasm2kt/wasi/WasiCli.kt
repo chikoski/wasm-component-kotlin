@@ -10,6 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.ImportsFactory
 import wasm2kt.runtime.Linker
 import wasm2kt.wasi.wasi.cli.environment.Environment
 import wasm2kt.wasi.wasi.cli.environment.add
@@ -119,18 +120,38 @@ private fun writeStreamToOutput(
     }
 }
 
-/** Host implementation of `wasi:cli/stdout@0.3.0`. */
+/**
+ * Host implementation of `wasi:cli/stdout@0.3.0`.
+ *
+ * Resolves the target stream from [outputProvider] once per instance and flushes chunks as
+ * they arrive. Does not close caller-provided streams; the host remains responsible for closing
+ * external streams after session completion.
+ */
 class WasiStdout(
-    private val output: OutputStream = NullOutputStream,
+    private val outputProvider: () -> OutputStream = { NullOutputStream },
 ) : Stdout {
+    constructor(output: OutputStream) : this({ output })
+
+    private val output: OutputStream by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { outputProvider() }
+
     override fun writeViaStream(`data`: Flow<ByteArray>): Deferred<WitResult<Unit, ErrorCode>> =
         writeStreamToOutput(output, `data`)
 }
 
-/** Host implementation of `wasi:cli/stderr@0.3.0`. */
+/**
+ * Host implementation of `wasi:cli/stderr@0.3.0`.
+ *
+ * Resolves the target stream from [outputProvider] once per instance and flushes chunks as
+ * they arrive. Does not close caller-provided streams; the host remains responsible for closing
+ * external streams after session completion.
+ */
 class WasiStderr(
-    private val output: OutputStream = NullOutputStream,
+    private val outputProvider: () -> OutputStream = { NullOutputStream },
 ) : Stderr {
+    constructor(output: OutputStream) : this({ output })
+
+    private val output: OutputStream by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { outputProvider() }
+
     override fun writeViaStream(`data`: Flow<ByteArray>): Deferred<WitResult<Unit, ErrorCode>> =
         writeStreamToOutput(output, `data`)
 }
@@ -182,34 +203,60 @@ class Wasi03 private constructor(
     val terminalStderr: TerminalStderr,
     val filesystemTypes: FilesystemTypes,
     val preopens: Preopens,
+    val includeRandom: Boolean = true,
+    val includeClocks: Boolean = true,
+    val includeCli: Boolean = true,
+    val includeFilesystem: Boolean = true,
 ) {
-    /** Registers all configured WASI 0.3 host implementations on [linker]. */
+    /** Registers the enabled WASI 0.3 host implementations on [linker]. */
     fun registerOn(linker: Linker): Linker = linker.apply {
-        addWasiRandom(random = random, insecure = insecureRandom, insecureSeed = insecureSeed)
-        addWasiClocks(monotonicClock = monotonicClock, systemClock = systemClock, timezone = timezone)
-        addWasiCli(
-            environment = environment,
-            exit = exit,
-            stdin = stdin,
-            stdout = stdout,
-            stderr = stderr,
-            terminalInput = terminalInput,
-            terminalOutput = terminalOutput,
-            terminalStdin = terminalStdin,
-            terminalStdout = terminalStdout,
-            terminalStderr = terminalStderr,
-        )
-        addWasiFilesystem(WasiFilesystem(types = filesystemTypes, preopens = preopens))
+        if (includeRandom) {
+            addWasiRandom(random = random, insecure = insecureRandom, insecureSeed = insecureSeed)
+        }
+        if (includeClocks) {
+            addWasiClocks(monotonicClock = monotonicClock, systemClock = systemClock, timezone = timezone)
+        }
+        if (includeCli) {
+            addWasiCli(
+                environment = environment,
+                exit = exit,
+                stdin = stdin,
+                stdout = stdout,
+                stderr = stderr,
+                terminalInput = terminalInput,
+                terminalOutput = terminalOutput,
+                terminalStdin = terminalStdin,
+                terminalStdout = terminalStdout,
+                terminalStderr = terminalStderr,
+            )
+        }
+        if (includeFilesystem) {
+            addWasiFilesystem(WasiFilesystem(types = filesystemTypes, preopens = preopens))
+        }
     }
 
     /** Builder for [Wasi03] host configuration. */
     class Builder {
+        var includeRandom: Boolean = true
+        var includeClocks: Boolean = true
+        var includeCli: Boolean = true
+        var includeFilesystem: Boolean = true
         var environment: List<Pair<String, String>> = emptyList()
         var arguments: List<String> = emptyList()
         var initialCwd: String? = null
         var stdin: () -> InputStream = { ByteArrayInputStream(ByteArray(0)) }
+        private var stdoutProvider: () -> OutputStream = { NullOutputStream }
+        private var stderrProvider: () -> OutputStream = { NullOutputStream }
         var stdout: OutputStream = NullOutputStream
+            set(value) {
+                field = value
+                stdoutProvider = { value }
+            }
         var stderr: OutputStream = NullOutputStream
+            set(value) {
+                field = value
+                stderrProvider = { value }
+            }
         var secureRandom: SecureRandom = SecureRandom()
         var clock: Clock = Clock.systemUTC()
         var zoneSupplier: () -> ZoneId = ZoneId::systemDefault
@@ -225,12 +272,43 @@ class Wasi03 private constructor(
             arguments = values.toList()
         }
 
+        /** Uses [stream] for standard input (suitable for single-session or non-reused linkers). */
         fun stdin(stream: InputStream) {
             stdin = { stream }
         }
 
         fun stdin(bytes: ByteArray) {
             stdin = { ByteArrayInputStream(bytes) }
+        }
+
+        fun stdin(provider: () -> InputStream) {
+            stdin = provider
+        }
+
+        fun stdout(stream: OutputStream) {
+            stdout = stream
+        }
+
+        /**
+         * Supplies a destination [OutputStream] once when building this [Wasi03] configuration
+         * (for example once per session when used inside [wasi03Imports]), overriding any prior
+         * [stdout] stream assignment. Assigning [stdout] afterwards overrides this provider.
+         */
+        fun stdout(provider: () -> OutputStream) {
+            stdoutProvider = provider
+        }
+
+        fun stderr(stream: OutputStream) {
+            stderr = stream
+        }
+
+        /**
+         * Supplies a destination [OutputStream] once when building this [Wasi03] configuration
+         * (for example once per session when used inside [wasi03Imports]), overriding any prior
+         * [stderr] stream assignment. Assigning [stderr] afterwards overrides this provider.
+         */
+        fun stderr(provider: () -> OutputStream) {
+            stderrProvider = provider
         }
 
         fun mounts(configure: WasiMountsBuilder.() -> Unit): Builder = apply {
@@ -249,26 +327,35 @@ class Wasi03 private constructor(
             mounts.add(WasiMount(guestPath, descriptor))
         }
 
-        fun build(): Wasi03 = Wasi03(
-            random = WasiRandom(secureRandom),
-            insecureRandom = WasiInsecureRandom(),
-            insecureSeed = WasiInsecureSeed(),
-            monotonicClock = WasiMonotonicClock(),
-            systemClock = WasiSystemClock(clock),
-            timezone = WasiTimezone(zoneSupplier),
-            environment = WasiEnvironment(environment, arguments, initialCwd),
-            exit = WasiExit(),
-            stdin = WasiStdin(stdin),
-            stdout = WasiStdout(stdout),
-            stderr = WasiStderr(stderr),
-            terminalInput = WasiTerminalInput(),
-            terminalOutput = WasiTerminalOutput(),
-            terminalStdin = WasiTerminalStdin(),
-            terminalStdout = WasiTerminalStdout(),
-            terminalStderr = WasiTerminalStderr(),
-            filesystemTypes = filesystemTypes ?: WasiFilesystemTypes(),
-            preopens = preopens ?: WasiPreopens(mounts.toList()),
-        )
+        fun build(): Wasi03 {
+            require(includeFilesystem || (mounts.isEmpty() && filesystemTypes == null && preopens == null)) {
+                "Cannot configure filesystem mounts or implementations when includeFilesystem is false"
+            }
+            return Wasi03(
+                random = WasiRandom(secureRandom),
+                insecureRandom = WasiInsecureRandom(),
+                insecureSeed = WasiInsecureSeed(),
+                monotonicClock = WasiMonotonicClock(),
+                systemClock = WasiSystemClock(clock),
+                timezone = WasiTimezone(zoneSupplier),
+                environment = WasiEnvironment(environment, arguments, initialCwd),
+                exit = WasiExit(),
+                stdin = WasiStdin(stdin),
+                stdout = WasiStdout(if (includeCli) stdoutProvider() else NullOutputStream),
+                stderr = WasiStderr(if (includeCli) stderrProvider() else NullOutputStream),
+                terminalInput = WasiTerminalInput(),
+                terminalOutput = WasiTerminalOutput(),
+                terminalStdin = WasiTerminalStdin(),
+                terminalStdout = WasiTerminalStdout(),
+                terminalStderr = WasiTerminalStderr(),
+                filesystemTypes = filesystemTypes ?: WasiFilesystemTypes(),
+                preopens = preopens ?: WasiPreopens(mounts.toList()),
+                includeRandom = includeRandom,
+                includeClocks = includeClocks,
+                includeCli = includeCli,
+                includeFilesystem = includeFilesystem,
+            )
+        }
     }
 
     companion object {
@@ -301,6 +388,16 @@ fun Linker.addWasiCli(
     add(terminalStderr)
 }
 
-/** Registers WASI 0.3 core interfaces (`random`, `clocks`, `cli`) on this [Linker]. */
+/** Registers WASI 0.3 core interfaces (`random`, `clocks`, `cli`, `filesystem`) on this [Linker]. */
 fun Linker.addWasi03(configure: Wasi03.Builder.() -> Unit = {}): Linker =
     Wasi03.builder().apply(configure).build().registerOn(this)
+
+/**
+ * Builds a fresh [Linker] with the configured WASI 0.3 host implementations for each session.
+ *
+ * The [configure] block and its configuration checks (such as rejecting mounts when
+ * [Wasi03.Builder.includeFilesystem] is false) run each time [ImportsFactory.newLinker] opens a
+ * session, so stateful streams or hosts created inside it are isolated across sessions.
+ */
+fun wasi03Imports(configure: Wasi03.Builder.() -> Unit = {}): ImportsFactory =
+    ImportsFactory { Linker().addWasi03(configure) }
