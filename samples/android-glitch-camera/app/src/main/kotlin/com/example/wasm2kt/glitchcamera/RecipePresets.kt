@@ -13,34 +13,62 @@ data class RecipePreset(
 )
 
 object RecipePresets {
+    // PNG filters in `listFilters` (`Format.PNG`) that read/write raw pixel values rather than
+    // PNG prediction residuals or filter tags. WebP-only filters (`alpha-glitch`,
+    // `macroblock-glitch`, `lossy-artifact`) never appear in `availablePngFilters()`.
+    internal val PIXEL_DOMAIN_FILTERS = setOf(
+        "pixel-sort",
+        "color-space-glitch",
+        "chromatic-aberration",
+        "channel-swap",
+        "block-scramble",
+        "color-distortion",
+        "invert",
+        "brighten",
+        "darken",
+        "shift-channels",
+        "bitwise",
+    )
+
     val curated: List<RecipePreset> = listOf(
         RecipePreset(
             id = "rgb_drift",
             title = "RGB Drift",
-            subtitle = "Chromatic aberration + scanline shift",
+            subtitle = "Sub filter drift + chromatic shift",
             yaml = """
                 filters:
+                  - type: Regenerate
+                    strategy:
+                      fixed: none
                   - type: ChromaticAberration
                     magnitude: 0.45
                     r_offset: 6
                     g_offset: 0
                     b_offset: -6
+                  - type: Regenerate
+                    strategy:
+                      fixed: sub
                   - type: HorizontalShift
-                    magnitude: 0.12
+                    magnitude: 0.18
+                  - type: Replace
+                    magnitude: 0.01
             """.trimIndent(),
         ),
         RecipePreset(
             id = "paeth_melt",
             title = "Paeth Melt",
-            subtitle = "PNG filter-tag overwrite + byte corruption",
+            subtitle = "Paeth residual corruption + filter-tag melt",
             yaml = """
                 filters:
-                  - type: ChangeFilterType
-                    magnitude: 0.25
+                  - type: Regenerate
+                    strategy:
+                      fixed: paeth
                   - type: Replace
-                    magnitude: 0.04
+                    magnitude: 0.02
                   - type: Transpose
                     magnitude: 0.08
+                  - type: ChangeFilterType
+                    magnitude: 0.15
             """.trimIndent(),
         ),
         RecipePreset(
@@ -49,6 +77,9 @@ object RecipePresets {
             subtitle = "Pixel sorting + channel swap",
             yaml = """
                 filters:
+                  - type: Regenerate
+                    strategy:
+                      fixed: none
                   - type: PixelSort
                     magnitude: 0.25
                     criterion: brightness
@@ -60,12 +91,18 @@ object RecipePresets {
         RecipePreset(
             id = "block_chaos",
             title = "Block Chaos",
-            subtitle = "Block scramble + scanline copy",
+            subtitle = "Block scramble + Sub scanline copy",
             yaml = """
                 filters:
+                  - type: Regenerate
+                    strategy:
+                      fixed: none
                   - type: BlockScramble
                     magnitude: 0.22
                     block_size: 24
+                  - type: Regenerate
+                    strategy:
+                      fixed: sub
                   - type: RandomCopy
                     times: 12
             """.trimIndent(),
@@ -73,38 +110,42 @@ object RecipePresets {
         RecipePreset(
             id = "neon_hsl",
             title = "Neon HSL",
-            subtitle = "HSL hue rotation + bitwise XOR",
+            subtitle = "HSL hue rotation + color distortion",
             yaml = """
                 filters:
+                  - type: Regenerate
+                    strategy:
+                      fixed: none
                   - type: ColorSpaceGlitch
                     magnitude: 0.35
                     hue_shift: 110.0
                     saturation_mult: 1.6
                     lightness_mult: 1.05
-                  - type: Bitwise
-                    magnitude: 0.06
-                    op: xor
-                    value: 128
+                  - type: ColorDistortion
+                    magnitude: 0.20
+                    strength: 28
             """.trimIndent(),
         ),
         RecipePreset(
             id = "re_encode_cascade",
             title = "Cascade",
-            subtitle = "Two-generation PNG filter cascade",
+            subtitle = "Two-generation Sub to Up filter cascade",
             yaml = """
                 filters:
+                  - type: Regenerate
+                    strategy:
+                      fixed: sub
                   - type: Replace
-                    magnitude: 0.03
+                    magnitude: 0.02
+                  - type: HorizontalShift
+                    magnitude: 0.08
                   - type: Regenerate
                     strategy:
                       fixed: up
-                  - type: HorizontalShift
-                    magnitude: 0.10
-                  - type: ChromaticAberration
-                    magnitude: 0.30
-                    r_offset: 4
-                    g_offset: 0
-                    b_offset: -4
+                  - type: Transpose
+                    magnitude: 0.06
+                  - type: ChangeFilterType
+                    magnitude: 0.12
             """.trimIndent(),
         ),
     )
@@ -166,6 +207,11 @@ object RecipePresets {
     fun buildSingleFilterYaml(filter: FilterInfo, params: Map<String, String>): String {
         val sb = StringBuilder()
         sb.append("filters:\n")
+        if (filter.name in PIXEL_DOMAIN_FILTERS) {
+            sb.append("  - type: Regenerate\n")
+            sb.append("    strategy:\n")
+            sb.append("      fixed: none\n")
+        }
         sb.append("  - type: ").append(filter.yamlType).append('\n')
         for (param in filter.params) {
             val rawValue = params[param.name] ?: defaultParamValue(filter, param)

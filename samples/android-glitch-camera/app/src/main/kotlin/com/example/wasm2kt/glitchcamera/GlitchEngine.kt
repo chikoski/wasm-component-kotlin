@@ -32,12 +32,13 @@ enum class PngFilterOption(
 
     companion object {
         /**
-         * The strategy used until one is chosen in the settings. The other strategies cost the
-         * component much more per frame (PNG filtering and unfiltering in `processFrame`): on the
-         * host JVM at 540p, AdaptiveFast and Paeth add 50 to 75 ms to a frame, so the live preview
-         * defaults to None.
+         * The strategy used until one is chosen in the settings. `PAETH` populates PNG prediction
+         * residuals by default so scanline and filter-tag glitches propagate across rows and
+         * columns; recipes requiring raw pixel operations insert `Regenerate` (`fixed: none`)
+         * explicitly. Note that `Paeth` adds ~50-75 ms per 540p frame on the host JVM compared to
+         * `None`, trading throughput for out-of-the-box differential glitch propagation.
          */
-        val DEFAULT: PngFilterOption = NONE
+        val DEFAULT: PngFilterOption = PAETH
     }
 }
 
@@ -151,15 +152,17 @@ class GlitchEngine : AutoCloseable {
         baseRgba: ByteArray,
         recipes: Map<String, String>,
         seed: ULong = 42uL,
+        filterOption: PngFilterOption? = null,
     ): Map<String, ByteArray> = mutex.withLock {
         val expectedBytes = width * height * 4
         if (baseRgba.size != expectedBytes || recipes.isEmpty()) {
             return emptyMap()
         }
+        val resolvedFilterOption = filterOption ?: currentFilterOption
         val encoding = Encoding(
-            colorType = ColorType.RGBA,
+            colorType = ColorType.RGB,
             bitDepth = 8u,
-            filter = PngFilterOption.DEFAULT.strategy,
+            filter = resolvedFilterOption.strategy,
         )
         val created = context(ensureWorldSessionLocked()) {
             LiveSession.fromPixels(width.toUInt(), height.toUInt(), baseRgba, encoding)
@@ -191,7 +194,7 @@ class GlitchEngine : AutoCloseable {
         existing?.close()
         liveSession = null
         val encoding = Encoding(
-            colorType = ColorType.RGBA,
+            colorType = ColorType.RGB,
             bitDepth = 8u,
             filter = currentFilterOption.strategy,
         )

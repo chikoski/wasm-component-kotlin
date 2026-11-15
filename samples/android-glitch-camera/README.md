@@ -27,7 +27,11 @@
 
 プレビューは `PreviewRenderer.kt` が、表示のスレッドから Compose の `AndroidExternalSurface` の `Surface` に `lockHardwareCanvas` で直接描きます。新しいフレームが来ても、Compose の再コンポーズも描画も起きません。またプレビューは別のレイヤーとしてシステムが合成するので、アプリ側の GPU での合成も要りません。Bitmap への書き込みと描画を同じスレッドで順に行うので、プレビュー用の Bitmap は 1 枚を使い回しても、書き込み途中の画素が表示されることはありません（`unlockCanvasAndPost` は Bitmap の転送を終えてから戻ります）。Surface が破棄されるとき（`onDestroyed`）は、描画中のフレームが終わるのを待ってから戻ります。フレームの統計（サイズ、処理時間、FPS）は `GlitchUiState` とは別の `PreviewFrame` の `StateFlow` で渡し、FPS 表示と設定シートの統計だけがこれを読みます。FPS 表示は `derivedStateOf` で表示する文字列だけを読むので、再コンポーズは毎フレームではなく、表示する FPS の整数値が変わったときだけ起きます。カメラ側の画面（`LiveCameraSection`）と設定シートは `GlitchUiState` 全体ではなく表示に使う値だけを受け取るので、フィルターのスライダーを動かしても再コンポーズされません。
 
-`RecipePresets.kt` は複数のフィルタを組み合わせたプリセットレシピと、`listFilters` のメタデータから単一フィルタの YAML レシピを組み立てるヘルパーを提供します。`GlitchCameraScreen.kt` は Jetpack Compose で Pixelfray のモバイル向け縦並びレイアウトとフォルダブル向け2ペインレイアウトを画面幅に応じて切り替え、カメラプレビュー、解像度切り替え、ズーム切り替え、前後カメラ切り替え、プリセットとシングルのサムネイル一覧、単一フィルタのパラメータスライダー、設定ボトムシートでの PNG 予測フィルタ戦略および `SeedMode` 切り替え、静止画保存、MP4 録画ボタンを描画します。PNG 予測フィルタ戦略の既定値は None です（`PngFilterOption.DEFAULT`）。ほかの戦略はコンポーネントの 1 フレームの処理が重く（`reloadPixels` でのフィルター処理と `renderRgba` での復元）、ホスト JVM の 540p で AdaptiveFast と Paeth は None より 1 フレームあたり 50〜75 ms 多くかかります。
+`RecipePresets.kt` は複数のフィルタを組み合わせたプリセットレシピと、`listFilters` のメタデータから単一フィルタの YAML レシピを組み立てるヘルパーを提供します。ピクセル値を直接扱うフィルタの前段には無圧縮の `Regenerate` ステップを挿入し、予測フィルタの差分値へ誤って作用しないようにしています。
+
+`GlitchCameraScreen.kt` は Jetpack Compose で Pixelfray のモバイル向け縦並びレイアウトとフォルダブル向け2ペインレイアウトを画面幅に応じて切り替えます。カメラプレビューや解像度とズームと前後カメラの切り替え、プリセットとシングルのサムネイル一覧、単一フィルタのパラメータスライダー、設定ボトムシートでの PNG 予測フィルタ戦略および `SeedMode` 切り替え、静止画保存と MP4 録画ボタンを描画します。
+
+PNG セッションのエンコード色空間は `ColorType.RGB` です。入力のアルファチャンネルを破棄して RGB の 3 バイトでスキャンラインを構成し、出力時にアルファ値を不透明へ固定するため、スキャンライン単位の破壊で画素が半透明に欠ける現象を防ぎます。PNG 予測フィルタ戦略の既定値 `PngFilterOption.DEFAULT` は Paeth です。差分フィルタを有効にすることでバイト置換やスキャンラインシフトの効果が周囲の画素へ伝播しますが、ホスト JVM の 540p 環境では None に比べて `reloadPixels` と `renderRgba` の処理時間が 1 フレームあたり約 50〜75 ms 増加するトレードオフがあります。
 
 ## WebAssembly コンポーネントの更新手順
 
@@ -62,7 +66,7 @@
   -Pandroid.testInstrumentationRunnerArguments.class=com.example.wasm2kt.glitchcamera.baselineprofile.FramePipelineBenchmark
 ```
 
-合成フレームは、PNG 予測フィルタ戦略の既定値（None）で処理します。合成フレームでも、変換はエンジンの処理と重ねて行います（ただしフレームは捨てず、120 フレームすべてをエンジンに渡します）。`glitch.syntheticRun` はエンジンの段で 120 フレームを処理し終えるまでの時間で、120 をこれで割るとエンジンのスループット（FPS）になります。`glitch.presentedFrames` は実際に表示したフレーム数で、120 より少なければ表示の段のほうが遅いことを示します。
+合成フレームは、PNG 予測フィルタ戦略の既定値である Paeth で処理します。そのため、従来の None 既定で取得した計測値とは前提条件が異なります。合成フレームでも、変換はエンジンの処理と重ねて行いますが、フレームは捨てずに 120 フレームすべてをエンジンに渡します。`glitch.syntheticRun` はエンジンの段で 120 フレームを処理し終えるまでの時間です。120 をこの時間で割るとエンジンのスループットとして FPS が求まります。`glitch.presentedFrames` は実際に表示したフレーム数であり、120 より少なければ表示の段のほうが遅いことを示します。
 
 ## ベースラインプロファイルの生成
 
