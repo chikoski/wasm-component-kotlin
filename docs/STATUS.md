@@ -112,7 +112,6 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 | [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
-| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。architecture.md と gradle-plugin.md へ未分割の `call_dispatch_0` と 64 KB 上限および `-XX:-DontCompileHugeMethods` を明記した。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは継続課題として維持 |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。`Transcoder` から `CharsetDecoder` と中間 `String` の確保を削除し、`echo-name` と `echo-bytes` の時間差に関わる要因を [performance.md](explanation/performance.md) へ追記した。Android ART 上でのメソッドトレースと `echoName5_aot_dsl` の再計測が残る |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
@@ -137,7 +136,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、`Transcoder` の文字列検証と UTF-16 から UTF-8 への変換から `CharsetDecoder` と中間 `String` の確保を取り除きました。`echo-name` が `echo-bytes` より時間を要する要因も [performance.md](explanation/performance.md) へ追記しています。Android ART 上でのメソッドトレースと再計測は未実施のため、残件を P2 に残しています。
 
-[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは P2 で継続して管理します。
+[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。これにより [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) と [ADR-0021](adr/0021-split-large-chicory-methods.md) の実装とあわせて #57 の全項目を完了しました。
 
 [#95](https://github.com/chikoski/wasm-component-kotlin/issues/95) では、PR テンプレートを `.github/pull_request_template.md` に追加し、`CONTRIBUTING.md` から参照しました。
 
