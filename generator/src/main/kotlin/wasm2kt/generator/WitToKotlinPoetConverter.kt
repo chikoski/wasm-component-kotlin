@@ -396,12 +396,17 @@ class WitToKotlinPoetConverter(
         for (item in world.imports.values) {
             if (item !is WitWorldItem.InterfaceRef) continue
             val contract = hostContract(item.id) ?: continue
-            importParams += ImportParam(importParameterName(item.id), contract.className, contract.addFunction)
+            importParams += ImportParam(
+                importParameterName(item.id),
+                contract.className,
+                contract.addFunction,
+                isMapped = item.id in mappedPackages,
+            )
             requiredKeys += contract.keys
         }
         val worldContract = worldHostContract(world, worldImportsClassName, fileBuilder)
         if (worldContract != null) {
-            importParams += ImportParam("world", worldContract.className, worldContract.addFunction)
+            importParams += ImportParam("world", worldContract.className, worldContract.addFunction, isMapped = false)
             requiredKeys += worldContract.keys
         }
         val hasImports = importParams.isNotEmpty()
@@ -409,7 +414,12 @@ class WitToKotlinPoetConverter(
         require(duplicateParams.isEmpty()) {
             "World '${world.name}' has imports that map to the same imports(...) parameter: ${duplicateParams.joinToString()}"
         }
-        if (hasImports) worldObjBuilder.addFunction(buildImportsFunction(importParams, fileBuilder))
+        if (hasImports) {
+            worldObjBuilder.addFunction(buildImportsFunction(importParams, fileBuilder))
+            if (importParams.any { it.isMapped }) {
+                worldObjBuilder.addFunction(buildBaseImportsFunction(importParams))
+            }
+        }
 
         val linkFunctionName = "link${worldObjectName}Imports"
         val requiredKeysName = "${worldObjectName.replaceFirstChar { it.lowercaseChar() }}ImportKeys"
@@ -758,7 +768,12 @@ class WitToKotlinPoetConverter(
     /** What the host implements for one imported interface (or for the world's own imports). */
     private class HostContract(val className: ClassName, val addFunction: MemberName, val keys: List<String>)
 
-    private class ImportParam(val name: String, val contractClass: ClassName, val addFunction: MemberName)
+    private class ImportParam(
+        val name: String,
+        val contractClass: ClassName,
+        val addFunction: MemberName,
+        val isMapped: Boolean = false,
+    )
 
     /**
      * The Kotlin interface the host implements for an imported interface, and `fun Linker.add(impl)`
@@ -847,6 +862,9 @@ class WitToKotlinPoetConverter(
             .addCode(body)
             .build()
 
+    private fun importAlias(param: ImportParam): String =
+        "add" + param.name.replaceFirstChar { it.uppercaseChar() }
+
     /**
      * `fun imports(wasiHttpTypes: () -> Types, ...)`: every import is a required parameter, so a
      * missing implementation is a compile error. Each factory runs once per session.
@@ -864,11 +882,54 @@ class WitToKotlinPoetConverter(
         for (param in params) {
             builder.addParameter(param.name, LambdaTypeName.get(returnType = param.contractClass))
             // Every interface's registration is named `add`; import each under its own alias.
-            val alias = "add" + param.name.replaceFirstChar { it.uppercaseChar() }
+            val alias = importAlias(param)
             fileBuilder.addAliasedImport(param.addFunction, alias)
             body.addStatement("%N(%N())", alias, param.name)
         }
         body.endControlFlow().endControlFlow()
+        return builder.addCode(body.build()).build()
+    }
+
+    /**
+     * Overload generated when at least one interface is mapped to an existing library (ADR-0022):
+     * seeds each session from [baseParamName] (`wasi03Imports { ... }` etc.), keeps unmapped local
+     * imports required at compile time, and makes mapped library imports optional overrides.
+     */
+    private fun buildBaseImportsFunction(params: List<ImportParam>): FunSpec {
+        var baseParamName = "base"
+        if (params.any { it.name == baseParamName }) baseParamName = "baseImports"
+        while (params.any { it.name == baseParamName }) baseParamName += "_"
+        val builder = FunSpec.builder("imports")
+            .addKdoc(
+                "Host implementations seeded from [%N] (such as `wasi03Imports { ... }`). Mapped library " +
+                    "interfaces default to `null` and fall back to [%N]; any non-null argument overrides it. " +
+                    "Unmapped imports remain required at compile time.\n",
+                baseParamName,
+                baseParamName,
+            )
+            .addParameter(baseParamName, importsFactoryClass)
+            .returns(importsFactoryClass)
+        val body = CodeBlock.builder()
+            .beginControlFlow("return %T", importsFactoryClass)
+            .beginControlFlow("val __overrides = %T().apply", linkerClass)
+        for (param in params) {
+            val lambdaType = LambdaTypeName.get(returnType = param.contractClass)
+            val alias = importAlias(param)
+            if (param.isMapped) {
+                builder.addParameter(
+                    ParameterSpec.builder(param.name, lambdaType.copy(nullable = true))
+                        .defaultValue("null")
+                        .build(),
+                )
+                body.addStatement("%N?.let { __factory -> %N(__factory()) }", param.name, alias)
+            } else {
+                builder.addParameter(param.name, lambdaType)
+                body.addStatement("%N(%N())", alias, param.name)
+            }
+        }
+        body.endControlFlow()
+        body.addStatement("%T().addAll(%N.newLinker()).addAll(__overrides, overwrite = true)", linkerClass, baseParamName)
+        body.endControlFlow()
         return builder.addCode(body.build()).build()
     }
 

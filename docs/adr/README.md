@@ -29,3 +29,4 @@
 | [0019](0019-suspending-async-boundary.md) | async の境界をコルーチンにし、ホストの async な import も suspend fun にする | 承認 |
 | [0020](0020-wasi03-filesystem-sandboxing-and-mounts.md) | WASI 0.3 ファイルシステムのサンドボックス方針と宣言的マウント設定 | 承認 |
 | [0021](0021-split-large-chicory-methods.md) | Chicory が生成する大きなメソッドをバイトコード単位で分割する | 承認 |
+| [0022](0022-wasi03-scope-and-host-configuration.md) | WASI 0.3 の対応範囲とホスト側設定 API の設計 | 承認 |

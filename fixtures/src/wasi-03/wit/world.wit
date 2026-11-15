@@ -1,0 +1,21 @@
+package example:wasi-app;
+
+interface audit {
+  record-step: func(tag: string);
+}
+
+world wasi-app {
+  import audit;
+  import wasi:random/random@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/exit@0.3.0;
+  import wasi:cli/stdin@0.3.0;
+  import wasi:cli/stdout@0.3.0;
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+
+  export run-summary: async func() -> string;
+  export exit-with: func(code: u8);
+}

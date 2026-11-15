@@ -320,6 +320,152 @@ class Wasm2KtPluginFunctionalTest {
         assertTrue("exceed ART's compiler instruction limit" !in fromCache.output, fromCache.output)
         assertTrue("exceed HotSpot's 8,000-byte JIT limit" in fromCache.output, fromCache.output)
     }
+
+    @Test
+    fun `addWasiDependency wires runtime-wasi and runs WASI 0_3 component`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("wasi-03.wasm"), dir.resolve("wasi-03.wasm").toPath())
+        val workDir = dir.resolve("work").apply { mkdirs() }
+        workDir.resolve("input.txt").writeText("gradle wasi")
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "wasi-consumer"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+                application
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                addWasiDependency.set(true)
+                components {
+                    register("wasi-app") {
+                        source.set(file("wasi-03.wasm"))
+                        packageName.set("com.example.wasiapp")
+                    }
+                }
+            }
+            application { mainClass.set("com.example.MainKt") }
+            """.trimIndent(),
+        )
+        val src = dir.resolve("src/main/kotlin/com/example").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            package com.example
+
+            import com.example.wasiapp.WasiAppComponent
+            import com.example.wasiapp.example.wasi_app.audit.Audit
+            import com.example.wasiapp.imports
+            import com.example.wasiapp.runSummary
+            import com.example.wasiapp.withSession
+            import kotlinx.coroutines.runBlocking
+            import wasm2kt.wasi.wasi03Imports
+            import java.io.ByteArrayOutputStream
+            import java.nio.file.Paths
+
+            fun main() {
+                val stdoutBuf = ByteArrayOutputStream()
+                val steps = mutableListOf<String>()
+                val wasiBase = wasi03Imports {
+                    args("wasi-app", "--from-gradle")
+                    env("WASI_PLUGIN" to "enabled")
+                    stdin("hi-plugin".encodeToByteArray())
+                    stdout = stdoutBuf
+                    mounts {
+                        readWrite("/work", Paths.get("${workDir.absolutePath.replace("\\", "\\\\")}"))
+                    }
+                }
+                val appImports = imports(
+                    base = wasiBase,
+                    exampleWasiAppAudit = {
+                        object : Audit {
+                            override fun recordStep(tag: String) {
+                                steps += tag
+                            }
+                        }
+                    },
+                )
+                val summary = withSession(WasiAppComponent, appImports) {
+                    runBlocking { runSummary() }
+                }
+                println("SUMMARY=" + summary)
+                println("STDOUT=" + stdoutBuf.toString(Charsets.UTF_8))
+                println("STEPS=" + steps.joinToString(","))
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "run", "-q").build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":run")?.outcome)
+        val generatedPkg = dir.resolve("build/wasm2kt/wasi-app/kotlin/com/example/wasiapp")
+        assertTrue(generatedPkg.resolve("RootWorld.kt").isFile, generatedPkg.list().orEmpty().joinToString())
+        assertTrue(!generatedPkg.resolve("wasi").exists(), "WASI interfaces must come from runtime-wasi")
+        assertTrue("fs=[mount=/work,read_ok=true,write_ok=true,data=gradle wasi!]" in result.output, result.output)
+        assertTrue("STDOUT=out:hi-plugin" in result.output, result.output)
+        assertTrue("STEPS=start,done" in result.output, result.output)
+        assertEquals("gradle wasi!", workDir.resolve("output.txt").readText())
+    }
+
+    @Test
+    fun `addWasiDependency is independent of addRuntimeDependency and warns when useLibraryInterfaces is false`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("wasi-03.wasm"), dir.resolve("wasi-03.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "wasi-flags"
+            pluginManagement {
+                repositories { gradlePluginPortal(); mavenCentral() }
+                plugins { kotlin("jvm") version "$kotlinVersion" }
+            }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                kotlin("jvm")
+                id("io.github.wasm2kt")
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                addRuntimeDependency.set(false)
+                addWasiDependency.set(true)
+                useLibraryInterfaces.set(false)
+                components {
+                    register("app") {
+                        source.set(file("wasi-03.wasm"))
+                        packageName.set("com.example.wasiapp")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val depsResult = runner(dir, "dependencies", "--configuration", "implementation").build()
+        assertEquals(TaskOutcome.SUCCESS, depsResult.task(":dependencies")?.outcome)
+        assertTrue(
+            "wasm2kt: addWasiDependency is enabled while useLibraryInterfaces is false" in depsResult.output,
+            depsResult.output,
+        )
+        assertTrue("io.github.wasm2kt:runtime-wasi:" in depsResult.output, depsResult.output)
+        assertTrue("io.github.wasm2kt:runtime-chicory:" !in depsResult.output, depsResult.output)
+
+        val genResult = runner(dir, "wasm2ktGenerateApp").build()
+        assertEquals(TaskOutcome.SUCCESS, genResult.task(":wasm2ktGenerateApp")?.outcome)
+        val generatedPkg = dir.resolve("build/wasm2kt/app/kotlin/com/example/wasiapp")
+        assertTrue(generatedPkg.resolve("RootWorld.kt").isFile, generatedPkg.list().orEmpty().joinToString())
+        assertTrue(generatedPkg.resolve("wasi").isDirectory, generatedPkg.list().orEmpty().joinToString())
+    }
 }
 
 /**

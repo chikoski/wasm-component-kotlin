@@ -153,3 +153,62 @@ wasm2kt {
 ```
 
 > **制約**: `with` で共有できるのは **import した interface のみ**です。export した interface の型は world ごとに生成されます。
+
+## 5. WASI 0.3 のホスト実装を利用する
+
+Chicory バックエンドでは `runtime-wasi` モジュールが WASI 0.3 の標準ホスト実装を提供します。対象パッケージは次の 4 つです。
+
+* `wasi:random`
+* `wasi:clocks`
+* `wasi:cli`
+* `wasi:filesystem`
+
+`wasi:random` は暗号論的および非暗号論的乱数を生成します。`wasi:clocks` は単調時計とシステム時計、および非同期待機を提供します。`wasi:cli` は環境変数、引数、終了コード、標準入出力の非同期ストリームを提供します。`wasi:filesystem` はホストディレクトリへの能力ベースのサンドボックスマウントを提供します。設計方針の詳細は [ADR-0020](../adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) と [ADR-0022](../adr/0022-wasi03-scope-and-host-configuration.md) を参照してください。
+
+### Gradle プラグインでの設定
+
+Gradle プラグインで `addWasiDependency` を有効にすると、プラグインと同じバージョンの `runtime-wasi` が依存関係に追加されます。`useLibraryInterfaces` が有効であれば、`runtime-wasi` に同梱されたマニフェストが検出され、WASI 0.3 の interface 型生成は自動で省略されます。
+
+```kotlin
+wasm2kt {
+    addWasiDependency.set(true)
+    components {
+        register("wasi-app") {
+            source.set(file("src/main/wasm/app.wasm"))
+            packageName.set("com.example.app")
+        }
+    }
+}
+```
+
+### `wasi03Imports` と生成済み `imports` の合成
+
+`wasi03Imports` 関数は、セッションごとに独立した WASI 0.3 の環境を構築する `ImportsFactory` を返します。設定ブロックは `withSession` や `openSession` で新しいセッションを開始するたびに再評価されます。そのため、`stdin` や `stdout` にプロバイダ形式を指定すればセッション単位で新しいストリームを割り当てられます。
+
+`wasi03Imports` の出力を生成済みワールドの `imports` 関数の `base` 引数に渡すと、WASI 以外のアプリ固有の import だけを追加で指定できます。マッピング済みの WASI 引数に個別ファクトリを渡した場合は `base` の実装を差し替えられます。`ImportsFactory` 同士を `+` 演算子や `Linker.addAll` で組み合わせることもできます。
+
+```kotlin
+val sessionOutputs = mutableListOf<ByteArrayOutputStream>()
+
+val wasiBase = wasi03Imports {
+    args("app", "--verbose")
+    env("MODE" to "prod")
+    stdin { ByteArrayInputStream("hello".encodeToByteArray()) }
+    stdout { ByteArrayOutputStream().also { sessionOutputs += it } }
+    mounts {
+        readOnly("/assets", Paths.get("assets"))
+        readWrite("/work", Paths.get("work"))
+    }
+}
+
+val appImports = imports(
+    base = wasiBase,
+    exampleWasiAppAudit = { MyAuditImpl() },
+)
+
+withSession(AppComponent, appImports) {
+    runSummary()
+}
+```
+
+公開する WASI パッケージ群を制限したい場合は `includeRandom`、`includeClocks`、`includeCli`、`includeFilesystem` フラグを `false` に設定します。既定値はすべて `true` です。`includeFilesystem` を `false` にした場合は `mounts` などを同時に設定できません。`wasi:http` と `wasi:sockets` は P2 で追跡しています。

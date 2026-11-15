@@ -720,4 +720,226 @@ class Wasi03E2ETest {
         assertEquals("hello fs!".length, writtenLen)
         assertEquals("hello fs!", Files.readString(workDir.resolve("output.txt")))
     }
+
+    @Test
+    fun `Rust WASI 0_3 fixture runs with wasi03Imports, base overload, and package toggles`(@TempDir tempDir: Path) {
+        val wasmFile = Paths.get("fixtures/wasi-03.wasm")
+        assertTrue(Files.isRegularFile(wasmFile), "fixtures/wasi-03.wasm must exist")
+
+        val committedDecomposed = Paths.get("runtime-chicory/src/test/resources/components/wasi-03")
+        assertTrue(
+            Files.isRegularFile(committedDecomposed.resolve("plan.json")),
+            "runtime-chicory/src/test/resources/components/wasi-03/plan.json must be committed (run decomposer/regenerate-fixtures.sh)",
+        )
+
+        val decomposedDir = tempDir.resolve("decomposed")
+        val genDir = tempDir.resolve("gen")
+        val workDir = Files.createDirectories(tempDir.resolve("work"))
+        Files.writeString(workDir.resolve("input.txt"), "hello fixture")
+
+        Decomposer.decompose(wasmFile, decomposedDir)
+        val witJson = Decomposer.witJson(decomposedDir)
+        val manifestUrl = requireNotNull(javaClass.getResource("/META-INF/wasm2kt/interfaces/wasm2kt.wasi.json"))
+        val wasiLibrary = when (manifestUrl.protocol) {
+            "jar" -> Paths.get(java.net.URI(manifestUrl.path.substringBefore("!")))
+            "file" -> Paths.get(manifestUrl.toURI()).parent.parent.parent.parent
+            else -> error("Unsupported manifest URI: $manifestUrl")
+        }
+        val pkg = "com.example.wasifixture"
+        GenerateCommand().parse(listOf("--from-json", witJson.toString(), "--library", wasiLibrary.toString(), "-o", genDir.toString(), "-p", pkg))
+
+        val pkgDir = genDir.resolve(pkg.replace('.', '/'))
+        assertTrue(!Files.exists(pkgDir.resolve("wasi")), "WASI interfaces should map to runtime-wasi instead of regenerating")
+
+        val harnessPath = pkgDir.resolve("FixtureHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package $pkg
+
+            import com.example.wasifixture.example.wasi_app.audit.Audit
+            import kotlinx.coroutines.runBlocking
+            import wasm2kt.runtime.ComponentBackendFactory
+            import wasm2kt.wasi.WasiExitException
+            import wasm2kt.wasi.wasi.random.random.Random
+            import wasm2kt.wasi.wasi03Imports
+            import java.io.ByteArrayInputStream
+            import java.io.ByteArrayOutputStream
+            import java.nio.file.Path
+            import java.util.concurrent.atomic.AtomicInteger
+
+            data class FixtureRunResult(
+                val summary1: String,
+                val stdout1: String,
+                val summary2: String,
+                val stdout2: String,
+                val auditInstancesCreated: Int,
+                val allSteps: List<String>,
+                val overriddenSummary: String,
+                val missingRandomError: String,
+                val toggledSummary: String,
+                val exitCode: Int,
+            )
+
+            fun exerciseFixture(component: ComponentBackendFactory, workDir: Path): FixtureRunResult {
+                val auditInstances = AtomicInteger(0)
+                val recordedSteps = mutableListOf<String>()
+                var callIndex = 0
+                val stdoutBuffers = mutableListOf<ByteArrayOutputStream>()
+
+                val baseWasi = wasi03Imports {
+                    args("wasi-app", "--mode=test")
+                    env("WASI_ENV" to "ok")
+                    stdin {
+                        callIndex += 1
+                        ByteArrayInputStream("session-${'$'}callIndex".encodeToByteArray())
+                    }
+                    stdout {
+                        ByteArrayOutputStream().also { stdoutBuffers += it }
+                    }
+                    mounts {
+                        readWrite("/work", workDir)
+                    }
+                }
+
+                val auditFactory: () -> Audit = {
+                    val instanceId = auditInstances.incrementAndGet()
+                    object : Audit {
+                        override fun recordStep(tag: String) {
+                            recordedSteps += "${'$'}instanceId:${'$'}tag"
+                        }
+                    }
+                }
+
+                val appImports = imports(
+                    base = baseWasi,
+                    exampleWasiAppAudit = auditFactory,
+                )
+
+                val summary1 = withSession(component, appImports) {
+                    runBlocking { runSummary() }
+                }
+                val summary2 = withSession(component, appImports) {
+                    runBlocking { runSummary() }
+                }
+
+                val fixedRandom = object : Random {
+                    override fun getRandomBytes(maxLen: ULong): ByteArray = ByteArray(maxLen.toInt()) { 7 }
+                    override fun getRandomU64(): ULong = 777777uL
+                }
+
+                val overriddenImports = imports(
+                    base = wasi03Imports {
+                        args("override")
+                        stdin("ov".encodeToByteArray())
+                        stdout = ByteArrayOutputStream()
+                    },
+                    wasiRandomRandom = { fixedRandom },
+                    exampleWasiAppAudit = auditFactory,
+                )
+                val overriddenSummary = withSession(component, overriddenImports) {
+                    runBlocking { runSummary() }
+                }
+
+                val noRandomImports = imports(
+                    base = wasi03Imports {
+                        includeRandom = false
+                    },
+                    exampleWasiAppAudit = auditFactory,
+                )
+                val missingRandomError = try {
+                    withSession(component, noRandomImports) {
+                        runBlocking { runSummary() }
+                    }
+                    error("Expected missing wasi:random/random import failure")
+                } catch (e: IllegalArgumentException) {
+                    e.message.orEmpty()
+                }
+
+                val suppliedRandomImports = imports(
+                    base = wasi03Imports {
+                        includeRandom = false
+                        stdin("sup".encodeToByteArray())
+                        stdout = ByteArrayOutputStream()
+                    },
+                    wasiRandomRandom = { fixedRandom },
+                    exampleWasiAppAudit = auditFactory,
+                )
+                val toggledSummary = withSession(component, suppliedRandomImports) {
+                    runBlocking { runSummary() }
+                }
+
+                val exitCode = try {
+                    withSession(component, appImports) {
+                        exitWith(9u)
+                    }
+                    error("Expected WasiExitException")
+                } catch (e: WasiExitException) {
+                    e.statusCode
+                }
+
+                return FixtureRunResult(
+                    summary1 = summary1,
+                    stdout1 = stdoutBuffers[0].toString(Charsets.UTF_8),
+                    summary2 = summary2,
+                    stdout2 = stdoutBuffers[1].toString(Charsets.UTF_8),
+                    auditInstancesCreated = auditInstances.get(),
+                    allSteps = recordedSteps.toList(),
+                    overriddenSummary = overriddenSummary,
+                    missingRandomError = missingRandomError,
+                    toggledSummary = toggledSummary,
+                    exitCode = exitCode,
+                )
+            }
+            """.trimIndent(),
+        )
+
+        val classesOut = tempDir.resolve("classes")
+        Files.createDirectories(classesOut)
+        val sources = Files.walk(genDir).use { s -> s.filter { it.toString().endsWith(".kt") }.map { it.toString() }.toList() }
+        val exitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters", "-jvm-target", "21", "-no-stdlib",
+            "-classpath", System.getProperty("java.class.path"),
+            "-d", classesOut.toString(),
+            *sources.toTypedArray(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exitCode, "Generated WASI fixture bindings + harness must compile")
+
+        val backendFactory = ChicoryComponent.fromDirectory(decomposedDir)
+        val loader = java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader)
+        val harnessClass = loader.loadClass("$pkg.FixtureHarnessKt")
+        val runMethod = harnessClass.getDeclaredMethod("exerciseFixture", ComponentBackendFactory::class.java, Path::class.java)
+        val result = runMethod.invoke(null, backendFactory, workDir)
+
+        fun prop(name: String): Any? = result.javaClass.getMethod("get${name.replaceFirstChar { it.uppercase() }}").invoke(result)
+
+        val summary1 = prop("summary1") as String
+        val summary2 = prop("summary2") as String
+        assertTrue("mono=true;wall=true" in summary1, summary1)
+        assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-1;" in summary1, summary1)
+        assertTrue("fs=[mount=/work,read_ok=true,write_ok=true,data=hello fixture!]" in summary1, summary1)
+        assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-2;" in summary2, summary2)
+        assertEquals("out:session-1", prop("stdout1"))
+        assertEquals("out:session-2", prop("stdout2"))
+        assertEquals("hello fixture!", Files.readString(workDir.resolve("output.txt")))
+
+        assertEquals(6, prop("auditInstancesCreated"))
+        assertEquals(
+            listOf("1:start", "1:done", "2:start", "2:done", "3:start", "3:done", "5:start", "5:done"),
+            prop("allSteps"),
+        )
+
+        val overriddenSummary = prop("overriddenSummary") as String
+        assertTrue(overriddenSummary.startsWith("rand=777777;"), overriddenSummary)
+        assertTrue("fs=[none]" in overriddenSummary, overriddenSummary)
+
+        val missingRandomError = prop("missingRandomError") as String
+        assertTrue("wasi:random/random@0.3.0" in missingRandomError, missingRandomError)
+
+        val toggledSummary = prop("toggledSummary") as String
+        assertTrue(toggledSummary.startsWith("rand=777777;"), toggledSummary)
+
+        assertEquals(9, prop("exitCode"))
+    }
 }

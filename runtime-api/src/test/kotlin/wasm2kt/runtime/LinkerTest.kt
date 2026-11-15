@@ -54,4 +54,82 @@ class LinkerTest {
         assertTrue("x:y/z (h)" in message, message)
         assertTrue("world (root-fn)" in message, message)
     }
+
+    @Test
+    fun `addAll copies handlers without overwrite and stays atomic on collision`() {
+        val base = Linker().apply {
+            define("a:b/c#first", stringResult("1"))
+        }
+        val extraAsync = Linker().apply {
+            defineAsync("a:b/c#async") { _, results -> results.string("async-ok") }
+        }
+        base.addAll(extraAsync)
+        assertTrue(base.asyncHostFunction("a:b/c#async") != null)
+        assertEquals("async-ok", base.call("a:b/c#async", WitWriter()).string())
+
+        val extra = Linker().apply {
+            define("a:b/c#second", stringResult("2"))
+            define("a:b/c#first", stringResult("collision"))
+        }
+
+        assertThrows<IllegalArgumentException> { base.addAll(extra) }
+        assertNull(base.hostFunction("a:b/c#second"), "collision must leave receiver unchanged")
+        assertEquals("1", base.call("a:b/c#first", WitWriter()).string())
+    }
+
+    @Test
+    fun `addAll with overwrite replaces sync handlers and clears stale async handlers`() {
+        val target = Linker().apply {
+            defineAsync("a:b/c#op") { _, results -> results.string("old-async") }
+        }
+        val syncOverride = Linker().apply {
+            define("a:b/c#op", stringResult("new-sync"))
+        }
+
+        target.addAll(syncOverride, overwrite = true)
+        assertEquals("new-sync", target.call("a:b/c#op", WitWriter()).string())
+        assertNull(target.asyncHostFunction("a:b/c#op"), "stale async handler must be removed")
+
+        val asyncOverride = Linker().apply {
+            defineAsync("a:b/c#op") { _, results -> results.string("new-async") }
+        }
+        target.addAll(asyncOverride, overwrite = true)
+        assertTrue(target.asyncHostFunction("a:b/c#op") != null)
+        assertEquals("new-async", target.call("a:b/c#op", WitWriter()).string())
+    }
+
+    @Test
+    fun `addAll on self rejects non-empty without overwrite and no-ops with overwrite`() {
+        val linker = Linker().apply { define("a:b/c#f", stringResult("v")) }
+        assertThrows<IllegalArgumentException> { linker.addAll(linker) }
+        linker.addAll(linker, overwrite = true)
+        assertEquals("v", linker.call("a:b/c#f", WitWriter()).string())
+    }
+
+    @Test
+    fun `ImportsFactory plus composes without mutating Linker operands and rejects conflicts`() {
+        val sharedLinker = Linker().apply { define("a:b/c#a", stringResult("from-linker")) }
+        val extraFactory = ImportsFactory {
+            Linker().apply {
+                define("a:b/c#b", stringResult("from-factory"))
+                defineAsync("a:b/c#async-b") { _, results -> results.string("async-from-factory") }
+            }
+        }
+        val combined = sharedLinker + extraFactory
+
+        val session1 = combined.newLinker()
+        val session2 = combined.newLinker()
+        assertTrue(session1 !== session2 && session1 !== sharedLinker)
+        assertNull(sharedLinker.hostFunction("a:b/c#b"), "plus must not mutate operand Linker")
+        assertEquals("from-linker", session1.call("a:b/c#a", WitWriter()).string())
+        assertEquals("from-factory", session1.call("a:b/c#b", WitWriter()).string())
+        assertTrue(session1.asyncHostFunction("a:b/c#async-b") != null)
+        assertEquals("async-from-factory", session1.call("a:b/c#async-b", WitWriter()).string())
+
+        assertEquals("from-linker", (ImportsFactory.EMPTY + sharedLinker).newLinker().call("a:b/c#a", WitWriter()).string())
+        assertEquals("from-linker", (sharedLinker + ImportsFactory.EMPTY).newLinker().call("a:b/c#a", WitWriter()).string())
+
+        val colliding = ImportsFactory { Linker().apply { define("a:b/c#a", stringResult("dup")) } }
+        assertThrows<IllegalArgumentException> { (sharedLinker + colliding).newLinker() }
+    }
 }

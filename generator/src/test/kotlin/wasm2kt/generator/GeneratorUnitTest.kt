@@ -136,4 +136,98 @@ class GeneratorUnitTest {
         assertTrue("ComponentBackend.current().newFuture(" in stdout, stdout)
         assertTrue("wasi:cli/types@0.3.0" in converter.manifest!!.interfaces)
     }
+
+    @Test
+    fun `mapped worlds keep primary imports required and add base ImportsFactory overload`() {
+        val unmappedWorld = generate("host-res").getValue("HostResWorld")
+        assertFalse("base: ImportsFactory" in unmappedWorld, unmappedWorld)
+
+        val resolve = resolve("host-res")
+        val mappedFiles = WitToKotlinPoetConverter(
+            resolve,
+            "com.example.gen",
+            interfaceMappings = mapOf("example:host-res/store@0.1.0" to "com.example.hostlib"),
+        ).generate().associate { it.name to it.content }
+        val world = mappedFiles.getValue("HostResWorld")
+
+        // Primary overload stays non-nullable (ADR-0014 compatibility).
+        assertTrue(
+            Regex("""fun imports\(exampleHostResStore: \(\) -> Store, world: \(\) -> Imports\): ImportsFactory""").containsMatchIn(world),
+            world,
+        )
+        // Secondary base overload keeps unmapped `world` required and makes mapped `store` optional.
+        assertTrue(
+            Regex("""fun imports\(\s*base: ImportsFactory,\s*exampleHostResStore: \(\(\) -> Store\)\? = null,\s*world: \(\) -> Imports,?\s*\): ImportsFactory""").containsMatchIn(world),
+            world,
+        )
+        assertTrue("Linker().addAll(base.newLinker()).addAll(__overrides, overwrite = true)" in world, world)
+    }
+
+    @Test
+    fun `base ImportsFactory overload avoids parameter collision when an import is named base`() {
+        val wit = WitResolve(
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "app",
+                    imports = mapOf(
+                        "example:lib/api@0.1.0" to wasm2kt.ast.WitWorldItem.InterfaceRef(0),
+                        "base" to wasm2kt.ast.WitWorldItem.InterfaceRef(1),
+                    ),
+                ),
+            ),
+            interfaces = listOf(
+                wasm2kt.ast.WitInterface(
+                    name = "api",
+                    `package` = 0,
+                    functions = mapOf(
+                        "ping" to wasm2kt.ast.WitFunction(name = "ping", kind = wasm2kt.ast.WitFunctionKind.Freestanding()),
+                    ),
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = null,
+                    `package` = null,
+                    functions = mapOf(
+                        "log" to wasm2kt.ast.WitFunction(name = "log", kind = wasm2kt.ast.WitFunctionKind.Freestanding()),
+                    ),
+                ),
+            ),
+            packages = listOf(wasm2kt.ast.WitPackage(name = "example:lib@0.1.0")),
+        )
+        val manifest = InterfaceManifest("com.example.lib", mapOf("example:lib/api@0.1.0" to "com.example.lib.api"))
+        val world = WitToKotlinPoetConverter(wit, "com.example.app", libraryManifests = listOf(manifest))
+            .generate()
+            .first { it.name == "AppWorld" }
+            .content
+        assertTrue(
+            Regex("""fun imports\(\s*baseImports: ImportsFactory,\s*exampleLibApi: \(\(\) -> Api\)\? = null,\s*base: \(\) -> Base,?\s*\): ImportsFactory""").containsMatchIn(world),
+            world,
+        )
+        assertTrue("Linker().addAll(baseImports.newLinker()).addAll(__overrides, overwrite = true)" in world, world)
+
+        val doubleCollisionWit = wit.copy(
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "app",
+                    imports = mapOf(
+                        "example:lib/api@0.1.0" to wasm2kt.ast.WitWorldItem.InterfaceRef(0),
+                        "base" to wasm2kt.ast.WitWorldItem.InterfaceRef(1),
+                        "base-imports" to wasm2kt.ast.WitWorldItem.InterfaceRef(2),
+                    ),
+                ),
+            ),
+            interfaces = wit.interfaces + wasm2kt.ast.WitInterface(
+                name = null,
+                `package` = null,
+                functions = mapOf(
+                    "trace" to wasm2kt.ast.WitFunction(name = "trace", kind = wasm2kt.ast.WitFunctionKind.Freestanding()),
+                ),
+            ),
+        )
+        val doubleCollisionWorld = WitToKotlinPoetConverter(doubleCollisionWit, "com.example.app", libraryManifests = listOf(manifest))
+            .generate()
+            .first { it.name == "AppWorld" }
+            .content
+        assertTrue("baseImports_: ImportsFactory" in doubleCollisionWorld, doubleCollisionWorld)
+        assertTrue("Linker().addAll(baseImports_.newLinker()).addAll(__overrides, overwrite = true)" in doubleCollisionWorld, doubleCollisionWorld)
+    }
 }

@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-14。対象ブランチは `feat/split-large-wasm-methods-106`、主な変更点は #106 と #57 の Chicory メソッド自動分割です。
+> 最終更新: 2026-11-15。対象ブランチは `feat/wasi03-phase2-13`、主な変更点は #13、#100、#101、#102 に対応する WASI 0.3 ホスト実装と設定 API の完結です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -68,7 +68,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 未検証・既知の制約
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
-* Chicory バックエンドの未対応機能: WASI 0.3 の `sockets` / `http`（#100〜#101）、`map<K, V>`（#71）。いずれも使用時に例外になる。plan から分かるものは、Gradle プラグインがビルド時に警告する（`failOnUnsupportedFeatures` でエラーにもできる。#39）。WASI 0.3 の `random` / `clocks` / `cli` / `filesystem` は `runtime-wasi` で実装済み（#98、#99、[ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md)）
+* Chicory バックエンドの未対応機能: `wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117)、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) として P2 に分離しており、詳細は [ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) を参照してください。`map<K, V>` は [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) で追跡しています。いずれも使用時に例外になります。plan から分かるものは Gradle プラグインがビルド時に警告します。WASI 0.3 の `random`、`clocks`、`cli`、`filesystem`、および [ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) に沿った設定 API と Gradle `addWasiDependency` は実装済みです
 * 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うとエラーになる（Kotlin の package にバージョンを含めないため。[ADR-0011](adr/0011-qualified-interface-keys.md)）
 * 1 回の生成で扱う world は 1 つ（world の API を package のトップレベルに置くため。[ADR-0012](adr/0012-world-at-package-top-level.md)）。複数の world は `--world` で選び、別々の package に生成する。import した interface の型は、`--interfaces-only` と `--with` で world の間で共有できる（[ADR-0014](adr/0014-interface-mappings.md)）
 * 既存の package への対応付け（`with`）は import した interface だけ。export した interface の型は、world ごとに生成される（ADR-0014）
@@ -101,16 +101,16 @@ QC レビュー（2026-10-31）で見つかったものは、すべて片付け�
 
 QC レビュー（2026-11-04）で見つかったものも片付けました（「完了」を参照）。#77 は、ドキュメントで前提を明記し、上限の実装を P2 に残しています。
 
-次は WASI 0.3 です。async（#16）は実装しました（[ADR-0018](adr/0018-async-abi-on-chicory.md)。公式テストスイートの `async/` で確認）。
+WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「完了」を参照してください。
 
-| 順 | Issue | ID | 内容 |
-| :--- | :--- | :--- | :--- |
-| 1 | [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) | A-10 | WASI 0.3 ホスト実装（Chicory のみ。0.2 の poll は実装しない。`random` / `clocks` / `cli` を #98、`filesystem` を #99 で `runtime-wasi` に実装済み。残りは #100〜#102） |
+なし
 
 ### P2
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
+| [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
+| [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
 | [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。64 KB 超による Chicory インタプリタ実行とディスパッチメソッドの残存分を継続課題として維持 |
 | [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。#62 で 154 µs → 8〜29 µs になったが、まだ `list<u8>` より遅い（`Transcoder` の UTF-8 検査も残っている） |
@@ -129,6 +129,8 @@ QC レビュー（2026-11-04）で見つかったものも片付けました（�
 * [#68](https://github.com/chikoski/wasm-component-kotlin/issues/68) 数値だけの関数をバイト列を通さずに呼ぶ — 必要な使い方がないため。案は [ADR-0015](adr/0015-binary-value-boundary.md) の進め方の 3 に残っている
 
 ### 完了
+
+* [#13](https://github.com/chikoski/wasm-component-kotlin/issues/13) WASI 0.3 ホスト実装と設定 API の完結。[#98](https://github.com/chikoski/wasm-component-kotlin/issues/98) と [#99](https://github.com/chikoski/wasm-component-kotlin/issues/99) の各パッケージ実装に加え、[#100](https://github.com/chikoski/wasm-component-kotlin/issues/100) の `wasi:http` と `wasi:sockets` の対応方針決定、[#101](https://github.com/chikoski/wasm-component-kotlin/issues/101) のホスト設定・選択 API と Gradle `addWasiDependency` 連携、[#102](https://github.com/chikoski/wasm-component-kotlin/issues/102) の Rust 製フィクスチャ `wasi-03` と結合テストを完了しました。設計詳細は [ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) と [ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) に記録しています。`wasi:http` と `wasi:sockets` はそれぞれ [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) と [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) として P2 に分離しました。
 
 * [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) ART でコンパイル上限を超える大きな wasm 関数の対策 — [ADR-0021](adr/0021-split-large-chicory-methods.md)。`JvmMethodSplitter` による 7,500 バイト単位のバイトコード自動分割と、HotSpot 8,000 バイト / ART 16,383 DEX コード単位 / 64 KB インタプリタのビルド時警告を実装。`samples/android-glitch-camera` で `dex2oat64` 上限超過を 4 件から 0 件へ解消
 

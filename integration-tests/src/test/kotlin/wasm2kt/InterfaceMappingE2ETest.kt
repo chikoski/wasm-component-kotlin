@@ -226,6 +226,28 @@ class InterfaceMappingE2ETest {
         assertTrue(Regex("""fun check\(n: UInt\): WitResult<Point, String>""").containsMatchIn(world), world)
         assertTrue("import lib.layers.example.lib.a.Point" in world, world)
         assertFalse("lib.layers.example.lib.b.Outcome" in world, world)
+        val caller = appSrc.resolve("app/layers/Caller.kt")
+        Files.writeString(
+            caller,
+            """
+            package app.layers
+
+            import lib.layers.WitResult
+            import lib.layers.example.lib.a.Point
+            import lib.layers.example.lib.b.B
+            import wasm2kt.runtime.ImportsFactory
+
+            fun checkOverloads(baseFactory: ImportsFactory): Triple<ImportsFactory, ImportsFactory, ImportsFactory> {
+                val impl = object : B {
+                    override fun shift(p: Point): WitResult<Point, String> = WitResult.Ok(Point(p.x + 1u))
+                }
+                val trailingLambda = imports { impl }
+                val baseOnly = imports(baseFactory)
+                val baseWithOverride = imports(base = baseFactory, exampleLibB = { impl })
+                return Triple(trailingLambda, baseOnly, baseWithOverride)
+            }
+            """.trimIndent(),
+        )
         kotlinc(generatedSources(appSrc), tempDir.resolve("app-classes"), listOf(libClasses))
     }
 

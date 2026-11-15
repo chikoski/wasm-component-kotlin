@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import wasm2kt.runtime.HostFunction
+import wasm2kt.runtime.ImportsFactory
 import wasm2kt.runtime.Linker
 import wasm2kt.runtime.WitWriter
 import wasm2kt.wasi.wasi.cli.terminal_input.TerminalInput
@@ -23,6 +25,7 @@ import wasm2kt.wasi.wasi.filesystem.types.MetadataHashValue
 import wasm2kt.wasi.wasi.filesystem.types.NewTimestamp
 import wasm2kt.wasi.wasi.filesystem.types.OpenFlags
 import wasm2kt.wasi.wasi.filesystem.types.PathFlags
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -41,6 +44,7 @@ import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -353,5 +357,123 @@ class Wasi03Test {
         } finally {
             root.close()
         }
+    }
+
+    @Test
+    fun `Wasi03 builder selects package groups and rejects mounts when filesystem is disabled`(@TempDir tempDir: Path) {
+        val randomOnly = Linker().addWasi03 {
+            includeClocks = false
+            includeCli = false
+            includeFilesystem = false
+        }
+        assertTrue(randomOnly.isDefined("wasi:random/random@0.3.0#get-random-u64"))
+        assertFalse(randomOnly.isDefined("wasi:clocks/monotonic-clock@0.3.0#now"))
+        assertFalse(randomOnly.isDefined("wasi:cli/environment@0.3.0#get-arguments"))
+        assertFalse(randomOnly.isDefined("wasi:filesystem/preopens@0.3.0#get-directories"))
+
+        assertFailsWith<IllegalArgumentException> {
+            Wasi03.builder().apply {
+                includeFilesystem = false
+                mount("/data", tempDir)
+            }.build()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Wasi03.builder().apply {
+                includeFilesystem = false
+                mounts {
+                    readOnly("/data", tempDir)
+                }
+            }.build()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Wasi03.builder().apply {
+                includeFilesystem = false
+                preopens = WasiPreopens()
+            }.build()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Wasi03.builder().apply {
+                includeFilesystem = false
+                filesystemTypes = WasiFilesystemTypes()
+            }.build()
+        }
+    }
+
+    @Test
+    fun `wasi03Imports isolates sessions, supports stream providers, and composes with plus`() = runBlocking {
+        val stdinOpens = mutableListOf<Int>()
+        val stdoutBuffers = mutableListOf<ByteArrayOutputStream>()
+        val stderrBuffers = mutableListOf<ByteArrayOutputStream>()
+        val factory = wasi03Imports {
+            args("one")
+            stdin {
+                val id = stdinOpens.size + 1
+                stdinOpens += id
+                ByteArrayInputStream("hi-$id".encodeToByteArray())
+            }
+            stdout {
+                ByteArrayOutputStream().also { stdoutBuffers += it }
+            }
+            stderr {
+                ByteArrayOutputStream().also { stderrBuffers += it }
+            }
+        } + ImportsFactory {
+            Linker().apply {
+                define("example:app/custom#ping", HostFunction { _, results -> results.string("pong") })
+            }
+        }
+
+        val l1 = factory.newLinker()
+        val l2 = factory.newLinker()
+        assertTrue(l1 !== l2)
+        assertTrue(l1.isDefined("wasi:random/random@0.3.0#get-random-u64"))
+        assertEquals("pong", l1.call("example:app/custom#ping", WitWriter()).string())
+        assertEquals("pong", l2.call("example:app/custom#ping", WitWriter()).string())
+        assertEquals(2, stdoutBuffers.size)
+        assertEquals(2, stderrBuffers.size)
+        assertTrue(stdoutBuffers[0] !== stdoutBuffers[1])
+        assertTrue(stderrBuffers[0] !== stderrBuffers[1])
+        assertEquals(0, stdinOpens.size, "stdin provider opens when read, not on newLinker")
+
+        val noCliFactory = wasi03Imports {
+            includeCli = false
+            stdout { error("stdout provider must not run when includeCli = false") }
+            stderr { error("stderr provider must not run when includeCli = false") }
+        }
+        assertFalse(noCliFactory.newLinker().isDefined("wasi:cli/stdout@0.3.0#write-via-stream"))
+
+        val directOut = mutableListOf<ByteArrayOutputStream>()
+        val directStdout = WasiStdout { ByteArrayOutputStream().also { directOut += it } }
+        assertEquals(0, directOut.size, "stdout provider must evaluate lazily on first write")
+        assertEquals(WitResult.Ok(Unit), directStdout.writeViaStream(flowOf("a".encodeToByteArray())).await())
+        assertEquals(WitResult.Ok(Unit), directStdout.writeViaStream(flowOf("b".encodeToByteArray())).await())
+        assertEquals(1, directOut.size)
+        assertEquals(listOf("ab"), directOut.map { it.toByteArray().decodeToString() })
+
+        val directErr = mutableListOf<ByteArrayOutputStream>()
+        val directStderr = WasiStderr { ByteArrayOutputStream().also { directErr += it } }
+        assertEquals(0, directErr.size, "stderr provider must evaluate lazily on first write")
+        assertEquals(WitResult.Ok(Unit), directStderr.writeViaStream(flowOf("e1".encodeToByteArray())).await())
+        assertEquals(WitResult.Ok(Unit), directStderr.writeViaStream(flowOf("e2".encodeToByteArray())).await())
+        assertEquals(1, directErr.size)
+        assertEquals(listOf("e1e2"), directErr.map { it.toByteArray().decodeToString() })
+
+        val fixedOut = ByteArrayOutputStream()
+        val providedOut = ByteArrayOutputStream()
+        val overrideToProvider = Wasi03.builder().apply {
+            stdout = fixedOut
+            stdout { providedOut }
+        }.build()
+        assertEquals(WitResult.Ok(Unit), overrideToProvider.stdout.writeViaStream(flowOf("p".encodeToByteArray())).await())
+        assertEquals("", fixedOut.toByteArray().decodeToString())
+        assertEquals("p", providedOut.toByteArray().decodeToString())
+
+        val overrideToFixed = Wasi03.builder().apply {
+            stderr { providedOut }
+            stderr = fixedOut
+        }.build()
+        assertEquals(WitResult.Ok(Unit), overrideToFixed.stderr.writeViaStream(flowOf("f".encodeToByteArray())).await())
+        assertEquals("f", fixedOut.toByteArray().decodeToString())
+        assertEquals("p", providedOut.toByteArray().decodeToString())
     }
 }
