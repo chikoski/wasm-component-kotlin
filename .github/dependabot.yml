@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gradle"
+    directory: "/samples/android"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "cargo"
+    directory: "/decomposer"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "wasmtime-environ"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "wit-component"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "wit-parser"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  - package-ecosystem: "cargo"
+    directory: "/rust-bridge"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "wasmtime"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
