@@ -45,12 +45,17 @@
 
 ### 主な追加・改善
 
+* ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
 * ランタイムと WASI 0.3 の安定性と境界制御の改善
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#136](https://github.com/chikoski/wasm-component-kotlin/issues/136) に対応し、`JvmMethodSplitter`、`PlanCheck`、`decomposer`、および `ConformanceTest` の境界処理を修正しました。`inferLocalTypes` では非静的メソッドのスロット 0 にオーナー型を設定し、2 スロット変数の重複検査と定数プッシュ時の `LdcInsnNode` 分岐を追加しています。`PlanCheck` では `streamTables`、`futureTables`、および `task-return` の `results` も検査対象に加えました。`decomposer` では `task.return` の結果型に含まれる `borrow` を検証段階で拒否するようにし、`conformance/skip.txt` から該当 2 件を削除しています。`ConformanceTest` では実行終了時とタイムアウト時にスレッド中断およびインスタンスのクローズを実行します。
+
+[#138](https://github.com/chikoski/wasm-component-kotlin/issues/138) に対応し、`samples/android-glitch-camera` の録画停止時の無限ループ、`GlitchEngine.close` の競合、および一時ファイルの削除漏れを修正しました。`Mp4VideoRecorder` では 0 フレーム時の `signalEndOfInputStream` 回避、EOS 待機の上限設定、初期化失敗時の解放、および未確定ファイルの削除を実装しています。`GlitchEngine` では `closed` フラグとバックグラウンド解放によりメインスレッドの停止と再生成を防ぎました。`MediaStoreHelper` と `GlitchViewModel` では失敗時の保留レコードと一時ファイルを確実に削除します。
 
 [#134](https://github.com/chikoski/wasm-component-kotlin/issues/134) に対応し、`generator` と `TypedBridge` の名前解決と契約生成を修正しました。リソースハンドルへの型エイリアスを再帰的に辿り、`handleFor`、`markMoved`、および `WitBorrowed` の生成が欠落しないようにしています。生成コード内の補助変数と `equals` や `hashCode` のフィールド参照も衝突しない形へ改めました。`variant` と `flags` のメンバー名衝突を回避する規則も加えています。さらにワールド直下の `use` や推移的依存で導入されるホストリソースを、両生成器で漏れなくインポート契約へ登録します。
 

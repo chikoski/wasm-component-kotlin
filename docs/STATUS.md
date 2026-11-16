@@ -49,7 +49,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 検証済み
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
-* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 480 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目と wasmparser 0.254 の検証差
+* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 482 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目
 * async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future、ホストの `suspend fun` の import、並行の呼び出しと取り消し（ADR-0019）は、`async-stream` と `async-import` フィクスチャの E2E テストで確認
 * 差分テストは、Wasmtime の FFM と JNI の両方で流す。型付きブリッジでは、結果とブリッジ自身のエラーメッセージが汎用ブリッジと同じであることも確かめる（Wasmtime の lift のエラーは、種類だけを比べる）。境界値（空と 256 KiB の list、サロゲートペア、char の端、長い list<option>）も含む
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
@@ -126,12 +126,17 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
-* ランタイムと WASI 0.3 の境界修正および内部型の非公開化
+* ランタイムと WASI 0.3 の安定性と境界制御の改善
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#136](https://github.com/chikoski/wasm-component-kotlin/issues/136) では `JvmMethodSplitter`、`PlanCheck`、`decomposer`、および `ConformanceTest` の境界処理を修正しました。`JvmMethodSplitter` では非静的メソッドのスロット 0 にオーナー型を設定し、2 スロット変数の重複検査と定数プッシュの `LdcInsnNode` 分岐を加えています。`PlanCheck` では `streamTables`、`futureTables`、および `task-return` の結果型を走査対象へ含めました。`decomposer` では `task.return` の結果型に含まれる `borrow` を拒否するようにし、`conformance/skip.txt` の該当 2 件を削除しています。`ConformanceTest` では実行完了時とタイムアウト時のスレッド中断とインスタンス解放を追加しました。
+
+[#138](https://github.com/chikoski/wasm-component-kotlin/issues/138) では `samples/android-glitch-camera` の録画停止ループ、`GlitchEngine.close` の競合、および一時ファイルの残留を修正しました。`Mp4VideoRecorder` では 0 フレーム終了時の送信省略、EOS 待機回数の上限、初期化失敗時の解放、および未確定出力の削除を実装しています。`GlitchEngine` では `closed` フラグとバックグラウンド解放によりメインスレッドの停止と再生成を防ぎました。`MediaStoreHelper` と `GlitchViewModel` では失敗時の保留レコードと一時ファイルを確実に削除します。
 
 [#134](https://github.com/chikoski/wasm-component-kotlin/issues/134) と [#135](https://github.com/chikoski/wasm-component-kotlin/issues/135) では、コード生成の名前解決と Wasmtime 向け Rust ブリッジの資源管理を修正しました。`WitToKotlinPoetConverter` ではリソースハンドルへの型エイリアスを再帰的に解決し、引数やメンバー名の衝突回避と `equals` の修飾を追加しました。ワールド直下の `use` と推移的依存のホストリソースも、コード生成と `TypedBridge` の双方で契約対象へ含めています。`rust-bridge` では引数検証後に移動済みハンドルを確定し、ゲストトラップ時に消費済み `ResourceAny` を復元しないよう改めました。あわせて 65 ビット以上の `flags` 読み取りと重複ハンドル時のエラー文言も揃えています。
 

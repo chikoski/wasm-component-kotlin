@@ -45,10 +45,23 @@ object PlanCheck {
                     val name = imports[o["import"]?.jsonPrimitive?.intOrNull] ?: "import"
                     unsupportedTypes(o["type"]).distinct().forEach { problems += "import '$name' uses a type the Chicory backend does not support: $it" }
                 }
+                "task-return" -> {
+                    unsupportedTypes(o["results"]).distinct().forEach { problems += "task.return uses a type the Chicory backend does not support: $it" }
+                }
             }
         }
+        for (s in plan.array("streamTables")) {
+            val o = s.jsonObject
+            val idx = o["index"]?.jsonPrimitive?.intOrNull?.toString() ?: "?"
+            unsupportedTypes(o["element"]).distinct().forEach { problems += "stream table $idx uses a type the Chicory backend does not support: $it" }
+        }
+        for (f in plan.array("futureTables")) {
+            val o = f.jsonObject
+            val idx = o["index"]?.jsonPrimitive?.intOrNull?.toString() ?: "?"
+            unsupportedTypes(o["element"]).distinct().forEach { problems += "future table $idx uses a type the Chicory backend does not support: $it" }
+        }
         intrinsics.distinct().forEach { problems += "component intrinsic not supported by the Chicory backend: $it" }
-        return problems
+        return problems.distinct()
     }
 
     /** Details of every `{"k": "unsupported"}` inside a plan type. */

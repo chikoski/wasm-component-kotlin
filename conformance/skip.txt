@@ -34,7 +34,3 @@ async/reentrance.wast:346  # reentrance into the same or an ancestor instance tr
 async/reentrance.wast:521  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
 async/reentrance.wast:658  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
 async/reentrance.wast:786  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
-
-# wasmparser 0.254 (wasmtime-environ 48) does not reject a `borrow` in a `task.return` result yet.
-async/validate-task-return.wast:4  # wasmparser 0.254 accepts it
-async/validate-task-return.wast:9  # wasmparser 0.254 accepts it
