@@ -5,7 +5,7 @@ kotlinx-serialization = "1.8.0"
 clikt = "5.0.3"
 junit = "5.11.4"
 chicory = "1.7.5"
-asm = "9.9.1"
+asm = "9.11.1"
 kotlinx-coroutines = "1.10.2"
 android-gradle-api = "8.7.3"
 
