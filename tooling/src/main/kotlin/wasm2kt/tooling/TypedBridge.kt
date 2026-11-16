@@ -227,11 +227,77 @@ private class RustComponent(private val component: TypedBridge.Component) {
     }
 
     /** Interfaces the world imports and exports, with their keys (ADR-0011). */
-    private val imported: Map<Int, String> = interfaces(world.imports)
+    private val imported: Map<Int, String> = collectImportedInterfaces()
     private val exported: Map<Int, String> = interfaces(world.exports)
 
     private fun interfaces(items: Map<String, WitWorldItem>): Map<Int, String> =
         items.mapNotNull { (key, item) -> (item as? WitWorldItem.InterfaceRef)?.let { it.id to interfaceKey(it.id, key) } }.toMap()
+
+    private fun collectImportedInterfaces(): Map<Int, String> {
+        val result = linkedMapOf<Int, String>()
+        val queue = ArrayDeque<Int>()
+        for ((key, item) in world.imports) {
+            when (item) {
+                is WitWorldItem.InterfaceRef -> {
+                    if (result.putIfAbsent(item.id, interfaceKey(item.id, key)) == null) queue += item.id
+                }
+                is WitWorldItem.TypeRef -> {
+                    var cur: WitTypeRef? = WitTypeRef.Id(item.id)
+                    val seen = mutableSetOf<Int>()
+                    while (cur is WitTypeRef.Id && seen.add(cur.index)) {
+                        val def = resolve.types.getOrNull(cur.index) ?: break
+                        val ownerIface = def.owner?.`interface`
+                        if (ownerIface != null && result.putIfAbsent(ownerIface, interfaceKey(ownerIface, "")) == null) {
+                            queue += ownerIface
+                        }
+                        cur = when (val kind = def.kind) {
+                            is WitTypeDefKind.TypeAlias -> kind.type
+                            is WitTypeDefKind.Handle -> WitTypeRef.Id(kind.resourceId)
+                            else -> null
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        while (queue.isNotEmpty()) {
+            for (dep in interfaceDependencies(queue.removeFirst())) {
+                if (result.putIfAbsent(dep, interfaceKey(dep, "")) == null) queue += dep
+            }
+        }
+        return result
+    }
+
+    private fun interfaceDependencies(ifaceId: Int): Set<Int> {
+        val iface = resolve.interfaces.getOrNull(ifaceId) ?: return emptySet()
+        val found = linkedSetOf<Int>()
+        val visited = mutableSetOf<Int>()
+        fun visit(ref: WitTypeRef?) {
+            if (ref !is WitTypeRef.Id || !visited.add(ref.index)) return
+            val def = resolve.types.getOrNull(ref.index) ?: return
+            val owner = def.owner?.`interface`
+            if (def.name != null && owner != null && owner != ifaceId) {
+                found += owner
+                return
+            }
+            when (val kind = def.kind) {
+                is WitTypeDefKind.TypeAlias -> visit(kind.type)
+                is WitTypeDefKind.OptionType -> visit(kind.type)
+                is WitTypeDefKind.ResultType -> { visit(kind.ok); visit(kind.err) }
+                is WitTypeDefKind.ListType -> visit(kind.type)
+                is WitTypeDefKind.Tuple -> kind.types.forEach(::visit)
+                is WitTypeDefKind.Record -> kind.fields.forEach { visit(it.type) }
+                is WitTypeDefKind.Variant -> kind.cases.forEach { visit(it.type) }
+                is WitTypeDefKind.Handle -> visit(WitTypeRef.Id(kind.resourceId))
+                is WitTypeDefKind.FutureType -> visit(kind.type)
+                is WitTypeDefKind.StreamType -> visit(kind.element)
+                else -> Unit
+            }
+        }
+        iface.types.values.forEach { visit(WitTypeRef.Id(it)) }
+        iface.functions.values.forEach { fn -> fn.params.forEach { visit(it.type) }; fn.results.forEach { visit(it.type) } }
+        return found
+    }
 
     /** `ns:pkg/iface@1.0` for package interfaces, the world's name for inline ones (ADR-0011). */
     private fun interfaceKey(id: Int, worldKey: String): String {
@@ -350,6 +416,8 @@ private class RustComponent(private val component: TypedBridge.Component) {
             appendLine("            let r = &mut Reader::new(args);")
             params.forEachIndexed { i, p -> appendLine("            let a$i = ${read(p, counter)};") }
             appendLine("            r.finish().context(\"Invalid arguments for '${esc(key)}'\")?;")
+            appendLine("            cx.data_mut().borrowed_handles.clear();")
+            appendLine("            cx.data_mut().moved_handles.clear();")
             appendLine("            ${tupleType(params.indices.map { "a$it" })}")
             appendLine("        };")
             appendLine("        let results = self.0.call(&mut *store, params).with_context(|| call_failed(name))?;")

@@ -100,4 +100,112 @@ class TypedBridgeTest {
         val e = runCatching { TypedBridge.cargoBuild(dir.resolve("crate"), cargo = cargo.toString()) }.exceptionOrNull()
         assertTrue(e is IllegalStateException && "needs to be updated" in e.message!! && "does not match its dependencies" in e.message!!, "got $e")
     }
+
+    @Test
+    fun `world TypeRef and transitive host resources are registered as imports in typed bridges`(@TempDir dir: Path) {
+        val resolve = WitResolve(
+            packages = listOf(wasm2kt.ast.WitPackage("example:res@0.1.0", mapOf("types" to 0, "mid" to 1))),
+            interfaces = listOf(
+                wasm2kt.ast.WitInterface(
+                    name = "types",
+                    types = mapOf("blob" to 0, "hidden" to 1),
+                    `package` = 0,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "mid",
+                    types = mapOf("hidden" to 2),
+                    functions = mapOf(
+                        "ping" to wasm2kt.ast.WitFunction(
+                            name = "ping",
+                            kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                            params = listOf(wasm2kt.ast.WitParam("h", wasm2kt.ast.WitTypeRef.Id(3))),
+                        ),
+                    ),
+                    `package` = 0,
+                ),
+            ),
+            types = listOf(
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(1)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 1), null),
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(0)), wasm2kt.ast.WitTypeOwner(world = 0)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 0), null),
+            ),
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "app",
+                    imports = mapOf(
+                        "blob" to wasm2kt.ast.WitWorldItem.TypeRef(4),
+                        "mid" to wasm2kt.ast.WitWorldItem.InterfaceRef(1),
+                    ),
+                    exports = mapOf(
+                        "use-blob" to wasm2kt.ast.WitWorldItem.FunctionItem(
+                            wasm2kt.ast.WitFunction(
+                                name = "use-blob",
+                                kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                                params = listOf(wasm2kt.ast.WitParam("b", wasm2kt.ast.WitTypeRef.Id(5))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        TypedBridge.generateCrate(listOf(TypedBridge.Component("type-ref-app", resolve)), dir)
+        val generated = Files.readString(dir.resolve("src/c0.rs"))
+        assertTrue("Called through the generic path" !in generated, generated)
+        assertTrue("host_payload(cx, \"example:res/types@0.1.0#blob\")" in generated, generated)
+        assertTrue("\"example:res/mid@0.1.0#ping\" => inst.func_wrap(" in generated, generated)
+        assertTrue("cx.data_mut().borrowed_handles.clear();" in generated, generated)
+        assertTrue("cx.data_mut().moved_handles.clear();" in generated, generated)
+
+        val transitiveOnly = WitResolve(
+            packages = listOf(wasm2kt.ast.WitPackage("example:res@0.1.0", mapOf("types" to 0, "mid" to 1))),
+            interfaces = listOf(
+                wasm2kt.ast.WitInterface(
+                    name = "types",
+                    types = mapOf("hidden" to 0),
+                    `package` = 0,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "mid",
+                    types = mapOf("hidden" to 1),
+                    functions = mapOf(
+                        "ping" to wasm2kt.ast.WitFunction(
+                            name = "ping",
+                            kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                            params = listOf(wasm2kt.ast.WitParam("h", wasm2kt.ast.WitTypeRef.Id(2))),
+                        ),
+                    ),
+                    `package` = 0,
+                ),
+            ),
+            types = listOf(
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(0)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 1), null),
+            ),
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "app",
+                    imports = mapOf("mid" to wasm2kt.ast.WitWorldItem.InterfaceRef(1)),
+                    exports = mapOf(
+                        "use-hidden" to wasm2kt.ast.WitWorldItem.FunctionItem(
+                            wasm2kt.ast.WitFunction(
+                                name = "use-hidden",
+                                kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                                params = listOf(wasm2kt.ast.WitParam("h", wasm2kt.ast.WitTypeRef.Id(2))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val transitiveDir = dir.resolve("transitive")
+        TypedBridge.generateCrate(listOf(TypedBridge.Component("transitive-app", transitiveOnly)), transitiveDir)
+        val transitiveGenerated = Files.readString(transitiveDir.resolve("src/c0.rs"))
+        assertTrue("Called through the generic path" !in transitiveGenerated, transitiveGenerated)
+        assertTrue("host_payload(cx, \"example:res/types@0.1.0#hidden\")" in transitiveGenerated, transitiveGenerated)
+        assertTrue("\"example:res/mid@0.1.0#ping\" => inst.func_wrap(" in transitiveGenerated, transitiveGenerated)
+    }
 }
