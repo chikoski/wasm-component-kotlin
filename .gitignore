@@ -9,3 +9,4 @@ rust-bridge/target/
 
 fixtures/src/*/target/
 .kotlin/
+.tmp/

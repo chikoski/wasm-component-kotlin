@@ -41,7 +41,7 @@ description: Issue の信頼境界チェックと設計判断ゲートを経て�
 
 ## ステップ4 ワークツリー分離での実装とローカル多層検証
 
-最新の `origin/main` をフェッチし、`/tmp/wasm2kt-factory-<番号>` に専用の一時ワークツリーと作業ブランチを作成します。以降のコード変更、ビルド、テストはすべてこの一時ワークツリー内で実行します。
+最新の `origin/main` をフェッチし、`.tmp/worktrees/factory-<番号>` に専用の一時ワークツリーと作業ブランチを作成します。以降のコード変更、ビルド、テストはすべてこの一時ワークツリー内で実行します。
 
 [CLAUDE.md](../../../CLAUDE.md) と [CONTRIBUTING.md](../../../CONTRIBUTING.md) の不変条件を守って実装とテストを追加します。実装後は変更範囲に応じて、次のローカル検証を必要な範囲すべて実行します。
 
@@ -86,4 +86,4 @@ CI が失敗した場合は `gh run view --log-failed` で失敗ログを確認�
 
 CI の全 5 ジョブが成功し、マージ可能な状態で未解決の指摘がないことを確認できたら、PR から `factory:in-progress` ラベルを外します。その上で `gh pr merge` を `--squash` と `--delete-branch` 付きで実行し、自動マージを完了させます。
 
-マージ後は関連 Issue がクローズされたことと、一時ワークツリー `/tmp/wasm2kt-factory-<番号>` を `git worktree remove` で削除したことを確認し、結果を報告します。
+マージ後は関連 Issue がクローズされたことと、一時ワークツリー `.tmp/worktrees/factory-<番号>` を `git worktree remove` で削除したことを確認し、結果を報告します。
