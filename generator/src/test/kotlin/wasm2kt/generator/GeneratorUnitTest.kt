@@ -282,4 +282,179 @@ class GeneratorUnitTest {
             assertTrue(reservedName in err.message.orEmpty(), err.message)
         }
     }
+
+    @Test
+    fun `resource handle type aliases emit handleFor, markMoved, WitBorrowed, and wrapper construction`() {
+        val wit = WitResolve(
+            packages = listOf(wasm2kt.ast.WitPackage("example:alias@0.1.0", mapOf("types" to 0, "api" to 1))),
+            interfaces = listOf(
+                wasm2kt.ast.WitInterface(
+                    name = "types",
+                    types = mapOf("blob" to 0),
+                    functions = mapOf(
+                        "[constructor]blob" to wasm2kt.ast.WitFunction(
+                            name = "[constructor]blob",
+                            kind = wasm2kt.ast.WitFunctionKind.Constructor(0),
+                            result = wasm2kt.ast.WitTypeRef.Id(1),
+                        ),
+                    ),
+                    `package` = 0,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "api",
+                    types = mapOf("counter" to 2, "my-own" to 3, "my-borrow" to 4, "blob" to 9),
+                    functions = mapOf(
+                        "[constructor]counter" to wasm2kt.ast.WitFunction(
+                            name = "[constructor]counter",
+                            kind = wasm2kt.ast.WitFunctionKind.Constructor(2),
+                            result = wasm2kt.ast.WitTypeRef.Id(5),
+                        ),
+                        "exchange" to wasm2kt.ast.WitFunction(
+                            name = "exchange",
+                            kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                            params = listOf(
+                                wasm2kt.ast.WitParam("a", wasm2kt.ast.WitTypeRef.Id(3)),
+                                wasm2kt.ast.WitParam("b", wasm2kt.ast.WitTypeRef.Id(4)),
+                                wasm2kt.ast.WitParam("h", wasm2kt.ast.WitTypeRef.Id(6)),
+                            ),
+                            result = wasm2kt.ast.WitTypeRef.Id(3),
+                        ),
+                    ),
+                    `package` = 0,
+                ),
+            ),
+            types = listOf(
+                // 0: host resource blob
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                // 1: own<blob>
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.OWN, 0), null),
+                // 2: guest resource counter
+                wasm2kt.ast.WitTypeDef("counter", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                // 3: type my-own = own<counter>
+                wasm2kt.ast.WitTypeDef("my-own", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(5)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                // 4: type my-borrow = borrow<counter>
+                wasm2kt.ast.WitTypeDef("my-borrow", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(7)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                // 5: own<counter>
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.OWN, 2), null),
+                // 6: type blob-borrow = borrow<blob> (where handle targets api's `use` alias 9 -> resource 0)
+                wasm2kt.ast.WitTypeDef("blob-borrow", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(8)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                // 7: borrow<counter>
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 2), null),
+                // 8: borrow<blob> pointing to TypeAlias 9 (matching wasm-tools `use` output)
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 9), null),
+                // 9: imported type alias in api: type blob = types.blob
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(0)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+            ),
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "app",
+                    imports = mapOf("example:alias/types@0.1.0" to wasm2kt.ast.WitWorldItem.InterfaceRef(0)),
+                    exports = mapOf("example:alias/api@0.1.0" to wasm2kt.ast.WitWorldItem.InterfaceRef(1)),
+                ),
+            ),
+        )
+        val files = WitToKotlinPoetConverter(wit, "com.example.alias").generate()
+            .associate { "${it.packageName}.${it.name}" to it.content }
+        val api = files.getValue("com.example.alias.exports.example.alias.api.Api")
+        assertTrue("a.handleFor(session)" in api, api)
+        assertTrue("b.handleFor(session)" in api, api)
+        assertTrue("a.markMoved()" in api, api)
+        assertFalse("b.markMoved()" in api, api)
+        assertTrue("WitBorrowed(h)" in api, api)
+        assertTrue("__w.borrowHostResource(h)" in api, api)
+        assertTrue("return MyOwn(session, resultHandle)" in api, api)
+    }
+
+    @Test
+    fun `world TypeRef and transitive host resources emit host contracts and check versions`() {
+        val wit = WitResolve(
+            packages = listOf(
+                wasm2kt.ast.WitPackage("example:res@0.1.0", mapOf("types" to 0)),
+                wasm2kt.ast.WitPackage("example:res@0.2.0", mapOf("types" to 2)),
+                wasm2kt.ast.WitPackage("example:mid@0.1.0", mapOf("mid" to 1)),
+                wasm2kt.ast.WitPackage("example:mid2@0.1.0", mapOf("mid-v2" to 3)),
+            ),
+            interfaces = listOf(
+                wasm2kt.ast.WitInterface(
+                    name = "types",
+                    types = mapOf("blob" to 0, "hidden" to 1),
+                    functions = mapOf(
+                        "[constructor]blob" to wasm2kt.ast.WitFunction(
+                            name = "[constructor]blob",
+                            kind = wasm2kt.ast.WitFunctionKind.Constructor(0),
+                            result = wasm2kt.ast.WitTypeRef.Id(2),
+                        ),
+                    ),
+                    `package` = 0,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "mid",
+                    types = mapOf("hidden" to 3),
+                    functions = mapOf(
+                        "use-hidden" to wasm2kt.ast.WitFunction(
+                            name = "use-hidden",
+                            kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                            params = listOf(wasm2kt.ast.WitParam("h", wasm2kt.ast.WitTypeRef.Id(4))),
+                        ),
+                    ),
+                    `package` = 2,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "types",
+                    types = mapOf("blob" to 5),
+                    `package` = 1,
+                ),
+                wasm2kt.ast.WitInterface(
+                    name = "mid-v2",
+                    types = mapOf("blob" to 7),
+                    functions = mapOf(
+                        "use-blob" to wasm2kt.ast.WitFunction(
+                            name = "use-blob",
+                            kind = wasm2kt.ast.WitFunctionKind.Freestanding(),
+                            params = listOf(wasm2kt.ast.WitParam("b", wasm2kt.ast.WitTypeRef.Id(8))),
+                        ),
+                    ),
+                    `package` = 3,
+                ),
+            ),
+            types = listOf(
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 0)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.OWN, 0), null),
+                wasm2kt.ast.WitTypeDef("hidden", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(1)), wasm2kt.ast.WitTypeOwner(`interface` = 1)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 1), null),
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.Resource, wasm2kt.ast.WitTypeOwner(`interface` = 2)),
+                // 6: world-level use of v0.1.0 blob
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(0)), wasm2kt.ast.WitTypeOwner(world = 0)),
+                // 7: mid-v2's use of v0.2.0 blob
+                wasm2kt.ast.WitTypeDef("blob", wasm2kt.ast.WitTypeDefKind.TypeAlias(wasm2kt.ast.WitTypeRef.Id(5)), wasm2kt.ast.WitTypeOwner(`interface` = 3)),
+                wasm2kt.ast.WitTypeDef(null, wasm2kt.ast.WitTypeDefKind.Handle(wasm2kt.ast.HandleKind.BORROW, 7), null),
+            ),
+            worlds = listOf(
+                wasm2kt.ast.WitWorld(
+                    name = "type-ref-only",
+                    imports = mapOf("blob" to wasm2kt.ast.WitWorldItem.TypeRef(6)),
+                ),
+                wasm2kt.ast.WitWorld(
+                    name = "transitive-conflict",
+                    imports = mapOf(
+                        "mid" to wasm2kt.ast.WitWorldItem.InterfaceRef(1),
+                        "mid-v2" to wasm2kt.ast.WitWorldItem.InterfaceRef(3),
+                    ),
+                ),
+            ),
+        )
+        val typeRefFiles = WitToKotlinPoetConverter(wit, "com.example.tr", targetWorldName = "type-ref-only")
+            .generate()
+            .associate { "${it.packageName}.${it.name}" to it.content }
+        val worldFile = typeRefFiles.getValue("com.example.tr.TypeRefOnlyWorld")
+        assertTrue("fun imports(exampleResTypes: () -> Types): ImportsFactory" in worldFile, worldFile)
+        assertTrue("\"example:res/types@0.1.0#[resource-drop]blob\"" in worldFile, worldFile)
+        assertTrue("com.example.tr.example.res.types.Types" in typeRefFiles.keys, "keys=${typeRefFiles.keys}")
+
+        val conflictErr = assertFailsWith<IllegalArgumentException> {
+            WitToKotlinPoetConverter(wit, "com.example.conflict", targetWorldName = "transitive-conflict").generate()
+        }
+        assertTrue("example:res" in conflictErr.message.orEmpty(), conflictErr.message)
+    }
 }

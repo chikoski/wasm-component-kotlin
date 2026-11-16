@@ -126,11 +126,14 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* コード生成の名前解決と Rust ブリッジの資源所有権修正
 * ランタイムと WASI 0.3 の境界修正および内部型の非公開化
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#134](https://github.com/chikoski/wasm-component-kotlin/issues/134) と [#135](https://github.com/chikoski/wasm-component-kotlin/issues/135) では、コード生成の名前解決と Wasmtime 向け Rust ブリッジの資源管理を修正しました。`WitToKotlinPoetConverter` ではリソースハンドルへの型エイリアスを再帰的に解決し、引数やメンバー名の衝突回避と `equals` の修飾を追加しました。ワールド直下の `use` と推移的依存のホストリソースも、コード生成と `TypedBridge` の双方で契約対象へ含めています。`rust-bridge` では引数検証後に移動済みハンドルを確定し、ゲストトラップ時に消費済み `ResourceAny` を復元しないよう改めました。あわせて 65 ビット以上の `flags` 読み取りと重複ハンドル時のエラー文言も揃えています。
 
 [#130](https://github.com/chikoski/wasm-component-kotlin/issues/130) と [#131](https://github.com/chikoski/wasm-component-kotlin/issues/131) では、ホスト資源表の貸出スコープ管理と非同期引数変換のロールバックを修正しました。`HostResourceTable` ではテーブル単位のインスタンスと参照同一性でスコープを管理します。`witFuture` 取り消し時に起きる読み取り側解除との競合と、`WitWriter` の明示的な初期容量の保持も改善しました。非同期エクスポートで引数変換に失敗した際も、実行中の他の呼び出しへ影響させずその呼び出しのみを失敗させます。ロールバックは `stream` と `future` に加えて `error-context` のハンドルも対象とします。
 
