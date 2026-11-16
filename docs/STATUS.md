@@ -126,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* ランタイムと WASI 0.3 の状態機械・有界並行性・資源寿命テストの追加および書込ストリーム始動前キャンセルの修正
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
 * ランタイムと WASI 0.3 の安定性と境界制御の改善
@@ -133,6 +134,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#159](https://github.com/chikoski/wasm-component-kotlin/issues/159) では外部依存を増やさずに JUnit とコルーチン上で動作する状態機械テストと有界並行性テストを追加しました。[#160](https://github.com/chikoski/wasm-component-kotlin/issues/160) では `HostResourceTable` の借用規則と `SessionLoop` のハンドル回収やポイズン遷移を参照モデルと照合しています。[#161](https://github.com/chikoski/wasm-component-kotlin/issues/161) では単一ルートスレッド排他や逆圧、遅延 `newStream` 解放、デッドロック検知、待機セッション終了を確認しました。[#162](https://github.com/chikoski/wasm-component-kotlin/issues/162) では `WasiPathDescriptor` のサンドボックス検査とストリーム解放を検証しました。あわせて `writeViaStream` と `appendViaStream` が開始前キャンセル時に `Flow` を閉じない不具合を修正しています。
 
 [#136](https://github.com/chikoski/wasm-component-kotlin/issues/136) では `JvmMethodSplitter`、`PlanCheck`、`decomposer`、および `ConformanceTest` の境界処理を修正しました。`JvmMethodSplitter` では非静的メソッドのスロット 0 にオーナー型を設定し、2 スロット変数の重複検査と定数プッシュの `LdcInsnNode` 分岐を加えています。`PlanCheck` では `streamTables`、`futureTables`、および `task-return` の結果型を走査対象へ含めました。`decomposer` では `task.return` の結果型に含まれる `borrow` を拒否するようにし、`conformance/skip.txt` の該当 2 件を削除しています。`ConformanceTest` では実行完了時とタイムアウト時のスレッド中断とインスタンス解放を追加しました。
 
