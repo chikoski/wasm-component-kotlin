@@ -96,12 +96,20 @@ class ComponentBuildTest {
         Files.writeString(
             dir.resolve("plan.json"),
             """
-            {"version": 2,
+            {"version": 5,
              "options": [{"index": 0, "async": false}, {"index": 1, "async": true}],
              "imports": [{"index": 0, "name": "my:pkg/io", "path": ["read"]}],
+             "streamTables": [
+               {"index": 2, "instance": 0, "element": {"k": "unsupported", "detail": "Map(0)"}}
+             ],
+             "futureTables": [
+               {"index": 3, "instance": 0, "element": {"k": "list", "element": {"k": "unsupported", "detail": "FixedLengthList(1)"}}}
+             ],
              "trampolines": [
                {"index": 0, "kind": "lower-import", "import": 0, "options": 0,
-                "type": {"params": [], "results": [{"k": "unsupported", "detail": "Future(0)"}]}}
+                "type": {"params": [], "results": [{"k": "unsupported", "detail": "Future(0)"}]}},
+               {"index": 1, "kind": "task-return", "instance": 0, "options": 0,
+                "results": [{"k": "unsupported", "detail": "Map(1)"}]}
              ],
              "exports": [
                {"instance": null, "name": "run", "options": 1, "type": {"params": [], "results": []}},
@@ -114,6 +122,9 @@ class ComponentBuildTest {
             listOf(
                 "export 'my:pkg/api#stream' uses a type the Chicory backend does not support: Stream(0)",
                 "import 'my:pkg/io#read' uses a type the Chicory backend does not support: Future(0)",
+                "task.return uses a type the Chicory backend does not support: Map(1)",
+                "stream table 2 uses a type the Chicory backend does not support: Map(0)",
+                "future table 3 uses a type the Chicory backend does not support: FixedLengthList(1)",
             ),
             PlanCheck.unsupportedFeatures(dir),
         )

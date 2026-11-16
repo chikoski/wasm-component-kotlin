@@ -83,6 +83,7 @@ pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
     // copies a string or list imports both components' memories (#47).
     let features = (WasmFeatures::WASM2 | WasmFeatures::COMPONENT_MODEL | WasmFeatures::MULTI_MEMORY | async_features())
         .difference(WasmFeatures::EXCEPTIONS);
+    validate_task_return(component_bytes, features)?;
     let mut validator = Validator::new_with_features(features);
     let mut types = ComponentTypesBuilder::new(&validator);
     let (translation, modules) = Translator::new(&tunables, &mut validator, &mut types, &scope)
@@ -101,6 +102,110 @@ pub fn decompose(component_bytes: &[u8]) -> Result<(Value, ModuleFiles)> {
         error_context_tables: RefCell::default(),
     };
     ctx.build(&translation)
+}
+
+/// Rejects `canon task.return` definitions whose result contains a `borrow` handle anywhere, which
+/// wasmparser 0.254 does not reject yet (`async/validate-task-return.wast`).
+///
+/// Must run over `ComponentCanonicalSection` via `Validator` rather than only `translation.trampolines`,
+/// because `wasmtime-environ` dead-code-eliminates unreferenced canonical built-ins (as in
+/// `async/validate-task-return.wast:4,9`).
+fn validate_task_return(component_bytes: &[u8], features: WasmFeatures) -> Result<()> {
+    use wasmtime_environ::wasmparser::component_types::{
+        ComponentDefinedType as ValidatedDefinedType, ComponentDefinedTypeId, ComponentValType as ValidatedValType,
+    };
+    use wasmtime_environ::wasmparser::types::TypesRef;
+    use wasmtime_environ::wasmparser::{CanonicalFunction, ComponentValType, Parser, Payload};
+
+    fn val_contains_borrow(types: &TypesRef<'_>, ty: &ValidatedValType) -> Result<bool> {
+        match ty {
+            ValidatedValType::Primitive(_) => Ok(false),
+            ValidatedValType::Type(id) => defined_contains_borrow(types, *id),
+        }
+    }
+
+    fn defined_contains_borrow(types: &TypesRef<'_>, id: ComponentDefinedTypeId) -> Result<bool> {
+        let Some(ty) = types.get(id) else {
+            bail!("unknown component defined type in `task.return`");
+        };
+        match ty {
+            ValidatedDefinedType::Primitive(_)
+            | ValidatedDefinedType::Flags(_)
+            | ValidatedDefinedType::Enum(_)
+            | ValidatedDefinedType::Own(_) => Ok(false),
+            ValidatedDefinedType::Borrow(_) => Ok(true),
+            ValidatedDefinedType::Record(r) => {
+                for f in r.fields.values() {
+                    if val_contains_borrow(types, f)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            ValidatedDefinedType::Variant(v) => {
+                for c in v.cases.values() {
+                    if let Some(t) = c.ty.as_ref() {
+                        if val_contains_borrow(types, t)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
+            ValidatedDefinedType::List { element, .. }
+            | ValidatedDefinedType::FixedLengthList { element, .. }
+            | ValidatedDefinedType::Option { ty: element, .. } => val_contains_borrow(types, element),
+            ValidatedDefinedType::Map { key, value, .. } => {
+                Ok(val_contains_borrow(types, key)? || val_contains_borrow(types, value)?)
+            }
+            ValidatedDefinedType::Tuple(t) => {
+                for elem in &t.types {
+                    if val_contains_borrow(types, elem)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            ValidatedDefinedType::Result { ok, err, .. } => {
+                if let Some(t) = ok.as_ref() {
+                    if val_contains_borrow(types, t)? {
+                        return Ok(true);
+                    }
+                }
+                if let Some(t) = err.as_ref() {
+                    if val_contains_borrow(types, t)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            ValidatedDefinedType::Future { ty, .. } | ValidatedDefinedType::Stream { ty, .. } => match ty.as_ref() {
+                Some(t) => val_contains_borrow(types, t),
+                None => Ok(false),
+            },
+        }
+    }
+
+    let mut parser = Parser::new(0);
+    parser.set_features(features);
+    let mut validator = Validator::new_with_features(features);
+    for payload in parser.parse_all(component_bytes) {
+        let payload = payload?;
+        validator.payload(&payload)?;
+        if let Payload::ComponentCanonicalSection(reader) = payload {
+            if let Some(types) = validator.types(0) {
+                for func in reader {
+                    if let CanonicalFunction::TaskReturn { result: Some(ComponentValType::Type(idx)), .. } = func? {
+                        let id = types.component_defined_type_at(idx);
+                        if defined_contains_borrow(&types, id)? {
+                            bail!("`task.return` result cannot contain a `borrow` type");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The Component Model async features (#16): the async ABI with streams and futures, the stackful
@@ -772,6 +877,77 @@ mod tests {
         let entries = [("b".to_string(), (ExportIndex::from_u32(1), ())), ("a".to_string(), (ExportIndex::from_u32(0), ()))];
         let sorted = sorted_exports(entries.iter().map(|(k, v)| (k, v)));
         assert_eq!(sorted.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn task_return_rejects_borrow_and_accepts_own() {
+        fn component_with_types_and_task_return(type_entries: &[&[u8]], result_type_idx: u8) -> Vec<u8> {
+            fn push_section(out: &mut Vec<u8>, id: u8, payload: &[u8]) {
+                out.push(id);
+                let mut n = payload.len();
+                loop {
+                    let b = (n & 0x7f) as u8;
+                    n >>= 7;
+                    out.push(if n == 0 { b } else { b | 0x80 });
+                    if n == 0 {
+                        break;
+                    }
+                }
+                out.extend_from_slice(payload);
+            }
+            let mut out = vec![0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
+            // Section 1 (Core Module): exports `(memory 1)` as `"m"` for `task.return` memory option.
+            push_section(
+                &mut out,
+                1,
+                &[
+                    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                    0x05, 0x03, 0x01, 0x00, 0x01,
+                    0x07, 0x05, 0x01, 0x01, b'm', 0x02, 0x00,
+                ],
+            );
+            // Section 2 (Core Instance): instantiate module 0.
+            push_section(&mut out, 2, &[0x01, 0x00, 0x00, 0x00]);
+            // Section 6 (Alias): core export memory `"m"` from core instance 0 as core memory 0.
+            push_section(&mut out, 6, &[0x01, 0x00, 0x02, 0x01, 0x00, 0x01, b'm']);
+            let mut type_sec = vec![type_entries.len() as u8];
+            for entry in type_entries {
+                type_sec.extend_from_slice(entry);
+            }
+            push_section(&mut out, 7, &type_sec);
+            // Section 8 (Canonical): count=1, TaskReturn(0x09), result=Some(0x00) Type(idx), 1 option Memory(0).
+            push_section(&mut out, 8, &[0x01, 0x09, 0x00, result_type_idx, 0x01, 0x03, 0x00]);
+            out
+        }
+
+        // type 0: resource (rep i32); type 1: borrow<0>
+        let direct_borrow = component_with_types_and_task_return(&[&[0x3f, 0x7f, 0x00], &[0x68, 0x00]], 1);
+        let err = decompose(&direct_borrow).unwrap_err();
+        assert!(err.to_string().contains("`task.return` result cannot contain a `borrow` type"), "got {err}");
+
+        // Wrapped borrow types: tuple, record, variant, list, option, result, future, and stream.
+        let nested_cases: [(&str, &[u8]); 8] = [
+            ("tuple", &[0x6f, 0x02, 0x79, 0x01]),
+            ("record", &[0x72, 0x01, 0x01, b'a', 0x01]),
+            ("variant", &[0x71, 0x01, 0x01, b'c', 0x01, 0x01, 0x00]),
+            ("list", &[0x70, 0x01]),
+            ("option", &[0x6b, 0x01]),
+            ("result", &[0x6a, 0x00, 0x01, 0x01]),
+            ("future", &[0x65, 0x01, 0x01]),
+            ("stream", &[0x66, 0x01, 0x01]),
+        ];
+        for (label, entry) in nested_cases {
+            let bytes = component_with_types_and_task_return(&[&[0x3f, 0x7f, 0x00], &[0x68, 0x00], entry], 2);
+            let err_nested = decompose(&bytes).unwrap_err();
+            assert!(
+                err_nested.to_string().contains("`task.return` result cannot contain a `borrow` type"),
+                "{label}: got {err_nested}",
+            );
+        }
+
+        // type 0: resource (rep i32); type 1: own<0>
+        let direct_own = component_with_types_and_task_return(&[&[0x3f, 0x7f, 0x00], &[0x69, 0x00]], 1);
+        assert!(decompose(&direct_own).is_ok());
     }
 }
 
