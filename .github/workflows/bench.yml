@@ -38,7 +38,7 @@ jobs:
           ./gradlew -Pwasm2kt.bench :benchmarks:bench -Pwasm2kt.bench.filter=compute/.*/chicory-aot
           -Pwasm2kt.bench.outFile=calls-huge-methods.tsv "-Pwasm2kt.bench.jvmArgs=-XX:-DontCompileHugeMethods"
       - run: ./gradlew -Pwasm2kt.bench :benchmarks:profile -Pwasm2kt.bench.filter=regex
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bench-jvm
           path: |
@@ -71,7 +71,7 @@ jobs:
           ram-size: 4096M
           disable-animations: true
           script: samples/android/benchmark/run-on-device.sh "$GITHUB_WORKSPACE/bench-art"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bench-art
