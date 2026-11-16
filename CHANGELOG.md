@@ -45,11 +45,16 @@
 
 ### 主な追加・改善
 
+* コード生成の名前解決と Rust ブリッジの資源所有権修正
 * ランタイムと WASI 0.3 の安定性と境界制御の改善
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#134](https://github.com/chikoski/wasm-component-kotlin/issues/134) に対応し、`generator` と `TypedBridge` の名前解決と契約生成を修正しました。リソースハンドルへの型エイリアスを再帰的に辿り、`handleFor`、`markMoved`、および `WitBorrowed` の生成が欠落しないようにしています。生成コード内の補助変数と `equals` や `hashCode` のフィールド参照も衝突しない形へ改めました。`variant` と `flags` のメンバー名衝突を回避する規則も加えています。さらにワールド直下の `use` や推移的依存で導入されるホストリソースを、両生成器で漏れなくインポート契約へ登録します。
+
+[#135](https://github.com/chikoski/wasm-component-kotlin/issues/135) に対応し、`rust-bridge` のリソース所有権管理と `flags` 読み取りを修正しました。引数のデコード完了後に `moved_handles` を確定し、ゲスト関数呼び出し中のトラップで消費済み `ResourceAny` がテーブルへ戻らないようにしています。同じ仕様を型付きブリッジのエクスポート生成側にも反映しました。`wire.rs` の `Type::Flags` 読み取りは `u64` 固定を廃し、ワード配列ベースで 65 ビット以上のフラグに対応します。同一呼び出し内での重複ハンドル検出エラーも Chicory バックエンドの文言へ揃えました。
 
 [#130](https://github.com/chikoski/wasm-component-kotlin/issues/130) と [#131](https://github.com/chikoski/wasm-component-kotlin/issues/131) に対応し、資源管理と非同期境界のロールバックを修正しました。`HostResourceTable` では貸出スコープをテーブル単位と参照同一性で管理します。これにより異なるテーブルや並行呼び出しの間で貸出状態が混ざりません。`witFuture` 取り消し時の読み取り側解除との競合と、`WitWriter` の明示的な初期容量の保持も修正しました。`runtime-chicory` では非同期引数の変換失敗時にロールバックとエラー隔離を行います。このロールバックは `stream` と `future` に加えて `error-context` のハンドルも含みます。
 
