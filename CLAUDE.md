@@ -72,3 +72,9 @@ Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` にな�
 * 生成コードの公開 API（ワールド DSL）を変えるときは、Wasmtime 側と Chicory 側の両方の E2E テストを確認する
 * commit メッセージは Conventional Commits 形式（`feat(scope): ...`、`fix: ...`）。本文に理由を書く
 * 作業は GitHub Issues（優先度ラベル `P0`/`P1`/`P2`、分野ラベル `area:*`）で管理する。commit や PR では `#番号` で関連 Issue を参照する。状態が変わったら docs/STATUS.md を更新する。設計判断をしたら docs/adr/ に追加する
+
+## PR 作成後の CI モニタリング
+
+PR を作成または更新した直後は、`gh pr checks` の `--watch` オプションなどを用いて CI の完了まで自動的にモニターします。対象となる CI ジョブは `jvm`、`decomposer`、`native`、`android`、`emulator` の 5 つです。
+
+失敗したジョブがある場合は `gh run view --log-failed` で原因を特定します。修正コミットをプッシュした上で、再度すべてのチェックが通過するまで監視を続けます。テストのスキップや無効化、アサーションの緩和でチェックを通過させてはなりません。
