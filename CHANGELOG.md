@@ -6,6 +6,10 @@
 
 ### 破壊的変更 (Breaking Changes)
 
+* `WitType` と `ComponentPlan` 内部構文木型の `internal` 化
+
+[#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) により、`runtime-chicory` の `WitType` と `ComponentPlan` の内部構文木型、`fromJson` を `internal` へ変更しました。`ComponentPlan` の公開メンバーは `parse`、`usesAsync`、および `SUPPORTED_VERSION` に絞られます。`WitType` や解析済みプランの内部構文木を直接参照していたコードはコンパイルできなくなります。コンポーネントの呼び出しには生成コードまたは `ComponentBackend` を使用してください。
+
 * `WitResult` の共通契約化と `runWasiCommand` の契約統一
 
 [#124](https://github.com/chikoski/wasm-component-kotlin/issues/124) により、生成される `WitResult` インタフェースは `wasm2kt.runtime.WitResultValue` を実装する形へ変更しました。これに伴い `isOk`、`isErr`、`getOrNull`、`errorOrNull`、`getOrThrow` はパッケージトップレベルの拡張宣言からメンバー宣言へ移動しています。通常のメンバー呼び出し構文はそのまま記述できます。ただし、この変更にはバイナリ互換性がありません。バインディングを再生成してください。あわせて既存の呼び出し側コードも再コンパイルが必要です。パッケージ直下の拡張宣言を明示的に `import` していた箇所は削除してください。また、`runWasiCommand` は `Boolean` ではなく `WitResultValue` を返すラムダを受け取る単一の署名へ統一しました。
@@ -41,14 +45,19 @@
 
 ### 主な追加・改善
 
+* ランタイムと WASI 0.3 の安定性と境界制御の改善
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
 
+[#130](https://github.com/chikoski/wasm-component-kotlin/issues/130) と [#131](https://github.com/chikoski/wasm-component-kotlin/issues/131) に対応し、資源管理と非同期境界のロールバックを修正しました。`HostResourceTable` では貸出スコープをテーブル単位と参照同一性で管理します。これにより異なるテーブルや並行呼び出しの間で貸出状態が混ざりません。`witFuture` 取り消し時の読み取り側解除との競合と、`WitWriter` の明示的な初期容量の保持も修正しました。`runtime-chicory` では非同期引数の変換失敗時にロールバックとエラー隔離を行います。このロールバックは `stream` と `future` に加えて `error-context` のハンドルも含みます。
+
+[#133](https://github.com/chikoski/wasm-component-kotlin/issues/133) に対応し、`runtime-wasi` とストリーム終了時の後処理を修正しました。`WasiStdin.readViaStream` の完了 `Deferred` は、ストリームの読み切りまたはクローズ時に完了します。`WasiStdin` は下流の出力先で起きた `IOException` を捕捉せず出力側へ伝播します。遅延起動の `writeViaStream` と `newStream` は、開始前の取り消しや早期終了時にも `AutoCloseable` な `Flow` を閉じます。さらに `WasiFilesystem` では末尾スラッシュの扱いとキャンセル時のチャネル解放を改めました。`readlinkAt`、`unlinkFileAt`、および `renameAt` で境界外やルート自身を対象とした場合は `ErrorCode.NotPermitted` を返します。
+
 [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) では、`ChicoryComponent` に共有テーブルビューとアダプターモジュールを追加し、異なる型インデックスを持つモジュール間の間接呼び出しとデストラクター呼び出しを修正しました。あわせて `AsyncAbi` と `Task` に借用中の貸与追跡を追加し、同期トラップ時の `StackSwitching` 後始末も実装しています。これにより Component Model 公式テストの `resources/` は全 36 件が通過します。
 
-[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、Android ART 上のメソッドトレース解析を基に `runtime-chicory` の境界処理を最適化しました。`WitType` と `FuncType` のレイアウトキャッシュ、`Lowerer` と `Lifter` の一時確保の削減、`ChicoryComponentInstance` でのエクスポート解決結果の保持、および `Context` コレクションの遅延初期化を実装しています。あわせて公開型 `WitType` を `sealed interface` から `sealed class` へ変更しており、直接参照する呼び出し元ではバイナリ互換が非互換になります。また `Transcoder` から `CharsetDecoder` と中間 `String` の確保を取り除きました。Android 16 ARM64 エミュレーター上で `echoName5_aot_dsl` の最小値は 8,309 ns から 770.71 ns へ短縮し、詳細な計測値は [performance.md](docs/explanation/performance.md) に記録しています。
+[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、Android ART 上のメソッドトレース解析を基に `runtime-chicory` の境界処理を最適化しました。`WitType` と `FuncType` のレイアウトキャッシュ、`Lowerer` と `Lifter` の一時確保の削減、`ChicoryComponentInstance` でのエクスポート解決結果の保持、および `Context` コレクションの遅延初期化を実装しています。あわせて `WitType` を `sealed interface` から `sealed class` へ変更し、その後の [#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) で `WitType` と `ComponentPlan` の内部構文木型を `internal` に制限しました。また `Transcoder` から `CharsetDecoder` と中間 `String` の確保を取り除きました。Android 16 ARM64 エミュレーター上で `echoName5_aot_dsl` の最小値は 8,309 ns から 770.71 ns へ短縮し、詳細な計測値は [performance.md](docs/explanation/performance.md) に記録しています。
 
 [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` の分割後に残る制約と回避策を [architecture.md](docs/explanation/architecture.md) と [gradle-plugin.md](docs/reference/gradle-plugin.md) へ明文化しました。
 

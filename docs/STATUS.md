@@ -126,14 +126,19 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* ランタイムと WASI 0.3 の境界修正および内部型の非公開化
 * 合成コンポーネントの共有テーブルと借用貸与追跡
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
 
+[#130](https://github.com/chikoski/wasm-component-kotlin/issues/130) と [#131](https://github.com/chikoski/wasm-component-kotlin/issues/131) では、ホスト資源表の貸出スコープ管理と非同期引数変換のロールバックを修正しました。`HostResourceTable` ではテーブル単位のインスタンスと参照同一性でスコープを管理します。`witFuture` 取り消し時に起きる読み取り側解除との競合と、`WitWriter` の明示的な初期容量の保持も改善しました。非同期エクスポートで引数変換に失敗した際も、実行中の他の呼び出しへ影響させずその呼び出しのみを失敗させます。ロールバックは `stream` と `future` に加えて `error-context` のハンドルも対象とします。
+
+[#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) と [#133](https://github.com/chikoski/wasm-component-kotlin/issues/133) では、内部型の非公開化と WASI 0.3 の入出力およびファイルシステム境界を修正しました。`WitType` と `ComponentPlan` の内部構文木型を `internal` に制限しています。`WasiStdin.readViaStream` の完了 `Deferred` は読み切りまたはクローズ時に完了するよう改めました。`WasiStdin` では出力先で生じた `IOException` を捕捉せず下流へ伝播します。遅延起動の `writeViaStream` と `newStream` は、開始前の取り消し時にも `AutoCloseable` な `Flow` を閉じます。`WasiFilesystem` では末尾スラッシュ判定とキャンセル時のチャネル解放を改めました。さらに `readlinkAt`、`unlinkFileAt`、および `renameAt` で境界外やルート自身を指定した場合は `ErrorCode.NotPermitted` を返します。
+
 [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) では、`ChicoryComponent` に共有テーブルビューとアダプターモジュールを導入しました。これにより、異なる型インデックスを持つモジュール間の間接呼び出しとデストラクター呼び出しを解決しています。あわせて `AsyncAbi` と `Task` に借用中の貸与追跡を追加し、同期トラップ時の `StackSwitching` 後始末も入れました。その結果、`resources/` の公式テストは 36 件すべてが通過するようになり、`conformance/skip.txt` から該当 2 件を削除しています。
 
-[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、Android 16 ARM64 エミュレーター上のメソッドトレース解析を踏まえ、`runtime-chicory` の境界処理を最適化しました。`WitType` と `FuncType` のレイアウト情報を遅延キャッシュし、`Lowerer` と `Lifter` の一時確保を減らしています。`WitType` は公開の `sealed interface` から `sealed class` へ変更したため、直接参照する呼び出し元ではバイナリ互換が変わります。あわせて `ChicoryComponentInstance` でのエクスポート解決結果の保持と `Context` コレクションの遅延生成、および `Transcoder` からの `CharsetDecoder` と中間 `String` 確保の削除を行いました。その結果、同じエミュレーター上で `echoName5_aot_dsl` は最小値 8,309 ns と 113.0 回のアロケーションから、最小値 770.71 ns と 26.0 回のアロケーションへ変化しました。`echoBytes16_aot_dsl` との差は最小値で 49.13 ns に縮まり、`#58` の課題は完了しています。変更後は Apple Silicon の Host JVM 上で `echo-name` が 355 ns となることも確認しました。ローカル機には変更前の Host JVM 計測値がないため単独の参照値とし、セクション 3.1 の CI 表全体の更新や実機計測は通常運用の課題として分けています。詳細は [performance.md](explanation/performance.md) に記載しています。
+[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、Android 16 ARM64 エミュレーター上のメソッドトレース解析を踏まえ、`runtime-chicory` の境界処理を最適化しました。`WitType` と `FuncType` のレイアウト情報を遅延キャッシュし、`Lowerer` と `Lifter` の一時確保を減らしています。`WitType` は `sealed interface` から `sealed class` へ変更し、その後の [#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) によって `internal` へ移行しました。あわせて `ChicoryComponentInstance` でのエクスポート解決結果の保持と `Context` コレクションの遅延生成、および `Transcoder` からの `CharsetDecoder` と中間 `String` 確保の削除を行いました。その結果、同じエミュレーター上で `echoName5_aot_dsl` は最小値 8,309 ns と 113.0 回のアロケーションから、最小値 770.71 ns と 26.0 回のアロケーションへ変化しました。`echoBytes16_aot_dsl` との差は最小値で 49.13 ns に縮まり、`#58` の課題は完了しています。変更後は Apple Silicon の Host JVM 上で `echo-name` が 355 ns となることも確認しました。ローカル機には変更前の Host JVM 計測値がないため単独の参照値とし、セクション 3.1 の CI 表全体の更新や実機計測は通常運用の課題として分けています。詳細は [performance.md](explanation/performance.md) に記載しています。
 
 [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。これにより [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) と [ADR-0021](adr/0021-split-large-chicory-methods.md) の実装とあわせて #57 の全項目を完了しました。
 

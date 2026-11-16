@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
@@ -578,76 +579,93 @@ class WasiPathDescriptor private constructor(
             is WitResult.Ok -> resolved.value
             is WitResult.Err -> return resolved
         }
-        return withContext(dispatcher) {
-            try {
-                if (!follow && Files.isSymbolicLink(target)) {
-                    return@withContext WitResult.Err(ErrorCode.Loop)
-                }
-                val isExistingDir = Files.isDirectory(target)
-                if (isExistingDir) {
-                    if (openFlags.create || openFlags.truncate || flags.write) {
-                        return@withContext WitResult.Err(ErrorCode.IsDirectory)
+        val openedChannel = java.util.concurrent.atomic.AtomicReference<FileChannel?>(null)
+        return try {
+            withContext(dispatcher) {
+                try {
+                    if (!follow && Files.isSymbolicLink(target)) {
+                        return@withContext WitResult.Err(ErrorCode.Loop)
                     }
-                    return@withContext WitResult.Ok(
+                    val isExistingDir = Files.isDirectory(target)
+                    if (isExistingDir) {
+                        if (openFlags.create || openFlags.truncate || flags.write) {
+                            return@withContext WitResult.Err(ErrorCode.IsDirectory)
+                        }
+                        return@withContext WitResult.Ok(
+                            WasiPathDescriptor(
+                                rootPath = rootPath,
+                                path = target,
+                                flags = flags,
+                                readOnlyMount = readOnlyMount,
+                                isDirectory = true,
+                                channel = null,
+                                dispatcher = dispatcher,
+                            )
+                        )
+                    }
+                    if (openFlags.directory) {
+                        return@withContext if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                            WitResult.Err(ErrorCode.NotDirectory)
+                        } else {
+                            WitResult.Err(ErrorCode.NoEntry)
+                        }
+                    }
+                    if (path.endsWith("/") || path.endsWith("/.")) {
+                        return@withContext when {
+                            Files.exists(target, LinkOption.NOFOLLOW_LINKS) -> WitResult.Err(ErrorCode.NotDirectory)
+                            openFlags.create -> WitResult.Err(ErrorCode.IsDirectory)
+                            else -> WitResult.Err(ErrorCode.NoEntry)
+                        }
+                    }
+                    val options = linkedSetOf<OpenOption>()
+                    if (flags.read || (!flags.write && !openFlags.create && !openFlags.truncate)) {
+                        options.add(StandardOpenOption.READ)
+                    }
+                    if (flags.write || openFlags.create || openFlags.truncate) {
+                        options.add(StandardOpenOption.WRITE)
+                    }
+                    if (openFlags.create) {
+                        if (openFlags.exclusive) {
+                            options.add(StandardOpenOption.CREATE_NEW)
+                        } else {
+                            options.add(StandardOpenOption.CREATE)
+                        }
+                    } else if (openFlags.exclusive) {
+                        return@withContext WitResult.Err(ErrorCode.Invalid)
+                    }
+                    if (openFlags.truncate && !openFlags.exclusive) {
+                        options.add(StandardOpenOption.TRUNCATE_EXISTING)
+                    }
+                    if (flags.fileIntegritySync) {
+                        options.add(StandardOpenOption.SYNC)
+                    } else if (flags.dataIntegritySync) {
+                        options.add(StandardOpenOption.DSYNC)
+                    }
+                    val channel = FileChannel.open(target, options)
+                    openedChannel.set(channel)
+                    ensureActive()
+                    WitResult.Ok(
                         WasiPathDescriptor(
                             rootPath = rootPath,
                             path = target,
                             flags = flags,
                             readOnlyMount = readOnlyMount,
-                            isDirectory = true,
-                            channel = null,
+                            isDirectory = false,
+                            channel = channel,
                             dispatcher = dispatcher,
                         )
                     )
+                } catch (e: CancellationException) {
+                    runCatching { openedChannel.getAndSet(null)?.close() }
+                    throw e
+                } catch (t: Throwable) {
+                    runCatching { openedChannel.getAndSet(null)?.close() }
+                    WitResult.Err(mapException(t))
                 }
-                if (openFlags.directory) {
-                    return@withContext if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                        WitResult.Err(ErrorCode.NotDirectory)
-                    } else {
-                        WitResult.Err(ErrorCode.NoEntry)
-                    }
-                }
-                val options = linkedSetOf<OpenOption>()
-                if (flags.read || (!flags.write && !openFlags.create && !openFlags.truncate)) {
-                    options.add(StandardOpenOption.READ)
-                }
-                if (flags.write || openFlags.create || openFlags.truncate) {
-                    options.add(StandardOpenOption.WRITE)
-                }
-                if (openFlags.create) {
-                    if (openFlags.exclusive) {
-                        options.add(StandardOpenOption.CREATE_NEW)
-                    } else {
-                        options.add(StandardOpenOption.CREATE)
-                    }
-                } else if (openFlags.exclusive) {
-                    return@withContext WitResult.Err(ErrorCode.Invalid)
-                }
-                if (openFlags.truncate && !openFlags.exclusive) {
-                    options.add(StandardOpenOption.TRUNCATE_EXISTING)
-                }
-                if (flags.fileIntegritySync) {
-                    options.add(StandardOpenOption.SYNC)
-                } else if (flags.dataIntegritySync) {
-                    options.add(StandardOpenOption.DSYNC)
-                }
-                val openedChannel = FileChannel.open(target, options)
-                WitResult.Ok(
-                    WasiPathDescriptor(
-                        rootPath = rootPath,
-                        path = target,
-                        flags = flags,
-                        readOnlyMount = readOnlyMount,
-                        isDirectory = false,
-                        channel = openedChannel,
-                        dispatcher = dispatcher,
-                    )
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                WitResult.Err(mapException(t))
             }
+        } catch (e: CancellationException) {
+            runCatching { openedChannel.getAndSet(null)?.close() }
+            throw e
         }
     }
 
@@ -662,7 +680,8 @@ class WasiPathDescriptor private constructor(
             try {
                 val linkTarget = Files.readSymbolicLink(target)
                 val targetStr = linkTarget.toString()
-                if (linkTarget.isAbsolute || targetStr.startsWith("/") || targetStr.contains("\\")) {
+                val resolvedDest = (target.parent ?: rootPath).resolve(linkTarget).normalize()
+                if (linkTarget.isAbsolute || targetStr.startsWith("/") || targetStr.contains("\\") || !resolvedDest.startsWith(rootPath)) {
                     WitResult.Err(ErrorCode.NotPermitted)
                 } else {
                     WitResult.Ok(targetStr)
@@ -728,9 +747,21 @@ class WasiPathDescriptor private constructor(
             is WitResult.Ok -> newResolved.value
             is WitResult.Err -> return newResolved
         }
-        return ioResult {
-            Files.move(oldTarget, newTarget, StandardCopyOption.REPLACE_EXISTING)
-            Unit
+        if (oldTarget == this.path || oldTarget == this.rootPath || newTarget == targetDir.path || newTarget == targetDir.rootPath) {
+            return WitResult.Err(ErrorCode.NotPermitted)
+        }
+        return withContext(dispatcher) {
+            try {
+                if (Files.exists(oldTarget, LinkOption.NOFOLLOW_LINKS) && !symlinkStaysWithinRoot(oldTarget, newTarget, targetDir.rootPath)) {
+                    return@withContext WitResult.Err(ErrorCode.NotPermitted)
+                }
+                Files.move(oldTarget, newTarget, StandardCopyOption.REPLACE_EXISTING)
+                WitResult.Ok(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                WitResult.Err(mapException(t))
+            }
         }
     }
 
@@ -764,10 +795,20 @@ class WasiPathDescriptor private constructor(
             is WitResult.Ok -> resolved.value
             is WitResult.Err -> return resolved
         }
+        if (target == this.path || target == this.rootPath) {
+            return WitResult.Err(ErrorCode.NotPermitted)
+        }
         return withContext(dispatcher) {
             try {
                 if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
                     return@withContext WitResult.Err(ErrorCode.NoEntry)
+                }
+                if (path.endsWith("/") || path.endsWith("/.")) {
+                    return@withContext if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+                        WitResult.Err(ErrorCode.IsDirectory)
+                    } else {
+                        WitResult.Err(ErrorCode.NotDirectory)
+                    }
                 }
                 if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
                     return@withContext WitResult.Err(ErrorCode.IsDirectory)
@@ -871,6 +912,12 @@ class WasiPathDescriptor private constructor(
                             queue.addFirst(linkParts[i])
                         }
                         continue
+                    }
+                    if ((hasMoreSegments || trailingSlash) &&
+                        Files.exists(candidate, LinkOption.NOFOLLOW_LINKS) &&
+                        !Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS)
+                    ) {
+                        return@withContext WitResult.Err(ErrorCode.NotDirectory)
                     }
                     stack.add(seg)
                 }
@@ -999,6 +1046,38 @@ class WasiPathDescriptor private constructor(
 
         private fun linkOptions(followSymlinks: Boolean): Array<LinkOption> =
             if (followSymlinks) emptyArray() else arrayOf(LinkOption.NOFOLLOW_LINKS)
+
+        private fun symlinkTargetWithinRoot(linkFile: Path, relocatedLinkFile: Path, sandboxRoot: Path): Boolean {
+            val linkTarget = Files.readSymbolicLink(linkFile)
+            val linkStr = linkTarget.toString()
+            if (linkTarget.isAbsolute || linkStr.startsWith("/") || linkStr.contains("\\")) {
+                return false
+            }
+            val resolvedDest = (relocatedLinkFile.parent ?: sandboxRoot).resolve(linkTarget).normalize()
+            return resolvedDest.startsWith(sandboxRoot)
+        }
+
+        private fun symlinkStaysWithinRoot(sourceRoot: Path, destRoot: Path, sandboxRoot: Path): Boolean {
+            if (Files.isSymbolicLink(sourceRoot)) {
+                return symlinkTargetWithinRoot(sourceRoot, destRoot, sandboxRoot)
+            }
+            if (!Files.isDirectory(sourceRoot, LinkOption.NOFOLLOW_LINKS)) {
+                return true
+            }
+            return Files.walk(sourceRoot).use { stream ->
+                val it = stream.iterator()
+                while (it.hasNext()) {
+                    val entry = it.next()
+                    if (Files.isSymbolicLink(entry)) {
+                        val movedEntry = destRoot.resolve(sourceRoot.relativize(entry))
+                        if (!symlinkTargetWithinRoot(entry, movedEntry, sandboxRoot)) {
+                            return@use false
+                        }
+                    }
+                }
+                true
+            }
+        }
 
         private fun descriptorTypeOf(path: Path, followSymlinks: Boolean): DescriptorType {
             val options = linkOptions(followSymlinks)

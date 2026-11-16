@@ -1,6 +1,7 @@
 package wasm2kt.runtime
 
 private val EMPTY_BYTES = ByteArray(0)
+private const val MAX_RETAINED_CAPACITY = 64 * 1024
 
 /**
  * Writes WIT values in the binary format generated bindings and backends exchange (ADR-0015).
@@ -27,6 +28,8 @@ class WitWriter(initialCapacity: Int = 64) {
         initialCapacity == 0 -> EMPTY_BYTES
         else -> ByteArray(maxOf(initialCapacity, 8))
     }
+    private val resetCapacity = buf.size
+    private val retainedCapacity = maxOf(MAX_RETAINED_CAPACITY, resetCapacity)
 
     /** Number of bytes written. */
     var size: Int = 0
@@ -155,9 +158,12 @@ class WitWriter(initialCapacity: Int = 64) {
         return at
     }
 
-    /** Clears the bytes written so far while keeping the backing array for reuse. */
+    /** Clears the bytes written so far and shrinks backing arrays grown beyond their retained cap. */
     fun reset() {
         size = 0
+        if (buf.size > retainedCapacity) {
+            buf = if (resetCapacity == 0) EMPTY_BYTES else ByteArray(resetCapacity)
+        }
     }
 
     /** `own<R>` of a host resource: moves it to the component (ADR-0008). */

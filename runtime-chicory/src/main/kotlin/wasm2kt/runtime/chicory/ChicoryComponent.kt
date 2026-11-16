@@ -291,7 +291,13 @@ internal class ChicoryComponentInstance(
                 }
             }
             sync.postReturn?.let { pr -> guest { withoutLeaving { pr.apply(*coreResults) } } }
-            return results.toReader()
+            return if (results.size > 64 * 1024) {
+                val bytes = results.toByteArray()
+                results.reset()
+                WitReader(bytes)
+            } else {
+                results.toReader()
+            }
         } finally {
             async.cleanupSyncCalls(syncDepth)
             cx.releaseLends()
@@ -751,6 +757,14 @@ internal class ChicoryComponentInstance(
         /** Handles this call added to the component's tables while lowering: (table, handle). */
         private var inserted: MutableList<Pair<Int, Int>>? = null
 
+        /** Rollback hooks registered while lowering async/error handles for this call. */
+        private var rollbackActions: MutableList<() -> Unit>? = null
+
+        private fun recordRollback(action: () -> Unit) {
+            val list = rollbackActions ?: ArrayList<() -> Unit>(2).also { rollbackActions = it }
+            list += action
+        }
+
         private fun insert(table: Int, rep: Int, own: Boolean, scope: Task? = null): Int =
             table(table).insert(rep, own, scope).also {
                 val list = inserted ?: ArrayList<Pair<Int, Int>>(2).also { inserted = it }
@@ -759,6 +773,10 @@ internal class ChicoryComponentInstance(
 
         /** Lowering the arguments failed: take back the handles already added for them. */
         fun rollbackLowering() {
+            rollbackActions?.let { list ->
+                for (action in list.asReversed()) action()
+                list.clear()
+            }
             inserted?.let { list ->
                 for ((t, h) in list.asReversed()) table(t).remove(h).borrowScope?.let { it.numBorrows-- }
                 list.clear()
@@ -790,6 +808,7 @@ internal class ChicoryComponentInstance(
                 set.clear()
             }
             inserted?.clear()
+            rollbackActions?.clear()
         }
 
         fun releaseLends() {
@@ -866,11 +885,11 @@ internal class ChicoryComponentInstance(
         }
 
         override fun liftStream(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = true)
-        override fun lowerStream(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = true)
+        override fun lowerStream(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = true, onRollback = ::recordRollback)
         override fun liftFuture(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = false)
-        override fun lowerFuture(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = false)
+        override fun lowerFuture(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = false, onRollback = ::recordRollback)
         override fun liftErrorContext(handle: Int): Int = async.liftErrorContextToHost(opts.instance, handle)
-        override fun lowerErrorContext(id: Int): Int = async.lowerErrorContextFromHost(opts.instance, id)
+        override fun lowerErrorContext(id: Int): Int = async.lowerErrorContextFromHost(opts.instance, id, onRollback = ::recordRollback)
 
         override fun liftBorrow(table: Int, handle: Int): Int {
             if (isImported(table)) return table(table).rep(handle)

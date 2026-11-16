@@ -40,10 +40,12 @@ class HostResourceTable : AutoCloseable {
     private val entries = HashMap<Int, Entry>()
     private val reps = IdentityHashMap<WitHostResource, Int>()
     private var nextRep = 1
-    private val lendScopes = ArrayDeque<MutableList<Int>>()
 
-    /** The lends of the suspending calls in progress. */
-    private val suspendedScopes = ArrayList<MutableList<Int>>()
+    /** Active synchronous and suspending lend scopes on this table. */
+    private val activeScopes = ArrayList<LendScope>()
+
+    /** The lends of the call whose thread or coroutine runs on this table. */
+    private val currentScope = ThreadLocal<LendScope?>()
 
     /**
      * Moves [resource] to the component and returns its rep.
@@ -58,7 +60,7 @@ class HostResourceTable : AutoCloseable {
         val rep = repOf(resource)
         val entry = entries.getValue(rep)
         check(!entry.owned) { "${describe(resource)} was already moved to the component and cannot be passed as own again" }
-        check(lendScopes.none { rep in it } && suspendedScopes.none { rep in it }) {
+        check(activeScopes.none { rep in it.reps }) {
             "${describe(resource)} is lent to a call in progress and cannot be moved"
         }
         entry.owned = true
@@ -71,13 +73,15 @@ class HostResourceTable : AutoCloseable {
      */
     @Synchronized
     fun lend(resource: WitHostResource): Int {
+        val scope = currentScope.get()
         val known = reps[resource]
         if (known != null) {
             check(!entries.getValue(known).owned) { "${describe(resource)} was moved to the component and cannot be lent" }
+            if (scope != null && known !in scope.reps) scope.reps.add(known)
             return known
         }
         val rep = repOf(resource)
-        (SUSPENDED_SCOPE.get() ?: lendScopes.lastOrNull())?.add(rep)
+        scope?.reps?.add(rep)
         return rep
     }
 
@@ -119,16 +123,19 @@ class HostResourceTable : AutoCloseable {
     /** Runs [block] with this table as [current]; lends made inside end with it. */
     fun <R> bind(block: () -> R): R {
         val previous = CURRENT.get()
+        val previousScope = currentScope.get()
+        val scope = LendScope()
+        synchronized(this) { activeScopes += scope }
         CURRENT.set(this)
-        val lends = mutableListOf<Int>()
-        lendScopes.addLast(lends)
+        currentScope.set(scope)
         try {
             return block()
         } finally {
             synchronized(this) {
-                lendScopes.removeLast()
-                endLends(lends)
+                activeScopes.remove(scope)
+                endLends(scope.reps)
             }
+            if (previousScope == null) currentScope.remove() else currentScope.set(previousScope)
             if (previous == null) CURRENT.remove() else CURRENT.set(previous)
         }
     }
@@ -138,14 +145,14 @@ class HostResourceTable : AutoCloseable {
      * made inside end with it (ADR-0019). Other calls may be in progress meanwhile.
      */
     suspend fun <R> bindSuspending(block: suspend () -> R): R {
-        val lends = mutableListOf<Int>()
-        synchronized(this) { suspendedScopes += lends }
+        val scope = LendScope()
+        synchronized(this) { activeScopes += scope }
         try {
-            return withContext(asContextElement() + SUSPENDED_SCOPE.asContextElement(lends)) { block() }
+            return withContext(asContextElement() + currentScope.asContextElement(scope)) { block() }
         } finally {
             synchronized(this) {
-                suspendedScopes.remove(lends)
-                endLends(lends)
+                activeScopes.remove(scope)
+                endLends(scope.reps)
             }
         }
     }
@@ -154,7 +161,11 @@ class HostResourceTable : AutoCloseable {
     fun asContextElement(): CoroutineContext.Element = CURRENT.asContextElement(this)
 
     private fun endLends(lends: List<Int>) {
-        for (rep in lends) if (entries[rep]?.owned == false) forget(rep)
+        for (rep in lends) {
+            if (entries[rep]?.owned == false && activeScopes.none { rep in it.reps }) {
+                forget(rep)
+            }
+        }
     }
 
     private fun repOf(resource: WitHostResource): Int = reps.getOrPut(resource) {
@@ -175,11 +186,12 @@ class HostResourceTable : AutoCloseable {
         if (type.isInstance(resource)) type.cast(resource)
         else throw IllegalStateException("Host resource rep $rep is a ${resource.javaClass.name}, not a ${type.name}")
 
+    private class LendScope {
+        val reps = mutableListOf<Int>()
+    }
+
     companion object {
         private val CURRENT = ThreadLocal<HostResourceTable?>()
-
-        /** The lends of the suspending call whose coroutine runs on this thread. */
-        private val SUSPENDED_SCOPE = ThreadLocal<MutableList<Int>?>()
 
         /**
          * The table bound on this thread, or null. For a backend that runs guest code on threads of

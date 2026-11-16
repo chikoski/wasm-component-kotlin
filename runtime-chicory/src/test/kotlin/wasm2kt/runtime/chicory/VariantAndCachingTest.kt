@@ -492,4 +492,27 @@ class VariantAndCachingTest {
             pool.shutdownNow()
         }
     }
+
+    @Test
+    fun `ComponentPlan exposes only usesAsync and parse as unmangled public methods`() {
+        val planMethods = ComponentPlan::class.java.methods.map { it.name }.toSet()
+        assertTrue("getUsesAsync" in planMethods)
+        for (hidden in listOf(
+            "getModules",
+            "getInitializers",
+            "getTrampolines",
+            "getOptions",
+            "getImports",
+            "getResourceTables",
+            "getExports",
+            "getStreamTables",
+            "getFutureTables",
+            "getErrorContextTables",
+        )) {
+            assertTrue(hidden !in planMethods, "Expected $hidden to be internal (mangled), not public")
+        }
+        val companionMethods = ComponentPlan.Companion::class.java.methods.map { it.name }.toSet()
+        assertTrue("parse" in companionMethods)
+        assertTrue("fromJson" !in companionMethods)
+    }
 }

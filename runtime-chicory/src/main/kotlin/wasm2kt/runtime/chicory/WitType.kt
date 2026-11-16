@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Component-level value type, as described by the decomposer's type descriptors. */
-sealed class WitType {
+internal sealed class WitType {
     internal abstract val align: Int
     internal abstract val size: Int
     internal abstract val flat: List<CanonicalAbi.CoreType>
@@ -284,7 +284,7 @@ sealed class WitType {
 }
 
 /** [async] is the function type's `async` (plan v5, #16), not the canonical option. */
-class FuncType(val params: List<Pair<String, WitType>>, val results: List<WitType>, val async: Boolean = false) {
+internal class FuncType(val params: List<Pair<String, WitType>>, val results: List<WitType>, val async: Boolean = false) {
     @Volatile private var cachedParamTypes: List<WitType>? = null
     @Volatile private var cachedParamTuple: WitType.Tuple? = null
     @Volatile private var cachedResultTuple: WitType.Tuple? = null

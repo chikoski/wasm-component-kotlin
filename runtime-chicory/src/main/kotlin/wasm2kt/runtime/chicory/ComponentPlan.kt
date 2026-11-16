@@ -15,18 +15,18 @@ import kotlinx.serialization.json.jsonPrimitive
  * In-memory form of the `plan.json` written by `wasm2kt-decompose`: everything needed to
  * instantiate a component's core modules on Chicory and to lift/lower values at its boundary.
  */
-class ComponentPlan(
-    val modules: List<PlanModule>,
-    val initializers: List<Initializer>,
-    val trampolines: Map<Int, Trampoline>,
-    val options: Map<Int, CanonOptions>,
-    val imports: Map<Int, PlanImport>,
-    val resourceTables: Map<Int, ResourceTableInfo>,
-    val exports: List<PlanExport>,
-    val streamTables: Map<Int, TransmitTableInfo> = emptyMap(),
-    val futureTables: Map<Int, TransmitTableInfo> = emptyMap(),
+class ComponentPlan internal constructor(
+    internal val modules: List<PlanModule>,
+    internal val initializers: List<Initializer>,
+    internal val trampolines: Map<Int, Trampoline>,
+    internal val options: Map<Int, CanonOptions>,
+    internal val imports: Map<Int, PlanImport>,
+    internal val resourceTables: Map<Int, ResourceTableInfo>,
+    internal val exports: List<PlanExport>,
+    internal val streamTables: Map<Int, TransmitTableInfo> = emptyMap(),
+    internal val futureTables: Map<Int, TransmitTableInfo> = emptyMap(),
     /** Error-context table -> its component instance (plan v5). */
-    val errorContextTables: Map<Int, Int> = emptyMap(),
+    internal val errorContextTables: Map<Int, Int> = emptyMap(),
 ) {
     /**
      * Whether the component uses the async ABI (#16): then every call runs as a Component Model task
@@ -47,7 +47,7 @@ class ComponentPlan(
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
-        fun fromJson(root: JsonObject): ComponentPlan {
+        internal fun fromJson(root: JsonObject): ComponentPlan {
             val version = root.int("version")
             require(version == SUPPORTED_VERSION) {
                 "Unsupported plan version $version (expected $SUPPORTED_VERSION); regenerate it with a matching wasm2kt-decompose"
@@ -192,11 +192,11 @@ class ComponentPlan(
     }
 }
 
-class PlanModule(val index: Int, val file: String, val imports: List<PlanModuleImport>)
+internal class PlanModule(val index: Int, val file: String, val imports: List<PlanModuleImport>)
 
-class PlanModuleImport(val module: String, val name: String, val kind: String)
+internal class PlanModuleImport(val module: String, val name: String, val kind: String)
 
-class PlanImport(val name: String, val path: List<String>) {
+internal class PlanImport(val name: String, val path: List<String>) {
     /**
      * Key passed to [wasm2kt.runtime.WitHostImportDispatcher.hostFunction], matching the
      * Wasmtime bridge (ADR-0011): `name` for root functions, `<interface>#<function>` for interface
@@ -211,7 +211,7 @@ class PlanImport(val name: String, val path: List<String>) {
         get() = if (path.isEmpty()) "[resource-drop]$name" else "$name#[resource-drop]${path.last()}"
 }
 
-class PlanExport(
+internal class PlanExport(
     val instance: String?,
     val name: String,
     val func: CoreDef,
@@ -225,7 +225,7 @@ class PlanExport(
  * Canonical options. [instance] is the component instance they belong to (whose handle table the
  * call uses), [callback] the `callback` of an async lift (an [Initializer.ExtractCallback] index).
  */
-class CanonOptions(
+internal class CanonOptions(
     val stringEncoding: StringEncoding,
     val memory: Int?,
     val realloc: Int?,
@@ -240,7 +240,7 @@ class CanonOptions(
  * [import] names the runtime import of an imported (host-defined) resource; [instance] is the
  * component instance whose handle table holds the handles of this table.
  */
-class ResourceTableInfo(
+internal class ResourceTableInfo(
     val index: Int,
     val resource: Int?,
     val imported: Boolean,
@@ -250,11 +250,11 @@ class ResourceTableInfo(
 )
 
 /** A stream or future table (plan v5): its component instance and element type (null for `stream`). */
-class TransmitTableInfo(val index: Int, val instance: Int, val element: WitType?)
+internal class TransmitTableInfo(val index: Int, val instance: Int, val element: WitType?)
 
-class CoreExportRef(val instance: Int, val name: String)
+internal class CoreExportRef(val instance: Int, val name: String)
 
-sealed interface CoreDef {
+internal sealed interface CoreDef {
     data class Export(val ref: CoreExportRef) : CoreDef
     data class Trampoline(val index: Int) : CoreDef
     data class InstanceFlags(val index: Int) : CoreDef
@@ -266,9 +266,9 @@ sealed interface CoreDef {
     data class Intrinsic(val name: String) : CoreDef
 }
 
-class InstantiateArg(val module: String, val name: String, val def: CoreDef)
+internal class InstantiateArg(val module: String, val name: String, val def: CoreDef)
 
-sealed interface Initializer {
+internal sealed interface Initializer {
     class Instantiate(val instance: Int, val module: Int, val args: List<InstantiateArg>) : Initializer
     class ExtractMemory(val index: Int, val export: CoreExportRef) : Initializer
     class ExtractRealloc(val index: Int, val def: CoreDef) : Initializer
@@ -281,7 +281,7 @@ sealed interface Initializer {
     class ExtractCallback(val index: Int, val def: CoreDef) : Initializer
 }
 
-sealed interface Trampoline {
+internal sealed interface Trampoline {
     class LowerImport(val import: Int, val type: FuncType, val options: Int) : Trampoline
     class ResourceNew(val table: Int) : Trampoline
     class ResourceRep(val table: Int) : Trampoline
@@ -315,7 +315,7 @@ sealed interface Trampoline {
 }
 
 /** A string transcode a fused adapter performs, named as in wasmtime-environ (`Transcode::desc`). */
-enum class TranscodeOp(val desc: String) {
+internal enum class TranscodeOp(val desc: String) {
     UTF8_TO_UTF8("utf8-to-utf8"),
     UTF16_TO_UTF16("utf16-to-utf16"),
     LATIN1_TO_LATIN1("latin1-to-latin1"),
@@ -335,7 +335,7 @@ enum class TranscodeOp(val desc: String) {
     }
 }
 
-enum class StringEncoding {
+internal enum class StringEncoding {
     UTF8, UTF16, LATIN1_UTF16;
 
     companion object {
