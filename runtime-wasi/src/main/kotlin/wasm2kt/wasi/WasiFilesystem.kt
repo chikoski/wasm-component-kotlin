@@ -272,33 +272,35 @@ class WasiPathDescriptor private constructor(
         return Tuple2(stream, result)
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
     override fun writeViaStream(data: Flow<ByteArray>, offset: Filesize): Deferred<WitResult<Unit, ErrorCode>> {
-        if (isDirectory) {
-            (data as? AutoCloseable)?.close()
-            return CompletableDeferred(WitResult.Err(ErrorCode.IsDirectory))
-        }
-        val ch = channel
-        if (ch == null || !flags.write) {
-            (data as? AutoCloseable)?.close()
-            return CompletableDeferred(WitResult.Err(ErrorCode.BadDescriptor))
-        }
-        if (readOnlyMount) {
-            (data as? AutoCloseable)?.close()
-            return CompletableDeferred(WitResult.Err(ErrorCode.ReadOnly))
-        }
         val startPos = offset.toLong()
-        if (startPos < 0L) {
-            (data as? AutoCloseable)?.close()
-            return CompletableDeferred(WitResult.Err(ErrorCode.Overflow))
+        return launchChannelWrite(
+            data = data,
+            validate = { if (startPos < 0L) ErrorCode.Overflow else null },
+        ) { ch ->
+            var pos = startPos
+            data.collect { chunk ->
+                if (chunk.isNotEmpty()) {
+                    withContext(dispatcher) {
+                        if (!ch.isOpen) throw ClosedChannelException()
+                        val buf = ByteBuffer.wrap(chunk)
+                        while (buf.hasRemaining()) {
+                            pos += ch.write(buf, pos)
+                        }
+                    }
+                }
+            }
         }
-        return GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
-            try {
-                var pos = startPos
-                data.collect { chunk ->
-                    if (chunk.isNotEmpty()) {
-                        withContext(dispatcher) {
+    }
+
+    override fun appendViaStream(data: Flow<ByteArray>): Deferred<WitResult<Unit, ErrorCode>> =
+        launchChannelWrite(data = data) { ch ->
+            data.collect { chunk ->
+                if (chunk.isNotEmpty()) {
+                    withContext(dispatcher) {
+                        synchronized(ch) {
                             if (!ch.isOpen) throw ClosedChannelException()
+                            var pos = ch.size()
                             val buf = ByteBuffer.wrap(chunk)
                             while (buf.hasRemaining()) {
                                 pos += ch.write(buf, pos)
@@ -306,56 +308,52 @@ class WasiPathDescriptor private constructor(
                         }
                     }
                 }
-                WitResult.Ok(Unit)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                WitResult.Err(mapException(t))
-            } finally {
-                (data as? AutoCloseable)?.close()
             }
         }
-    }
 
+    // Ensures `AutoCloseable` flows close at most once even if the lazy Deferred is cancelled before starting.
     @OptIn(DelicateCoroutinesApi::class)
-    override fun appendViaStream(data: Flow<ByteArray>): Deferred<WitResult<Unit, ErrorCode>> {
+    private fun launchChannelWrite(
+        data: Flow<ByteArray>,
+        validate: () -> ErrorCode? = { null },
+        writeLoop: suspend (FileChannel) -> Unit,
+    ): Deferred<WitResult<Unit, ErrorCode>> {
+        val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun closeData() {
+            if (closed.compareAndSet(false, true)) {
+                runCatching { (data as? AutoCloseable)?.close() }
+            }
+        }
         if (isDirectory) {
-            (data as? AutoCloseable)?.close()
+            closeData()
             return CompletableDeferred(WitResult.Err(ErrorCode.IsDirectory))
         }
         val ch = channel
         if (ch == null || !flags.write) {
-            (data as? AutoCloseable)?.close()
+            closeData()
             return CompletableDeferred(WitResult.Err(ErrorCode.BadDescriptor))
         }
         if (readOnlyMount) {
-            (data as? AutoCloseable)?.close()
+            closeData()
             return CompletableDeferred(WitResult.Err(ErrorCode.ReadOnly))
+        }
+        validate()?.let { err ->
+            closeData()
+            return CompletableDeferred(WitResult.Err(err))
         }
         return GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
             try {
-                data.collect { chunk ->
-                    if (chunk.isNotEmpty()) {
-                        withContext(dispatcher) {
-                            synchronized(ch) {
-                                if (!ch.isOpen) throw ClosedChannelException()
-                                var pos = ch.size()
-                                val buf = ByteBuffer.wrap(chunk)
-                                while (buf.hasRemaining()) {
-                                    pos += ch.write(buf, pos)
-                                }
-                            }
-                        }
-                    }
-                }
+                writeLoop(ch)
                 WitResult.Ok(Unit)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 WitResult.Err(mapException(t))
             } finally {
-                (data as? AutoCloseable)?.close()
+                closeData()
             }
+        }.also { job ->
+            job.invokeOnCompletion { closeData() }
         }
     }
 
