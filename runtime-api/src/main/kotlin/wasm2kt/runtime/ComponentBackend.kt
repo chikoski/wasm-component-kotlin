@@ -87,6 +87,14 @@ interface ComponentBackend : AutoCloseable {
      */
     fun newStream(chunks: Flow<WitStreamChunk>): Int = throw UnsupportedOperationException("This backend does not support streams")
 
+    /**
+     * A `stream` whose underlying [Flow] may also implement [AutoCloseable]; backends that stop
+     * reading early (e.g. guest drop or unstarted cancellation) close [closeable].
+     */
+    fun newStream(chunks: Flow<WitStreamChunk>, closeable: AutoCloseable?): Int = newStream(
+        if (closeable == null) chunks else object : Flow<WitStreamChunk> by chunks, AutoCloseable by closeable {},
+    )
+
     /** A `future` for the host to pass to the component, resolved to what [value] returns (in the binary format) once it does. */
     fun newFuture(value: suspend () -> ByteArray): Int = throw UnsupportedOperationException("This backend does not support futures")
 
@@ -132,15 +140,30 @@ interface ComponentBackend : AutoCloseable {
 @OptIn(DelicateCoroutinesApi::class)
 fun <T> witFuture(backend: ComponentBackend, handle: Int, decode: (WitReader) -> T): Deferred<T> {
     val resources = HostResourceTable.currentOrNull()
-    return GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
-        val r = backend.bindSuspending {
-            if (resources != null) resources.bindSuspending { backend.readFutureSuspending(handle) }
-            else backend.readFutureSuspending(handle)
-        } ?: throw IllegalStateException("The component dropped the future without writing a value")
-        backend.bind {
-            if (resources != null) resources.bind { decode(r) } else decode(r)
+    val consumed = AtomicBoolean(false)
+    val deferred = GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
+        try {
+            val r = backend.bindSuspending {
+                if (resources != null) resources.bindSuspending { backend.readFutureSuspending(handle) }
+                else backend.readFutureSuspending(handle)
+            }
+            consumed.set(true)
+            val reader = r ?: throw IllegalStateException("The component dropped the future without writing a value")
+            backend.bind {
+                if (resources != null) resources.bind { decode(reader) } else decode(reader)
+            }
+        } finally {
+            if (consumed.compareAndSet(false, true)) {
+                runCatching { backend.dropReadable(handle) }
+            }
         }
     }
+    deferred.invokeOnCompletion { cause ->
+        if (cause != null && consumed.compareAndSet(false, true)) {
+            runCatching { backend.dropReadable(handle) }
+        }
+    }
+    return deferred
 }
 
 /** The stream [handle] on [backend], read in chunks as it is collected; it can be collected once. */

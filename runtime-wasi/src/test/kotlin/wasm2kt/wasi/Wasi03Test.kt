@@ -28,6 +28,7 @@ import wasm2kt.wasi.wasi.filesystem.types.PathFlags
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -498,5 +499,122 @@ class Wasi03Test {
         assertFailsWith<IllegalStateException> {
             runWasiCommand { error("unexpected host failure") }
         }
+    }
+
+    @Test
+    fun `WasiPathDescriptor rejects trailing slashes on regular files, preopen self-mutation, and symlink escapes via renameAt or readlinkAt`(@TempDir tempDir: Path) = runBlocking {
+        val outsideTarget = tempDir.resolve("outside.txt")
+        Files.writeString(outsideTarget, "outside")
+        val sandboxDir = Files.createDirectories(tempDir.resolve("sandbox"))
+        Files.writeString(sandboxDir.resolve("file.txt"), "hello")
+        Files.writeString(sandboxDir.resolve("target.txt"), "ok")
+        val subDir = Files.createDirectories(sandboxDir.resolve("sub"))
+        Files.createSymbolicLink(subDir.resolve("rel-parent-link"), Path.of("../target.txt"))
+        Files.createSymbolicLink(sandboxDir.resolve("outside-link"), Path.of("../outside.txt"))
+
+        val subNestedDir = Files.createDirectories(subDir.resolve("nested"))
+        Files.createSymbolicLink(subNestedDir.resolve("two-up-link"), Path.of("../../target.txt"))
+
+        val root = WasiPathDescriptor.createRoot(sandboxDir, readOnly = false)
+        try {
+            assertEquals(FsErrorCode.NotDirectory, root.openAt(PathFlags.NONE, "file.txt/", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NotDirectory, root.openAt(PathFlags.NONE, "file.txt/sub", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.NoEntry, root.openAt(PathFlags.NONE, "missing/", OpenFlags.NONE, DescriptorFlags.READ).errorOrNull())
+            assertEquals(FsErrorCode.IsDirectory, root.openAt(PathFlags.NONE, "new-entry/", OpenFlags.CREATE, DescriptorFlags.WRITE).errorOrNull())
+            assertEquals(FsErrorCode.NotDirectory, root.unlinkFileAt("file.txt/").errorOrNull())
+            assertEquals(FsErrorCode.NoEntry, root.unlinkFileAt("missing/").errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.unlinkFileAt(".").errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.renameAt(".", root, "moved-root").errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.renameAt("sub/rel-parent-link", root, "escaped-link").errorOrNull())
+            assertEquals(FsErrorCode.NotPermitted, root.renameAt("sub/nested", root, "moved-nested").errorOrNull())
+            assertTrue(Files.isDirectory(subNestedDir))
+            assertFalse(Files.exists(sandboxDir.resolve("moved-nested"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            assertEquals(FsErrorCode.NotPermitted, root.readlinkAt("outside-link").errorOrNull())
+
+            // Moving the same symlink or directory laterally keeps relative targets inside sandboxDir.
+            Files.createDirectories(sandboxDir.resolve("sub2"))
+            assertEquals(WitResult.Ok(Unit), root.renameAt("sub/rel-parent-link", root, "sub2/rel-parent-link"))
+            assertEquals(WitResult.Ok("../target.txt"), root.readlinkAt("sub2/rel-parent-link"))
+            assertEquals(WitResult.Ok(Unit), root.renameAt("sub/nested", root, "sub2/nested"))
+            assertEquals(WitResult.Ok("../../target.txt"), root.readlinkAt("sub2/nested/two-up-link"))
+        } finally {
+            root.close()
+        }
+    }
+
+    @Test
+    fun `WasiStdin awaits collection and reports IO errors, and writeViaStream closes closeable flows`() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val gatedStdin = WasiStdin {
+            object : InputStream() {
+                private val data = "abc".encodeToByteArray()
+                private var idx = 0
+                override fun read(): Int {
+                    val single = ByteArray(1)
+                    return if (read(single, 0, 1) < 0) -1 else single[0].toInt() and 0xFF
+                }
+
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    runBlocking { gate.await() }
+                    if (idx >= data.size) return -1
+                    val n = minOf(len, data.size - idx)
+                    System.arraycopy(data, idx, b, off, n)
+                    idx += n
+                    return n
+                }
+            }
+        }
+        val (gatedStream, gatedDone) = gatedStdin.readViaStream()
+        assertFalse(gatedDone.isCompleted, "stdin result must not complete before stream consumption")
+        gate.complete(Unit)
+        assertEquals("abc", gatedStream.toList().fold(ByteArray(0)) { acc, chunk -> acc + chunk }.decodeToString())
+        assertEquals(WitResult.Ok(Unit), gatedDone.await())
+
+        val failingStdin = WasiStdin {
+            object : InputStream() {
+                override fun read(): Int = throw IOException("read boom")
+                override fun read(b: ByteArray, off: Int, len: Int): Int = throw IOException("read boom")
+            }
+        }
+        val (failingStream, failingDone) = failingStdin.readViaStream()
+        assertEquals(emptyList(), failingStream.toList())
+        assertEquals(WitResult.Err(ErrorCode.IO), failingDone.await())
+
+        var flowClosed = 0
+        val delegate = flowOf("x".encodeToByteArray())
+        val closeableFlow = object : Flow<ByteArray> by delegate, AutoCloseable {
+            override fun close() {
+                flowClosed++
+            }
+        }
+        val out = ByteArrayOutputStream()
+        assertEquals(WitResult.Ok(Unit), WasiStdout(out).writeViaStream(closeableFlow).await())
+        assertEquals(1, flowClosed)
+        assertEquals("x", out.toString(Charsets.UTF_8))
+
+        val failingOut = object : OutputStream() {
+            override fun write(b: Int) = throw IOException("write boom")
+            override fun write(b: ByteArray, off: Int, len: Int) = throw IOException("write boom")
+        }
+        assertEquals(WitResult.Err(ErrorCode.IO), WasiStderr(failingOut).writeViaStream(closeableFlow).await())
+        assertEquals(2, flowClosed)
+
+        // Downstream stdout IOException must attribute ErrorCode.IO to stdout, not stdin.
+        val okStdin = WasiStdin { ByteArrayInputStream("hello".encodeToByteArray()) }
+        val (stdinToStdout, stdinToStdoutDone) = okStdin.readViaStream()
+        assertEquals(WitResult.Err(ErrorCode.IO), WasiStdout(failingOut).writeViaStream(stdinToStdout).await())
+        assertEquals(WitResult.Ok(Unit), stdinToStdoutDone.await())
+
+        // Cancelling a lazy writeViaStream Deferred before it starts must still close an AutoCloseable Flow once.
+        var lazyClosed = 0
+        val lazyCloseableFlow = object : Flow<ByteArray> by emptyFlow(), AutoCloseable {
+            override fun close() {
+                lazyClosed++
+            }
+        }
+        val unstarted = WasiStdout(ByteArrayOutputStream()).writeViaStream(lazyCloseableFlow)
+        unstarted.cancel()
+        unstarted.join()
+        assertEquals(1, lazyClosed)
     }
 }

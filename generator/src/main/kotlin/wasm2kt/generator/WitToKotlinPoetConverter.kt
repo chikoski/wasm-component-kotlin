@@ -1958,7 +1958,11 @@ class WitToKotlinPoetConverter(
                         b.endControlFlow()
                     }
                 }
-                b.addStatement("$w.int(%T.current().newStream(__chunks$id))", componentBackendClass)
+                b.addStatement(
+                    "$w.int(%T.current().newStream(__chunks$id, $streamVar as? %T))",
+                    componentBackendClass,
+                    ClassName("java.lang", "AutoCloseable"),
+                )
             }
             is WitTypeDefKind.FutureType -> {
                 val id = localVarCounter++

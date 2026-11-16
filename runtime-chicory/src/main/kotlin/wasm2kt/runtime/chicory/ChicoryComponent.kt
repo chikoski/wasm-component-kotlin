@@ -170,8 +170,21 @@ internal class ChicoryComponentInstance(
         }
     }
 
+    private class SyncExport(
+        val opts: CanonOptions,
+        val func: ExportFunction,
+        val memory: Memory?,
+        val realloc: ExportFunction?,
+        val postReturn: ExportFunction?,
+    )
+
+    private class ResolvedExport(
+        val export: PlanExport,
+        val sync: SyncExport?,
+    )
+
     /** Exports resolved so far; [invoke] takes their index. */
-    private val resolved = ArrayList<PlanExport>()
+    private val resolved = ArrayList<ResolvedExport>()
     private val resolvedIndices = HashMap<String, Int>()
     private val results = WitWriter()
 
@@ -180,16 +193,36 @@ internal class ChicoryComponentInstance(
         checkUsable()
         resolvedIndices[functionName]?.let { return it }
         val export = resolveExport(functionName)
-        val index = resolved.indexOf(export).takeIf { it >= 0 } ?: resolved.size.also { resolved += export }
+        var index = -1
+        for (i in resolved.indices) {
+            if (resolved[i].export === export) {
+                index = i
+                break
+            }
+        }
+        if (index < 0) {
+            index = resolved.size
+            val sync = if (plan.usesAsync) {
+                null
+            } else {
+                val opts = plan.options.getValue(export.options)
+                SyncExport(
+                    opts = opts,
+                    func = coreFunction(export.func),
+                    memory = opts.memory?.let { memories[it] },
+                    realloc = opts.realloc?.let { reallocs[it] },
+                    postReturn = opts.postReturn?.let { postReturns.getValue(it) },
+                )
+            }
+            resolved += ResolvedExport(export = export, sync = sync)
+        }
         resolvedIndices[functionName] = index
         return index
     }
 
     @Synchronized
-    private fun resolvedExport(function: Int): PlanExport =
+    private fun resolvedExport(function: Int): ResolvedExport =
         resolved.getOrNull(function) ?: throw IllegalArgumentException("Unknown function index $function")
-
-    private fun PlanExport.qualifiedName(): String = instance?.let { "$it#$name" } ?: name
 
     /**
      * For a component that uses the async ABI, the call suspends until the component returns, and
@@ -198,36 +231,43 @@ internal class ChicoryComponentInstance(
     override suspend fun invokeSuspending(function: Int, args: WitReader): WitReader {
         if (!plan.usesAsync) return invoke(function, args)
         checkUsable()
-        val export = resolvedExport(function)
-        return async.invokeSuspending(export, export.qualifiedName(), args)
+        val export = resolvedExport(function).export
+        return async.invokeSuspending(export, export.qualifiedName, args)
     }
 
     override fun invoke(function: Int, args: WitReader): WitReader {
         checkUsable()
-        val export = resolvedExport(function)
-        val functionName = export.qualifiedName()
+        val entry = resolvedExport(function)
+        val export = entry.export
+        val functionName = export.qualifiedName
         // Calls into a component that uses the async ABI are tasks on its scheduler (ADR-0019).
         if (plan.usesAsync) return async.invoke(export, functionName, args)
         if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        val sync = checkNotNull(entry.sync)
         val type = export.type
-        val opts = plan.options.getValue(export.options)
-        val cx = Context(opts, Direction.HOST_TO_GUEST)
+        val opts = sync.opts
+        val cx = Context(opts, Direction.HOST_TO_GUEST, cachedMemory = sync.memory, cachedRealloc = sync.realloc)
         val syncDepth = async.syncCallDepth()
         entered = true
         try {
             // Lowering the host's arguments: errors in the values are the host's (not traps), but
             // cabi_realloc runs guest code, so a misbehaving realloc does trap (see Context.realloc).
             val lowerer = Lowerer(cx, args)
-            val paramTypes = type.params.map { it.second }
-            val flatParams = CanonicalAbi.flattenAll(paramTypes)
-            val coreArgs = mutableListOf<Long>()
-            try {
-                if (flatParams.size > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    coreArgs += lowerer.storeTuple(paramTypes).toLong()
+            val paramTypes = type.paramTypes
+            val flatParamCount = type.flatParamCount
+            val coreArgs = try {
+                if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                    longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
+                } else if (flatParamCount == 0) {
+                    CanonicalAbi.EMPTY_LONG_ARRAY
                 } else {
-                    paramTypes.forEach { lowerer.lowerFlat(it, coreArgs) }
+                    val out = LongArray(flatParamCount)
+                    var pos = 0
+                    for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                    out
+                }.also {
+                    if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
                 }
-                if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
             } catch (e: Throwable) {
                 // A bad host argument must not leave handles behind in the component's tables.
                 cx.rollbackLowering()
@@ -235,21 +275,29 @@ internal class ChicoryComponentInstance(
             }
             cx.commitMoves()
 
-            val coreResults = guest { coreFunction(export.func).apply(*coreArgs.toLongArray()) ?: LongArray(0) }
+            val coreResults = guest { sync.func.apply(*coreArgs) ?: CanonicalAbi.EMPTY_LONG_ARRAY }
             cx.checkBorrowsDropped()
 
             results.reset()
-            guest {
-                val lifter = Lifter(cx, results)
-                if (CanonicalAbi.flattenAll(type.results).size > CanonicalAbi.MAX_FLAT_RESULTS) {
-                    lifter.loadTuple(coreResults[0].toInt(), type.results)
-                } else {
-                    val reader = Lifter.FlatReader(coreResults)
-                    type.results.forEach { lifter.liftFlat(it, reader) }
+            if (type.results.isNotEmpty()) {
+                guest {
+                    val lifter = Lifter(cx, results)
+                    if (type.flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
+                        lifter.loadTuple(coreResults[0].toInt(), type.resultTuple)
+                    } else {
+                        val reader = Lifter.FlatReader(coreResults)
+                        for (rt in type.results) lifter.liftFlat(rt, reader)
+                    }
                 }
             }
-            opts.postReturn?.let { pr -> guest { withoutLeaving { postReturns.getValue(pr).apply(*coreResults) } } }
-            return results.toReader()
+            sync.postReturn?.let { pr -> guest { withoutLeaving { pr.apply(*coreResults) } } }
+            return if (results.size > 64 * 1024) {
+                val bytes = results.toByteArray()
+                results.reset()
+                WitReader(bytes)
+            } else {
+                results.toReader()
+            }
         } finally {
             async.cleanupSyncCalls(syncDepth)
             cx.releaseLends()
@@ -605,15 +653,16 @@ internal class ChicoryComponentInstance(
         val cx = Context(opts, Direction.GUEST_TO_HOST)
         val args = WitWriter()
         val lifter = Lifter(cx, args)
-        val paramTypes = t.type.params.map { it.second }
-        val flatParams = CanonicalAbi.flattenAll(paramTypes)
-        val flatResults = CanonicalAbi.flattenAll(t.type.results)
+        val type = t.type
+        val paramTypes = type.paramTypes
+        val flatParamCount = type.flatParamCount
+        val flatResultCount = type.flatResultCount
 
-        if (flatParams.size > CanonicalAbi.MAX_FLAT_PARAMS) {
-            lifter.loadTuple(coreArgs[0].toInt(), paramTypes)
-        } else {
+        if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+            lifter.loadTuple(coreArgs[0].toInt(), type.paramTuple)
+        } else if (paramTypes.isNotEmpty()) {
             val reader = Lifter.FlatReader(coreArgs)
-            paramTypes.forEach { lifter.liftFlat(it, reader) }
+            for (pt in paramTypes) lifter.liftFlat(pt, reader)
         }
 
         val results = WitWriter()
@@ -621,17 +670,17 @@ internal class ChicoryComponentInstance(
         val reader = results.toReader()
 
         val lowerer = Lowerer(cx, reader)
-        val lowered = if (flatResults.size > CanonicalAbi.MAX_FLAT_RESULTS) {
+        val lowered = if (flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
             // The caller passed a return pointer as the last core argument.
             val retPtr = coreArgs[coreArgs.size - 1].toInt()
-            lowerer.storeTupleAt(t.type.results, retPtr)
+            lowerer.storeTupleAt(type.resultTuple, retPtr)
             null
-        } else if (t.type.results.isEmpty()) {
+        } else if (type.results.isEmpty()) {
             null
         } else {
-            val out = mutableListOf<Long>()
-            lowerer.lowerFlat(t.type.results[0], out)
-            out.toLongArray()
+            val out = LongArray(flatResultCount)
+            lowerer.lowerFlat(type.results[0], out, 0)
+            out
         }
         if (reader.remaining != 0) throw IllegalStateException("${reader.remaining} unread bytes after the results of host import '${import.dispatchKey}'")
         return lowered
@@ -687,59 +736,86 @@ internal class ChicoryComponentInstance(
         private val opts: CanonOptions,
         private val direction: Direction,
         private val borrowScope: (() -> Task)? = null,
+        private var cachedMemory: Memory? = null,
+        private var cachedRealloc: ExportFunction? = null,
     ) : AbiContext {
         override val memory: Memory
-            get() = opts.memory?.let { memories.getValue(it) }
+            get() = cachedMemory ?: opts.memory?.let { memories.getValue(it) }?.also { cachedMemory = it }
                 ?: throw IllegalStateException("This function needs linear memory but its canonical options declare none")
         override val encoding: StringEncoding get() = opts.stringEncoding
 
+        // Call-local resource tracking collections stay null until a resource is actually lowered or lifted.
         /** Host handles passed as `own` in this call; removed only once every argument lowered. */
-        private val moves = LinkedHashSet<Int>()
+        private var moves: LinkedHashSet<Int>? = null
 
         /** Host handles passed as `borrow` in this call; released when the call returns. */
-        private val lent = mutableListOf<HostHandle>()
+        private var lent: MutableList<HostHandle>? = null
 
         /** Borrow handles of host resources created in the guest for this call: (table, handle, slot). */
-        private val borrowsIn = mutableListOf<Triple<Int, Int, ResourceHandle>>()
+        private var borrowsIn: MutableList<Triple<Int, Int, ResourceHandle>>? = null
 
         /** Handles this call added to the component's tables while lowering: (table, handle). */
-        private val inserted = mutableListOf<Pair<Int, Int>>()
+        private var inserted: MutableList<Pair<Int, Int>>? = null
+
+        /** Rollback hooks registered while lowering async/error handles for this call. */
+        private var rollbackActions: MutableList<() -> Unit>? = null
+
+        private fun recordRollback(action: () -> Unit) {
+            val list = rollbackActions ?: ArrayList<() -> Unit>(2).also { rollbackActions = it }
+            list += action
+        }
 
         private fun insert(table: Int, rep: Int, own: Boolean, scope: Task? = null): Int =
-            table(table).insert(rep, own, scope).also { inserted += table to it }
+            table(table).insert(rep, own, scope).also {
+                val list = inserted ?: ArrayList<Pair<Int, Int>>(2).also { inserted = it }
+                list += table to it
+            }
 
         /** Lowering the arguments failed: take back the handles already added for them. */
         fun rollbackLowering() {
-            for ((t, h) in inserted.asReversed()) table(t).remove(h).borrowScope?.let { it.numBorrows-- }
-            inserted.clear()
-            borrowsIn.clear()
-            moves.clear()
+            rollbackActions?.let { list ->
+                for (action in list.asReversed()) action()
+                list.clear()
+            }
+            inserted?.let { list ->
+                for ((t, h) in list.asReversed()) table(t).remove(h).borrowScope?.let { it.numBorrows-- }
+                list.clear()
+            }
+            borrowsIn?.clear()
+            moves?.clear()
             releaseLends()
         }
 
         /** The spec's `trap_if(num_borrows != 0)` when a call returns: the callee must drop borrows it received. */
         fun checkBorrowsDropped() {
-            for ((t, h, slot) in borrowsIn) {
-                if (table(t).slotOrNull(h) === slot) poison("Borrowed resource handle $h was not dropped before the call returned")
+            borrowsIn?.let { list ->
+                for ((t, h, slot) in list) {
+                    if (table(t).slotOrNull(h) === slot) poison("Borrowed resource handle $h was not dropped before the call returned")
+                }
+                list.clear()
             }
-            borrowsIn.clear()
         }
 
         override fun realloc(align: Int, size: Int): Int {
-            val f = opts.realloc?.let { reallocs.getValue(it) }
+            val f = cachedRealloc ?: opts.realloc?.let { reallocs.getValue(it) }?.also { cachedRealloc = it }
                 ?: throw IllegalStateException("This function needs cabi_realloc but its canonical options declare none")
             return guest { withoutLeaving { f.apply(0, 0, align.toLong(), size.toLong())[0].toInt() } }
         }
 
         fun commitMoves() {
-            moves.forEach { hostHandles.remove(it) }
-            moves.clear()
-            inserted.clear()
+            moves?.let { set ->
+                for (id in set) hostHandles.remove(id)
+                set.clear()
+            }
+            inserted?.clear()
+            rollbackActions?.clear()
         }
 
         fun releaseLends() {
-            lent.forEach { it.lends-- }
-            lent.clear()
+            lent?.let { list ->
+                for (h in list) h.lends--
+                list.clear()
+            }
         }
 
         override fun lowerOwn(table: Int, id: Int): Int {
@@ -751,7 +827,8 @@ internal class ChicoryComponentInstance(
             // so this is a host error (ADR-0007): the call does not start and the instance stays
             // usable, as on Wasmtime 48.
             check(h.lends == 0) { "Cannot move resource handle $id while it is borrowed by the same call" }
-            check(moves.add(id)) { "Resource handle $id is moved twice in one call" }
+            val set = moves ?: LinkedHashSet<Int>(2).also { moves = it }
+            check(set.add(id)) { "Resource handle $id is moved twice in one call" }
             // The spec's lower_own: the component gets a new owning handle for the rep.
             return insert(table, h.rep, own = true)
         }
@@ -762,19 +839,23 @@ internal class ChicoryComponentInstance(
                 val scope = borrowScope?.invoke()
                 val handle = insert(table, id, own = false, scope = scope)
                 if (scope != null) scope.numBorrows++
-                else borrowsIn += Triple(table, handle, checkNotNull(table(table).slotOrNull(handle)))
+                else {
+                    val list = borrowsIn ?: ArrayList<Triple<Int, Int, ResourceHandle>>(2).also { borrowsIn = it }
+                    list += Triple(table, handle, checkNotNull(table(table).slotOrNull(handle)))
+                }
                 return handle
             }
             requireDefinedResource(table)
             val h = hostHandle(id, table)
             h.lends++
-            lent += h
+            val list = lent ?: ArrayList<HostHandle>(2).also { lent = it }
+            list += h
             // Borrowing into the defining instance passes the representation directly.
             return h.rep
         }
 
         private fun hostHandle(id: Int, table: Int): HostHandle {
-            if (id in moves) throw IllegalStateException("Resource handle $id is moved in this call and cannot be used again")
+            if (moves?.contains(id) == true) throw IllegalStateException("Resource handle $id is moved in this call and cannot be used again")
             val h = hostHandles[id] ?: throw IllegalStateException("Resource handle $id not found or already consumed")
             check(h.table == table) { "Resource handle $id belongs to a different resource type" }
             return h
@@ -804,11 +885,11 @@ internal class ChicoryComponentInstance(
         }
 
         override fun liftStream(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = true)
-        override fun lowerStream(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = true)
+        override fun lowerStream(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = true, onRollback = ::recordRollback)
         override fun liftFuture(table: Int, handle: Int): Int = async.liftEndToHost(table, handle, stream = false)
-        override fun lowerFuture(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = false)
+        override fun lowerFuture(table: Int, id: Int): Int = async.lowerEndFromHost(table, id, stream = false, onRollback = ::recordRollback)
         override fun liftErrorContext(handle: Int): Int = async.liftErrorContextToHost(opts.instance, handle)
-        override fun lowerErrorContext(id: Int): Int = async.lowerErrorContextFromHost(opts.instance, id)
+        override fun lowerErrorContext(id: Int): Int = async.lowerErrorContextFromHost(opts.instance, id, onRollback = ::recordRollback)
 
         override fun liftBorrow(table: Int, handle: Int): Int {
             if (isImported(table)) return table(table).rep(handle)
