@@ -7,7 +7,7 @@
 ## 1. 前提ツールの準備
 
 * **JDK 21 以上**: Foreign Function & Memory (FFM) API（`java.lang.foreign`）を使用します
-* **Kotlin 2.2.0 以上**: Context Parameters（`-Xcontext-parameters`）を使用します
+* Kotlin 2.4.21 で検証済みです。生成コードはコンテキストパラメータを使用します
 * **Rust ツールチェーン (`cargo`)**: `rust-bridge/`（このリポジトリでは `1.97.0` に固定）のビルドに使用します
 * **`wasm-tools` CLI**: `.wit` や `.wasm` から WIT の JSON AST を抽出するために使用します（CI は `1.258.0` で検証）
 
@@ -60,7 +60,7 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.2.0"
+    kotlin("jvm") version "2.4.21"
 }
 
 dependencies {

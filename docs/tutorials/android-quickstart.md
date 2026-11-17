@@ -9,7 +9,7 @@
 
 * **Gradle デーモン用の JDK 21 以上**: ビルド時のツール群（`tooling` と `gradle-plugin`）が JDK 21 向けにコンパイルされているためです。`gradle/gradle-daemon-jvm.properties` に `toolchainVersion=21` を指定しておくと、シェルの `JAVA_HOME` に関わらず JDK 21 が使われます
 * **Android `minSdk 26` 以上**、アプリの `compileOptions` / `jvmTarget` は **Java 11 以上**
-* **Kotlin 2.2.0 以上**（生成コードが Context Parameters を使います。`-Xcontext-parameters` はプラグインが自動で追加します）
+* Kotlin 2.4.21 で検証済みです。ルートプロジェクトの `plugins` ブロックに `id("org.jetbrains.kotlin.jvm") version "2.4.21" apply false` を配置すると、AGP 9 のビルトイン Kotlin とバージョンを揃えられます
 * Rust ツールチェーンや `wasm-tools` は不要です（コンポーネント分解ツールは WebAssembly としてプラグインに同梱されています）
 
 ## 1. リポジトリの取り込み（未公開のため）
@@ -50,7 +50,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("io.github.wasm2kt")
 }
 

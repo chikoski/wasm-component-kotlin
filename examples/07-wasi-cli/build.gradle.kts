@@ -16,6 +16,7 @@ wasm2kt {
 
 sourceSets.main {
     kotlin.srcDir(".")
+    kotlin.exclude("*.kts")
 }
 
 application {

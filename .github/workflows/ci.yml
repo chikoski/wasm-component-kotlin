@@ -117,7 +117,8 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
       # The runner image ships the Android SDK and sets ANDROID_HOME.
-      - run: ./gradlew -p samples/android -PgenerateBaselineProfileOnBuild=false :app:testDebugUnitTest :app:assembleRelease :app:assembleDebugAndroidTest
+      - run: ./gradlew -p samples/android -PgenerateBaselineProfileOnBuild=false :app:testDebugUnitTest :app:assembleRelease :app:assembleDebugAndroidTest :benchmark:assembleReleaseAndroidTest
+      - run: ./gradlew -p samples/android-glitch-camera -PgenerateBaselineProfileOnBuild=false :app:testDebugUnitTest :app:assembleRelease :app:assembleDebugAndroidTest
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

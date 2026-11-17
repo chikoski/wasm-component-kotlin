@@ -4,6 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "org.ow2.asm:*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: "gradle"
     directory: "/samples/android"
     schedule:

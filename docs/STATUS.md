@@ -76,8 +76,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
 * async の制約（[ADR-0018](adr/0018-async-abi-on-chicory.md)、[ADR-0019](adr/0019-suspending-async-boundary.md)）: async の export と import は `suspend fun` だが、ゲストの wasm を実行している間は中断しない（取り消しは、ゲストが次にホストを待つか yield したときに届く）。ホストが受け渡せる stream / future は、要素に resource / stream / future 自体を含まないもの。同じインスタンスや祖先のインスタンスへの再入は、wasmtime-environ 48 がトラップにする
-* AGP 8.9 + KGP 2.2 + Gradle 8.12 でのみ検証。AGP 9 / Gradle 9 は未確認
-* Gradle デーモンは JDK 21 で動かす必要がある（tooling と plugin が JVM 21 向けで、Gradle 8.12 は JDK 25 上で動かない）。`gradle/gradle-daemon-jvm.properties`（ルートと `samples/android`）で指定済み
+* `gradle-plugin` の `functionalTest` に Android プロジェクトの検証ケースが未追加です。Kotlin 2.4.21 と Gradle 9.9.1 および AGP 9.5.1 での両サンプルのビルドは確認済みです。テストケースの追加は [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) で追跡しています
+* Gradle デーモンの JDK 21 指定。`tooling` と `gradle-plugin` が JVM 21 を対象とするため、`gradle/gradle-daemon-jvm.properties` で指定しています
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
 * 実行時間とメモリの上限、実行中の中断はない。読み込むコンポーネントは信頼できるものに限る（[README](../README.md) の「安全性の前提」、#77）
 * integration-tests には `wasm-tools`（CI は 1.258.0 に固定）と、ビルド済みの `rust-bridge` が必要

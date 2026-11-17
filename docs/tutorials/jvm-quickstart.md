@@ -6,7 +6,7 @@
 ## 前提条件
 
 * **Gradle デーモン用の JDK 21 以上**（ビルド時ツールが JDK 21 向けのため。生成されたアプリの実行自体は JVM 11 以上で動きます）
-* **Kotlin 2.2.0 以上**
+* Kotlin 2.4.21 で検証済みです
 
 ## 1. リポジトリの取り込み（未公開のため）
 
@@ -36,7 +36,7 @@ includeBuild("/path/to/wasm-component-kotlin")
 ```kotlin
 // build.gradle.kts
 plugins {
-    kotlin("jvm") version "2.2.0"
+    kotlin("jvm") version "2.4.21"
     id("io.github.wasm2kt")
 }
 

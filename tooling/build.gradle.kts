@@ -17,6 +17,15 @@ dependencies {
     implementation(libs.asm.tree)
     implementation(libs.asm.analysis)
     implementation(libs.asm.util)
+    constraints {
+        val asmVersion = libs.versions.asm.get()
+        for (module in listOf(libs.asm, libs.asm.tree, libs.asm.analysis, libs.asm.util)) {
+            implementation(module) {
+                version { strictly(asmVersion) }
+                because("ASM 9.11+ hardcodes ComputeLimits in ClassWriter, which fails in Chicory 1.7.5 on large modules")
+            }
+        }
+    }
 
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))

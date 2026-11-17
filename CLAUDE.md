@@ -54,7 +54,7 @@ Wasmtime は、decomposer の `wasmtime-environ` と rust-bridge の `wasmtime` 
 Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定で **JDK 21** で動きます（`./gradlew` を起動した JDK や `JAVA_HOME` とは無関係）。
 JDK 21 がインストールされていれば、Gradle が自動で見つけます。見つからない場合は `~/.gradle/gradle.properties` に
 `org.gradle.java.installations.paths=<JDK 21 のパス>`（Homebrew なら `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`）を追加してください。
-Gradle 8.12 は JDK 25 上では動かない（`What went wrong: 25.0.1` になる）ため、この設定を外さないでください。
+ビルド時ツールとプラグインが JVM 21 を対象としているため、この設定を外さないでください。
 
 ## 守ること
 
