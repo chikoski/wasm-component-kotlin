@@ -5,7 +5,7 @@
 
 ## 1. 必要なツール
 
-* **JDK 21**: Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定により JDK 21 で起動します。Gradle が JDK 21 を見つけられない場合は、`~/.gradle/gradle.properties` に `org.gradle.java.installations.paths=<JDK 21 のパス>` を追加してください（Gradle 8.12 は JDK 25 上では動作しません）
+* JDK 21 を使用します。Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定により JDK 21 で起動します。Gradle が JDK 21 を見つけられない場合は、`~/.gradle/gradle.properties` に `org.gradle.java.installations.paths=<JDK 21 のパス>` を追加してください
 * **Rust ツールチェーン (`1.97.0`)**: `rust-bridge/rust-toolchain.toml` と `decomposer/rust-toolchain.toml` で同じバージョンに固定されています
 * **`wasm-tools` (`1.258.0`)**: `integration-tests` の実行に必要です（`WASM_TOOLS_BIN`、`~/.cargo/bin`、または `PATH` から探索します）
   ```bash

@@ -102,7 +102,7 @@ withSession(CounterComponent) {
 | :--- | :--- | :--- |
 | ビルド時の JDK | JDK 21 以上（Gradle デーモン） | JDK 21 以上 |
 | 実行時の環境 | JVM 11 以上 / Android `minSdk 26` 以上 | JVM 21 以上（FFM は `--enable-preview --enable-native-access=ALL-UNNAMED`） |
-| Kotlin | 2.2.0 以上（`-Xcontext-parameters`） | 2.2.0 以上（`-Xcontext-parameters`） |
+| Kotlin | 2.4.21 で検証 | 2.4.21 で検証 |
 | Rust / `cargo` | 不要 | 必要（`rust-bridge` または型付きブリッジのビルド） |
 | `wasm-tools` | 不要（分解ツールを wasm として同梱） | 必要（`.wit` / `.wasm` から JSON AST を抽出） |
 

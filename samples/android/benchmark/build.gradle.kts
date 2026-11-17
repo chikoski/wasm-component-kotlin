@@ -3,9 +3,10 @@
 // Run on a device or emulator with .github/workflows/bench.yml, or by hand:
 //   ./gradlew -p samples/android :benchmark:assembleReleaseAndroidTest
 // then install and `am instrument` it (see bench.yml).
+import wasm2kt.gradle.Wasm2KtDecomposeTask
+
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
     id("io.github.wasm2kt")
 }
 
@@ -33,8 +34,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-
-    sourceSets["androidTest"].assets.srcDir(layout.buildDirectory.dir("bench-assets"))
 }
 
 kotlin {
@@ -56,15 +55,59 @@ wasm2kt {
     }
 }
 
-// The decomposed core modules as assets, to compare against Chicory's interpreter on ART.
-val benchAssets by tasks.registering(Sync::class) {
-    for (name in benchComponents) {
-        val cap = name.replaceFirstChar(Char::uppercaseChar)
-        from(tasks.named("wasm2ktDecompose$cap")) { into("decomposed/$name") }
-    }
-    into(layout.buildDirectory.dir("bench-assets"))
+interface BenchComponentInput {
+    @get:Input
+    val componentName: Property<String>
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val decomposedDir: DirectoryProperty
 }
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("AndroidTestAssets") }.configureEach { dependsOn(benchAssets) }
+
+abstract class CollectBenchAssetsTask : DefaultTask() {
+    @get:Nested
+    abstract val entries: ListProperty<BenchComponentInput>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun collect() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        for (entry in entries.get()) {
+            val dest = out.resolve("decomposed/${entry.componentName.get()}")
+            dest.mkdirs()
+            entry.decomposedDir.get().asFile.copyRecursively(dest, overwrite = true)
+        }
+    }
+}
+
+// The decomposed core modules as assets, to compare against Chicory's interpreter on ART.
+androidComponents.onVariants { variant ->
+    variant.deviceTests.forEach { (deviceTestName, deviceTest) ->
+        val variantCap = variant.name.replaceFirstChar(Char::uppercaseChar)
+        val testCap = deviceTestName.replaceFirstChar(Char::uppercaseChar)
+        val taskName = "collectBenchAssets$variantCap$testCap"
+        val benchAssets = tasks.register(taskName, CollectBenchAssetsTask::class.java) {
+            for (name in benchComponents) {
+                val cap = name.replaceFirstChar(Char::uppercaseChar)
+                val decomposeDir = tasks.named("wasm2ktDecompose$cap", Wasm2KtDecomposeTask::class.java)
+                    .flatMap { task -> task.outputDir }
+                entries.add(
+                    objects.newInstance(BenchComponentInput::class.java).apply {
+                        componentName.set(name)
+                        decomposedDir.set(decomposeDir)
+                    },
+                )
+            }
+        }
+        val assets = checkNotNull(deviceTest.sources.assets) {
+            "Device test $deviceTestName of variant ${variant.name} has no assets source directories"
+        }
+        assets.addGeneratedSourceDirectory(benchAssets, CollectBenchAssetsTask::outputDir)
+    }
+}
 
 dependencies {
     androidTestImplementation("androidx.benchmark:benchmark-junit4:1.3.4")

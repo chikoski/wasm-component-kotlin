@@ -4,9 +4,9 @@
 
 ## ビルド・環境まわり
 
-### `What went wrong: 25.0.1` などで Gradle が起動直後に失敗する
+### JDK 21 が見つからず Gradle が起動直後に失敗する
 
-* **原因**: Gradle 8.12 は JDK 25 上では動作しません。また `wasm2kt` のビルド時ツール（`tooling` と `gradle-plugin`）は JDK 21 向けにコンパイルされています
+* 原因として、`wasm2kt` のビルド時ツールである `tooling` と `gradle-plugin` が JDK 21 向けにコンパイルされています。そのため Gradle デーモンにも JDK 21 が必要です
 * **対処**:
   1. プロジェクトに `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=21`）があることを確認してください（このリポジトリと `samples/android` には設定済みです）
   2. JDK 21 がインストールされているにもかかわらず Gradle が見つけられない場合は、`~/.gradle/gradle.properties` に JDK 21 のパスを指定してください（macOS Homebrew の例）：

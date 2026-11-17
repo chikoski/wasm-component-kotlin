@@ -6,11 +6,11 @@
 
 | 項目 | Chicory + Gradle プラグイン | Wasmtime + CLI | 備考 |
 | :--- | :--- | :--- | :--- |
-| **ビルド時の JDK（Gradle デーモン）** | **JDK 21** | **JDK 21** | `tooling`・`gradle-plugin`・`generator`・`cli` は JVM 21 ターゲット。Gradle 8.12 は JDK 25 上では動かないため、`gradle/gradle-daemon-jvm.properties` で 21 を指定 |
+| ビルド時の JDK | JDK 21 | JDK 21 | `tooling` や `gradle-plugin` などが JVM 21 を対象とするため、`gradle/gradle-daemon-jvm.properties` で JDK 21 を指定しています |
 | **実行時の JVM / Android** | **JVM 11 以上** / **Android `minSdk 26` 以上** | **JVM 21 以上** | `runtime-api` と `runtime-chicory` は JVM 11 ターゲットかつ `animalsniffer` で Android API 26 のシグネチャに対して検査済み（[#80](https://github.com/chikoski/wasm-component-kotlin/issues/80)）。Wasmtime の FFM には `--enable-preview --enable-native-access=ALL-UNNAMED` が必要 |
-| **Kotlin** | **2.2.0 以上** | **2.2.0 以上** | 生成コードが Context Parameters（`-Xcontext-parameters`）を使用 |
-| **Gradle** | **8.12** で検証 | **8.12** で検証 | Gradle 9 は未検証（[#20](https://github.com/chikoski/wasm-component-kotlin/issues/20)） |
-| **Android Gradle Plugin (AGP)** | **8.7〜8.9** で検証（`gradle-api` 8.7.3、サンプルは 8.9.3） | — | AGP 9 は未検証（[#20](https://github.com/chikoski/wasm-component-kotlin/issues/20)） |
+| Kotlin | 2.4.21 で検証 | 2.4.21 で検証 | 生成コードはコンテキストパラメータを使用します。成果物は Kotlin 2.4 メタデータで出力されるため、利用側も Kotlin 2.3 以上が必要です |
+| Gradle | 9.9.1 で検証 | 9.9.1 で検証 | Kotlin/JVM 向け `functionalTest` と `samples/android` での設定キャッシュ再利用を確認済みです |
+| Android Gradle Plugin | 9.5.1 で検証 | — | `gradle-api` 9.5.1 に対してビルドしました。ビルトイン Kotlin 構成で両サンプルの動作を確認済みです。AGP 8 系は検証対象外です。Android 向け `functionalTest` の追加は [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) で追跡しています |
 
 ## 2. コンポーネント処理・ネイティブツールチェーンのバージョン
 
