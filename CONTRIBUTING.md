@@ -40,10 +40,20 @@ cargo test --manifest-path rust-bridge/Cargo.toml
 cargo clippy --manifest-path decomposer/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path decomposer/Cargo.toml
 
+# 差分ミューテーション検査用の cargo-mutants 実行
+# 新規ファイルがある場合は先に git add -N で追跡予定へ加えます
+mkdir -p .tmp
+git diff --no-ext-diff --no-color --relative=rust-bridge "$(git merge-base origin/main HEAD)" > .tmp/mutants-rust-bridge.diff
+cargo mutants --manifest-path rust-bridge/Cargo.toml --workspace --in-diff .tmp/mutants-rust-bridge.diff -o .tmp/mutants-rust-bridge
+git diff --no-ext-diff --no-color --relative=decomposer "$(git merge-base origin/main HEAD)" > .tmp/mutants-decomposer.diff
+WASM2KT_FIXTURES="$(pwd)/fixtures" cargo mutants --manifest-path decomposer/Cargo.toml --in-diff .tmp/mutants-decomposer.diff -o .tmp/mutants-decomposer
+
 # ベンチマーク（詳細は docs/explanation/performance.md）
 ./gradlew -Pwasm2kt.bench :benchmarks:bench
 ./gradlew -Pwasm2kt.bench :benchmarks:benchTyped
 ```
+
+`rust-bridge` と `decomposer` にはそれぞれ `.cargo/mutants.toml` を配置しています。FFI と JNI のエントリポイント群および `main` 関数を除外しつつ、変更差分の境界検査強度を確認できます。`cargo-mutants` が未インストールの環境では差分検査を省略して通常の検証へ進めます。固定のミューテーションスコアによる失敗ゲートは設けません。生き残った変異体はコードレビュー時のテスト補強判断に用います。
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decomposer`・`native`・`android`・`emulator` の 5 ジョブで構成されています。`decomposer` ジョブは、同梱の `dist/wasm2kt-decompose.wasm` とテスト用の分解結果が最新でない場合に失敗します。
 
