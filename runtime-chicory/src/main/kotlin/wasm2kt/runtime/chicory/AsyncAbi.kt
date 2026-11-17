@@ -32,7 +32,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resumeWithException
 
 /** Wraps an error in the host's own values found while running on a guest thread (ADR-0007). */
-internal class HostValueException(cause: Throwable) : RuntimeException(cause)
+internal class HostValueException(cause: Throwable, val handled: Boolean = false) : RuntimeException(cause)
 
 /**
  * The Component Model async ABI for one [ChicoryComponentInstance] (#16, ADR-0018): host calls into a
@@ -41,6 +41,7 @@ internal class HostValueException(cause: Throwable) : RuntimeException(cause)
  */
 internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private val plan get() = c.plan
+    private val errorMessageTuple = WitType.Tuple(listOf(WitType.Str))
 
     val store = AsyncStore()
 
@@ -107,7 +108,11 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         postReturn: ((LongArray) -> Unit)?,
     ) {
         val inst = task.inst
-        val flatArgs = task.start()
+        val flatArgs = try {
+            task.start()
+        } catch (e: HostValueException) {
+            if (e.handled) return else throw e
+        }
         if (!task.optsAsync) {
             val flatResults = callee(flatArgs)
             task.return_(flatResults)
@@ -349,12 +354,16 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val l = started
         if (l == null) {
             store.abandon()
+            hostObjects.clear()
+            hostWriters.clear()
             return
         }
         onSession {
             if (pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) failAll(IllegalStateException("The component instance was closed"))
             store.abandon()
             scope.cancel()
+            hostObjects.clear()
+            hostWriters.clear()
         }
         l.stop()
     }
@@ -413,31 +422,44 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val inst = state(opts.instance)
         lateinit var task: Task
         val cx = c.context(opts, ChicoryComponentInstance.Direction.HOST_TO_GUEST) { task }
-        val paramTypes = type.params.map { it.second }
+        val paramTypes = type.paramTypes
+        val flatParamCount = type.flatParamCount
         val onStart = {
             // Lowering the host's arguments: errors in the values are the host's, not traps (ADR-0007).
-            val coreArgs = ArrayList<Long>()
+            val coreArgs: LongArray
             try {
                 val lowerer = Lowerer(cx, args)
-                if (CanonicalAbi.flattenAll(paramTypes).size > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    coreArgs += lowerer.storeTuple(paramTypes).toLong()
+                coreArgs = if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                    longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
+                } else if (flatParamCount == 0) {
+                    CanonicalAbi.EMPTY_LONG_ARRAY
                 } else {
-                    paramTypes.forEach { lowerer.lowerFlat(it, coreArgs) }
+                    LongArray(flatParamCount).also { out ->
+                        var pos = 0
+                        for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                    }
                 }
                 if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
             } catch (e: ComponentTrapException) {
+                runCatching {
+                    cx.rollbackLowering()
+                    task.releaseLenders()
+                }.onFailure { e.addSuppressed(it) }
                 throw e
             } catch (e: RuntimeException) {
                 if (e !is IllegalArgumentException && e !is IllegalStateException) throw e
-                cx.rollbackLowering()
-                task.releaseLenders()
+                runCatching {
+                    cx.rollbackLowering()
+                    task.releaseLenders()
+                }.onFailure { e.addSuppressed(it) }
                 // The task never started: it leaves the instance as if it had not been called.
                 task.state = Task.State.RESOLVED
                 task.exitImplicitThread()
-                throw HostValueException(e)
+                done(Result.failure(e))
+                throw HostValueException(e, handled = true)
             }
             cx.commitMoves()
-            coreArgs.toLongArray()
+            coreArgs
         }
         val onResolve = { flat: LongArray? ->
             cx.releaseLends()
@@ -447,8 +469,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 val results = writerFor(type.results)
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
-                if (CanonicalAbi.flattenAll(type.results).size > limit) {
-                    lifter.loadTuple(flat[0].toInt(), type.results)
+                if (type.flatResultCount > limit) {
+                    lifter.loadTuple(flat[0].toInt(), type.resultTuple)
                 } else {
                     val reader = Lifter.FlatReader(flat)
                     type.results.forEach { lifter.liftFlat(it, reader) }
@@ -500,9 +522,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private fun liftImportArgs(t: Trampoline.LowerImport, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
         val args = writerFor(t.type.params)
         val lifter = Lifter(cx, args)
-        val paramTypes = t.type.params.map { it.second }
-        if (CanonicalAbi.flattenAll(paramTypes).size > maxFlat) {
-            lifter.loadTuple(coreArgs[0].toInt(), paramTypes)
+        val paramTypes = t.type.paramTypes
+        if (t.type.flatParamCount > maxFlat) {
+            lifter.loadTuple(coreArgs[0].toInt(), t.type.paramTuple)
         } else {
             val reader = Lifter.FlatReader(coreArgs)
             paramTypes.forEach { lifter.liftFlat(it, reader) }
@@ -535,7 +557,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val results = writerFor(t.type.results)
             c.bind { c.hostImport(t.import).call(args.toReader(), results) }
             val reader = results.toReader()
-            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
             checkImportResults(reader, key)
             return longArrayOf(Subtask.State.RETURNED.toLong())
         }
@@ -551,7 +573,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     try {
                         c.guest {
                             val reader = results.toReader()
-                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.results, retPtr)
+                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
                             checkImportResults(reader, key)
                         }
                     } catch (e: Throwable) {
@@ -763,7 +785,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val opts = plan.options.getValue(t.options!!)
             val w = WitWriter().apply { string(e.debugMessage) }
             Lowerer(c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST), w.toReader())
-                .storeTupleAt(listOf(WitType.Str), args[1].toInt())
+                .storeTupleAt(errorMessageTuple, args[1].toInt())
             null
         }
         "error-context-drop" -> WasmFunctionHandle { _, args ->
@@ -1255,17 +1277,27 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return id
     }
 
-    fun lowerEndFromHost(table: Int, id: Int, stream: Boolean): Int {
+    fun lowerEndFromHost(table: Int, id: Int, stream: Boolean, onRollback: ((() -> Unit) -> Unit)? = null): Int {
         val what = if (stream) "stream" else "future"
         val held = hostObjects[id]
+        val instState = state(transmitTable(table, stream).instance)
         if (held is End && held.isReadable && held.isStream == stream) {
             // A readable end the component returned, passed back as is.
             if (held.table != table && transmitTable(held.table, stream).element != transmitTable(table, stream).element) {
                 throw IllegalArgumentException("Handle $id is a $what of another type")
             }
             if (held.state != End.EndState.IDLE) throw IllegalStateException("The $what $id was already read to its end")
+            val prevTable = held.table
             hostObjects.remove(id)
-            return lowerAsyncValue(held, table, stream)
+            val h = lowerAsyncValue(held, table, stream)
+            onRollback?.invoke {
+                instState.handles.remove(h)
+                held.owner = null
+                held.index = null
+                held.table = prevTable
+                hostObjects[id] = held
+            }
+            return h
         }
         val source = held as? HostSource ?: throw IllegalArgumentException("Unknown $what handle $id")
         require(source.stream == stream) { "Handle $id is not a $what" }
@@ -1276,7 +1308,24 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val writer = HostWriter(w, element)
         hostWriters += writer
         startHostWriter(writer, source)
-        return lowerAsyncValue(r, table, stream)
+        val h = lowerAsyncValue(r, table, stream)
+        onRollback?.invoke {
+            instState.handles.remove(h)
+            r.owner = null
+            r.index = null
+            w.drop()
+            r.drop()
+            if (writer.producing) {
+                writer.producing = false
+                hostWork--
+            }
+            writer.rolledBack = true
+            writer.finished = true
+            writer.job?.cancel()
+            hostWriters.remove(writer)
+            hostObjects[id] = source
+        }
+        return h
     }
 
     /** Values the host passes in a stream or future it created ([newStream] / [newFuture]). */
@@ -1290,6 +1339,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         var buffer: HostReadableBuffer? = null
         var consumed: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var producing = true
+        @Volatile
+        var rolledBack = false
         var finished = false
         var job: Job? = null
     }
@@ -1300,6 +1351,12 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private fun startHostWriter(writer: HostWriter, source: HostSource) {
         val resources = HostResourceTable.currentOrNull()
         val context = c.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
+        val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun closeSource() {
+            if (!writer.rolledBack && closed.compareAndSet(false, true)) {
+                (source.chunks as? AutoCloseable)?.close()
+            }
+        }
         hostWork++
         writer.job = scope.launch(context) {
             try {
@@ -1332,8 +1389,11 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 if (writer.producing) hostWork--
                 writer.producing = false
                 writer.finished = true
+                closeSource()
                 post { drain() }
             }
+        }.also { job ->
+            job.invokeOnCompletion { closeSource() }
         }
     }
 
@@ -1488,9 +1548,18 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return runBlocking { hostReadSuspending(handle, maxCount, stream) }
     }
 
+    internal fun hasActiveHostRead(handle: Int): Boolean = onSession { hostReads.any { it.handle == handle } }
+
     fun hostDropReadable(handle: Int) = onSession {
         val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown stream or future handle $handle")
         require(end.isReadable) { "Handle $handle is not a readable end" }
+        val cancelled = hostReads.filter { it.handle == handle && it.cont.isCancelled }
+        if (cancelled.isNotEmpty()) {
+            hostReads.removeAll(cancelled)
+            if (end.copyingOrCancelling()) {
+                c.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() }
+            }
+        }
         check(hostReads.none { it.handle == handle }) { "The stream or future $handle is being read" }
         hostObjects.remove(handle)
         c.guest { end.drop() }
@@ -1580,9 +1649,12 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return id
     }
 
-    fun lowerErrorContextFromHost(instance: Int, id: Int): Int {
+    fun lowerErrorContextFromHost(instance: Int, id: Int, onRollback: ((() -> Unit) -> Unit)? = null): Int {
         val e = hostObjects[id] as? ErrorContext ?: throw IllegalArgumentException("Unknown error-context handle $id")
-        return state(instance).handles.add(e)
+        val instState = state(instance)
+        val h = instState.handles.add(e)
+        onRollback?.invoke { instState.handles.remove(h) }
+        return h
     }
 
     /**
@@ -1600,13 +1672,13 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         override var progress = 0
             private set
 
-        private val size = element?.let { CanonicalAbi.sizeOf(it) } ?: 0
+        private val size = element?.size ?: 0
 
         init {
             if (unsigned(length) > HandleTable.MAX_LENGTH) trap("Stream buffer length exceeds the maximum")
             if (element != null) {
                 val memory = opts.memory?.let { c.memories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
-                checkRange(memory, ptr, unsigned(length) * size, CanonicalAbi.alignOf(element), "stream buffer")
+                checkRange(memory, ptr, unsigned(length) * size, element.align, "stream buffer")
             }
         }
 

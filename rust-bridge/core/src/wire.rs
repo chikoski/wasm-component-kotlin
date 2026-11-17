@@ -190,29 +190,7 @@ pub fn read_val(r: &mut Reader<'_>, ty: &Type, store: &mut StoreContextMut<'_, S
         }
         Type::Flags(flags_ty) => {
             let names: Vec<_> = flags_ty.names().collect();
-            let bits: u64 = match names.len() {
-                0 => 0,
-                1..=8 => r.u8()? as u64,
-                9..=16 => r.u16()? as u64,
-                n => {
-                    let mut bits = 0u64;
-                    for word in 0..flag_words(n) {
-                        let v = r.u32()? as u64;
-                        if word < 2 {
-                            bits |= v << (32 * word);
-                        }
-                    }
-                    bits
-                }
-            };
-            Val::Flags(
-                names
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i < 64 && bits & (1u64 << i) != 0)
-                    .map(|(_, n)| n.to_string())
-                    .collect(),
-            )
+            Val::Flags(decode_flags(r, &names)?)
         }
         Type::Own(rt) if host_resource_payload(rt, store).is_some() => {
             let payload = host_resource_payload(rt, store).unwrap_or_default();
@@ -222,8 +200,20 @@ pub fn read_val(r: &mut Reader<'_>, ty: &Type, store: &mut StoreContextMut<'_, S
             let payload = host_resource_payload(rt, store).unwrap_or_default();
             Val::Resource(read_borrow_host(r, payload, store)?)
         }
-        Type::Own(_) => Val::Resource(read_own_guest(r, store)?),
-        Type::Borrow(_) => Val::Resource(read_borrow_guest(r, store)?),
+        Type::Own(rt) => {
+            let res = read_own_guest(r, store)?;
+            if res.ty() != *rt {
+                bail!("Resource handle belongs to a different resource type");
+            }
+            Val::Resource(res)
+        }
+        Type::Borrow(rt) => {
+            let res = read_borrow_guest(r, store)?;
+            if res.ty() != *rt {
+                bail!("Resource handle belongs to a different resource type");
+            }
+            Val::Resource(res)
+        }
         // async types (#16) are not supported by the Wasmtime bridge; it stays the reference for the
         // synchronous features (ADR-0005).
         other => bail!("WIT type {:?} is not supported by the Wasmtime bridge", other),
@@ -338,6 +328,9 @@ pub fn read_borrow_host(r: &mut Reader<'_>, payload: u32, store: &mut StoreConte
 /// `own<R>` of a component-defined resource: moves the bridge's handle into the call.
 pub fn read_own_guest(r: &mut Reader<'_>, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
     let handle = r.u32()? as i32;
+    if store.data().moved_handles.iter().any(|(h, _)| *h == handle) {
+        bail!("Resource handle {} is moved in this call and cannot be used again", handle);
+    }
     // The spec's lift_own: trap_if(h.num_lends != 0). Checked here, before Wasmtime sees the
     // call: Wasmtime 48 refuses it too, but leaves the handle's lend count raised, so the
     // host could never drop it afterwards. Same check and message as the Chicory backend.
@@ -356,13 +349,17 @@ pub fn read_own_guest(r: &mut Reader<'_>, store: &mut StoreContextMut<'_, StoreD
 /// `borrow<R>` of a component-defined resource.
 pub fn read_borrow_guest(r: &mut Reader<'_>, store: &mut StoreContextMut<'_, StoreData>) -> Result<ResourceAny> {
     let handle = r.u32()? as i32;
-    store.data_mut().borrowed_handles.push(handle);
-    store
+    if store.data().moved_handles.iter().any(|(h, _)| *h == handle) {
+        bail!("Resource handle {} is moved in this call and cannot be used again", handle);
+    }
+    let res = store
         .data()
         .resources
         .get(&handle)
         .copied()
-        .ok_or_else(|| anyhow!("Resource handle {} not found", handle))
+        .ok_or_else(|| anyhow!("Resource handle {} not found or already consumed", handle))?;
+    store.data_mut().borrowed_handles.push(handle);
+    Ok(res)
 }
 
 /// A resource coming out of the component: a host resource's rep, or a new bridge handle for a
@@ -379,4 +376,173 @@ pub fn write_resource(w: &mut Vec<u8>, res_any: ResourceAny, store: &mut StoreCo
         w.extend_from_slice(&handle.to_le_bytes());
     }
     Ok(())
+}
+
+fn decode_flags(r: &mut Reader<'_>, names: &[&str]) -> Result<Vec<String>> {
+    let words: Vec<u32> = match names.len() {
+        0 => Vec::new(),
+        1..=8 => vec![r.u8()? as u32],
+        9..=16 => vec![r.u16()? as u32],
+        n => (0..flag_words(n)).map(|_| r.u32()).collect::<Result<Vec<_>>>()?,
+    };
+    Ok(names
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| (words[i / 32] & (1u32 << (i % 32))) != 0)
+        .map(|(_, n)| (*n).to_string())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use wasmtime::component::{Component, ResourceType};
+    use wasmtime::{AsContextMut, Config, Engine, Store};
+
+    const FLAGS32_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00, 0x01, 0x31, 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00,
+        0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x08,
+        0x01, 0x04, 0x65, 0x63, 0x68, 0x6f, 0x00, 0x00, 0x0a, 0x06, 0x01, 0x04, 0x00, 0x20, 0x00, 0x0b,
+        0x00, 0x09, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x00, 0x02, 0x01, 0x6d, 0x02, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x07, 0x79, 0x01, 0x6e, 0x20, 0x02, 0x66, 0x30, 0x02, 0x66, 0x31, 0x02, 0x66, 0x32, 0x02,
+        0x66, 0x33, 0x02, 0x66, 0x34, 0x02, 0x66, 0x35, 0x02, 0x66, 0x36, 0x02, 0x66, 0x37, 0x02, 0x66,
+        0x38, 0x02, 0x66, 0x39, 0x03, 0x66, 0x31, 0x30, 0x03, 0x66, 0x31, 0x31, 0x03, 0x66, 0x31, 0x32,
+        0x03, 0x66, 0x31, 0x33, 0x03, 0x66, 0x31, 0x34, 0x03, 0x66, 0x31, 0x35, 0x03, 0x66, 0x31, 0x36,
+        0x03, 0x66, 0x31, 0x37, 0x03, 0x66, 0x31, 0x38, 0x03, 0x66, 0x31, 0x39, 0x03, 0x66, 0x32, 0x30,
+        0x03, 0x66, 0x32, 0x31, 0x03, 0x66, 0x32, 0x32, 0x03, 0x66, 0x32, 0x33, 0x03, 0x66, 0x32, 0x34,
+        0x03, 0x66, 0x32, 0x35, 0x03, 0x66, 0x32, 0x36, 0x03, 0x66, 0x32, 0x37, 0x03, 0x66, 0x32, 0x38,
+        0x03, 0x66, 0x32, 0x39, 0x03, 0x66, 0x33, 0x30, 0x03, 0x66, 0x33, 0x31, 0x0b, 0x0d, 0x01, 0x00,
+        0x07, 0x66, 0x6c, 0x61, 0x67, 0x73, 0x33, 0x32, 0x03, 0x00, 0x00, 0x07, 0x08, 0x01, 0x40, 0x01,
+        0x01, 0x76, 0x01, 0x00, 0x01, 0x06, 0x0a, 0x01, 0x00, 0x00, 0x01, 0x00, 0x04, 0x65, 0x63, 0x68,
+        0x6f, 0x08, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0b, 0x0a, 0x01, 0x00, 0x04, 0x65, 0x63,
+        0x68, 0x6f, 0x01, 0x00, 0x00, 0x00, 0x2a, 0x0e, 0x63, 0x6f, 0x6d, 0x70, 0x6f, 0x6e, 0x65, 0x6e,
+        0x74, 0x2d, 0x6e, 0x61, 0x6d, 0x65, 0x01, 0x06, 0x00, 0x11, 0x01, 0x00, 0x01, 0x6d, 0x01, 0x06,
+        0x00, 0x12, 0x01, 0x00, 0x01, 0x69, 0x01, 0x09, 0x03, 0x02, 0x00, 0x01, 0x66, 0x01, 0x02, 0x74,
+        0x66,
+    ];
+
+    fn empty_store(engine: &Engine) -> Store<StoreData> {
+        Store::new(
+            engine,
+            StoreData {
+                host_callback: None,
+                jni_callback: None,
+                resources: HashMap::new(),
+                next_handle: 1,
+                imported_resource_types: Vec::<ResourceType>::new(),
+                lent_host_resources: Vec::new(),
+                moved_handles: Vec::new(),
+                borrowed_handles: Vec::new(),
+                host_payloads: HashMap::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn decode_flags_supports_more_than_64_bits() {
+        let owned: Vec<String> = (0..70).map(|i| format!("f{i}")).collect();
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let words: [u32; 3] = [1 | (1 << 31), 1 | (1 << 31), 1 | (1 << 5)];
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let mut r = Reader::new(&bytes);
+        let decoded = decode_flags(&mut r, &names).unwrap();
+        r.finish().unwrap();
+        assert_eq!(decoded, vec!["f0", "f31", "f32", "f63", "f64", "f69"]);
+    }
+
+    #[test]
+    fn read_val_and_write_val_roundtrip_flags() {
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = Component::from_binary(&engine, FLAGS32_WASM).unwrap();
+        let func_ty = component
+            .component_type()
+            .exports(&engine)
+            .find_map(|(name, item)| match (name, item.ty) {
+                ("echo", wasmtime::component::types::ComponentItem::ComponentFunc(ft)) => Some(ft),
+                _ => None,
+            })
+            .unwrap();
+        let flags_ty = func_ty.params().next().unwrap().1;
+        let mut store = empty_store(&engine);
+        let input = (1u32 | (1u32 << 31)).to_le_bytes();
+        let mut reader = Reader::new(&input);
+        let val = read_val(&mut reader, &flags_ty, &mut store.as_context_mut()).unwrap();
+        reader.finish().unwrap();
+        let mut out = Vec::new();
+        write_val(&mut out, &val, &flags_ty, &mut store.as_context_mut()).unwrap();
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn reader_reads_primitives_tags_and_enforces_bounds() {
+        let mut buf = Vec::new();
+        buf.push(0x42u8);
+        buf.extend_from_slice(&0x1234u16.to_le_bytes());
+        buf.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        buf.extend_from_slice(&0x0807_0605_0403_0201u64.to_le_bytes());
+        buf.extend_from_slice(&[0u8, 1u8, 2u8, 0xAAu8]);
+
+        let mut r = Reader::new(&buf);
+        assert_eq!(r.remaining(), buf.len());
+        assert_eq!(r.take(0).unwrap(), &[] as &[u8]);
+        assert_eq!(r.remaining(), buf.len());
+        assert!(r.finish().is_err());
+
+        assert_eq!(r.u8().unwrap(), 0x42);
+        assert_eq!(r.u16().unwrap(), 0x1234);
+        assert_eq!(r.u32().unwrap(), 0x1234_5678);
+        assert_eq!(r.u64().unwrap(), 0x0807_0605_0403_0201);
+        assert!(!r.tag("flag").unwrap());
+        assert!(r.tag("flag").unwrap());
+
+        let err = r.tag("flag").unwrap_err();
+        assert!(format!("{err:#}").contains("Invalid flag tag 2"), "{err:#}");
+        assert_eq!(r.remaining(), 1);
+        assert!(r.take(2).is_err());
+        assert_eq!(r.take(1).unwrap(), &[0xAAu8]);
+        assert_eq!(r.remaining(), 0);
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn discriminant_width_and_roundtrip_boundaries() {
+        assert_eq!(discriminant_width(0), 1);
+        assert_eq!(discriminant_width(1), 1);
+        assert_eq!(discriminant_width(256), 1);
+        assert_eq!(discriminant_width(257), 2);
+        assert_eq!(discriminant_width(65536), 2);
+        assert_eq!(discriminant_width(65537), 4);
+
+        for (count, index, expected_len) in [
+            (256usize, 200usize, 1usize),
+            (257usize, 256usize, 2usize),
+            (65536usize, 65535usize, 2usize),
+            (65537usize, 65536usize, 4usize),
+        ] {
+            let mut bytes = Vec::new();
+            write_discriminant(&mut bytes, count, index);
+            assert_eq!(bytes.len(), expected_len, "count={count} index={index}");
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(read_discriminant(&mut reader, count).unwrap(), index);
+            reader.finish().unwrap();
+
+            if expected_len > 1 {
+                let mut truncated = Reader::new(&bytes[..expected_len - 1]);
+                assert!(read_discriminant(&mut truncated, count).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn flag_words_handles_32_bit_boundaries() {
+        assert_eq!(flag_words(0), 0);
+        assert_eq!(flag_words(1), 1);
+        assert_eq!(flag_words(32), 1);
+        assert_eq!(flag_words(33), 2);
+        assert_eq!(flag_words(64), 2);
+        assert_eq!(flag_words(65), 3);
+    }
 }

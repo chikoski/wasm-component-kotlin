@@ -1,5 +1,6 @@
 package wasm2kt.wasi
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -9,6 +10,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import wasm2kt.runtime.ComponentExitException
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.ImportsFactory
@@ -48,6 +50,7 @@ import java.nio.file.Path
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.ZoneId
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Thrown when a component invokes `wasi:cli/exit.exit` or `wasi:cli/exit.exit-with-code`.
@@ -86,16 +89,42 @@ class WasiStdin(
     constructor(bytes: ByteArray) : this({ ByteArrayInputStream(bytes) })
 
     override fun readViaStream(): Tuple2<Flow<ByteArray>, Deferred<WitResult<Unit, ErrorCode>>> {
-        val stream = flow {
-            val streamIn = input()
-            val buffer = ByteArray(8192)
-            while (true) {
-                val n = streamIn.read(buffer)
-                if (n < 0) break
-                if (n > 0) emit(buffer.copyOf(n))
+        val result = CompletableDeferred<WitResult<Unit, ErrorCode>>()
+        val delegate = flow {
+            try {
+                val streamIn = try {
+                    withContext(Dispatchers.IO) { input() }
+                } catch (_: IOException) {
+                    result.complete(WitResult.Err(ErrorCode.IO))
+                    return@flow
+                }
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val chunk = try {
+                        val n = withContext(Dispatchers.IO) { streamIn.read(buffer) }
+                        when {
+                            n < 0 -> null
+                            n == 0 -> ByteArray(0)
+                            else -> buffer.copyOf(n)
+                        }
+                    } catch (_: IOException) {
+                        result.complete(WitResult.Err(ErrorCode.IO))
+                        return@flow
+                    }
+                    if (chunk == null) break
+                    if (chunk.isNotEmpty()) emit(chunk)
+                }
+                result.complete(WitResult.Ok(Unit))
+            } finally {
+                result.complete(WitResult.Ok(Unit))
             }
         }
-        return Tuple2(stream, CompletableDeferred(WitResult.Ok(Unit)))
+        val stream = object : Flow<ByteArray> by delegate, AutoCloseable {
+            override fun close() {
+                result.complete(WitResult.Ok(Unit))
+            }
+        }
+        return Tuple2(stream, result)
     }
 }
 
@@ -108,17 +137,31 @@ private object NullOutputStream : OutputStream() {
 private fun writeStreamToOutput(
     output: OutputStream,
     data: Flow<ByteArray>,
-): Deferred<WitResult<Unit, ErrorCode>> = GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
-    try {
-        data.collect { bytes ->
-            if (bytes.isNotEmpty()) {
-                output.write(bytes)
-                output.flush()
-            }
+): Deferred<WitResult<Unit, ErrorCode>> {
+    val closed = AtomicBoolean(false)
+    fun closeData() {
+        if (closed.compareAndSet(false, true)) {
+            (data as? AutoCloseable)?.close()
         }
-        WitResult.Ok(Unit)
-    } catch (_: IOException) {
-        WitResult.Err(ErrorCode.IO)
+    }
+    return GlobalScope.async(Dispatchers.Unconfined, start = CoroutineStart.LAZY) {
+        try {
+            data.collect { bytes ->
+                if (bytes.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        output.write(bytes)
+                        output.flush()
+                    }
+                }
+            }
+            WitResult.Ok(Unit)
+        } catch (_: IOException) {
+            WitResult.Err(ErrorCode.IO)
+        } finally {
+            closeData()
+        }
+    }.also { job ->
+        job.invokeOnCompletion { closeData() }
     }
 }
 

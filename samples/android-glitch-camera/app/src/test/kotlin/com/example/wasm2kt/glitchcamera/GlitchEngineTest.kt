@@ -1,6 +1,9 @@
 package com.example.wasm2kt.glitchcamera
 
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -303,6 +306,58 @@ class GlitchEngineTest {
         for (i in 3 until rgba.size step 4) {
             assertEquals("Pixel alpha byte at $i should remain opaque", 0xFF.toByte(), rgba[i])
         }
+    }
+
+    @Test
+    fun `close rejects subsequent calls without recreating sessions and serializes with processFrame`() = runBlocking {
+        val width = 16
+        val height = 16
+        val frame = createTestFrame(width, height)
+        val engine = GlitchEngine()
+
+        // Initialize a live session, then launch concurrent frame calls and close the engine.
+        engine.processFrame(width, height, frame).getOrThrow()
+        val concurrentFrames = List(4) {
+            async(Dispatchers.Default) {
+                engine.processFrame(width, height, frame)
+            }
+        }
+        engine.close()
+        val results = concurrentFrames.awaitAll()
+        engine.awaitCloseForTest()
+        for (res in results) {
+            if (res.isFailure) {
+                assertTrue(res.exceptionOrNull() is IllegalStateException)
+            }
+        }
+
+        // Also test closing while thumbnail generation is holding the mutex.
+        GlitchEngine().use { thumbEngine ->
+            val recipes = (1..12).associate { idx -> "preset_$idx" to "filters:\n  - type: Invert" }
+            val thumbJob = async(Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                thumbEngine.generateThumbnails(width, height, frame, recipes)
+            }
+            thumbEngine.close()
+            thumbJob.await()
+            thumbEngine.awaitCloseForTest()
+            assertTrue(thumbEngine.processFrame(width, height, frame).isFailure)
+        }
+
+        val afterProcess = engine.processFrame(width, height, frame)
+        assertTrue(afterProcess.isFailure)
+        assertTrue(afterProcess.exceptionOrNull() is IllegalStateException)
+
+        val afterSnap = engine.captureSnapshotPng()
+        assertTrue(afterSnap.isFailure)
+        assertTrue(afterSnap.exceptionOrNull() is IllegalStateException)
+
+        assertTrue(engine.generateThumbnails(width, height, frame, mapOf("inv" to "filters:\n  - type: Invert")).isEmpty())
+        engine.updateConfig(seed = 99uL)
+
+        val filterErr = runCatching { engine.availablePngFilters() }.exceptionOrNull()
+        assertTrue(filterErr is IllegalStateException)
+        val validateErr = runCatching { engine.validate("filters:\n  - type: Invert") }.exceptionOrNull()
+        assertTrue(validateErr is IllegalStateException)
     }
 
     private fun countChangedPixels(before: ByteArray, after: ByteArray): Int {

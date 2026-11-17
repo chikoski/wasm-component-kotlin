@@ -272,7 +272,7 @@ object JvmMethodSplitter {
         mn.accept(work)
         stripFrameAndLineNodes(work.instructions)
 
-        val localTypes = inferLocalTypes(work) ?: return emptyList()
+        val localTypes = inferLocalTypes(ownerInternalName, work) ?: return emptyList()
         val frameSlot = work.maxLocals
         val grownTypes = localTypes.copyOf(frameSlot + 1)
         grownTypes[frameSlot] = Type.getType("[J")
@@ -380,20 +380,22 @@ object JvmMethodSplitter {
         }
     }
 
-    private fun inferLocalTypes(mn: MethodNode): Array<Type?>? {
+    private fun inferLocalTypes(ownerInternalName: String, mn: MethodNode): Array<Type?>? {
         val types = arrayOfNulls<Type>(mn.maxLocals.coerceAtLeast(1))
         var slot = if ((mn.access and Opcodes.ACC_STATIC) == 0) 1 else 0
         if (slot == 1) {
-            types[0] = Type.getObjectType("java/lang/Object")
+            types[0] = Type.getObjectType(ownerInternalName)
         }
         for (arg in Type.getArgumentTypes(mn.desc)) {
-            if (slot >= types.size) return null
+            if (slot + arg.size > types.size) return null
             types[slot] = arg
             slot += arg.size
         }
 
         fun record(varIndex: Int, type: Type): Boolean {
-            if (varIndex < 0 || varIndex >= types.size) return false
+            if (varIndex < 0 || varIndex + type.size > types.size) return false
+            if (varIndex > 0 && types[varIndex - 1]?.size == 2) return false
+            if (type.size == 2 && types[varIndex + 1] != null) return false
             val existing = types[varIndex]
             if (existing == null) {
                 types[varIndex] = type
@@ -1158,7 +1160,7 @@ object JvmMethodSplitter {
         else -> Opcodes.ALOAD
     }
 
-    private fun pushIntInsn(value: Int): AbstractInsnNode = when (value) {
+    internal fun pushIntInsn(value: Int): AbstractInsnNode = when (value) {
         -1 -> InsnNode(Opcodes.ICONST_M1)
         0 -> InsnNode(Opcodes.ICONST_0)
         1 -> InsnNode(Opcodes.ICONST_1)
@@ -1167,7 +1169,8 @@ object JvmMethodSplitter {
         4 -> InsnNode(Opcodes.ICONST_4)
         5 -> InsnNode(Opcodes.ICONST_5)
         in Byte.MIN_VALUE..Byte.MAX_VALUE -> IntInsnNode(Opcodes.BIPUSH, value)
-        else -> IntInsnNode(Opcodes.SIPUSH, value)
+        in Short.MIN_VALUE..Short.MAX_VALUE -> IntInsnNode(Opcodes.SIPUSH, value)
+        else -> LdcInsnNode(value)
     }
 
     private fun estimateMethodBytes(insns: InsnList): Int {

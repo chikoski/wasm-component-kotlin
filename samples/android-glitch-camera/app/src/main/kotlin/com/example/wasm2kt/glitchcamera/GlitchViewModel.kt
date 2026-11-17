@@ -10,7 +10,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.glitch.FilterInfo
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -148,6 +150,7 @@ class GlitchViewModel : ViewModel() {
 
     private val recorderLock = Any()
     private var activeRecorder: Mp4VideoRecorder? = null
+    private val recorderCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _uiState = MutableStateFlow(GlitchUiState())
     val uiState: StateFlow<GlitchUiState> = _uiState.asStateFlow()
@@ -630,20 +633,37 @@ class GlitchViewModel : ViewModel() {
             if (existing != null) {
                 activeRecorder = null
                 _uiState.update { it.copy(isRecording = false, statusMessage = "Finalizing MP4...") }
-                viewModelScope.launch(Dispatchers.IO) {
-                    val file = runCatching { existing.finish() }.getOrNull()
-                    if (file != null && file.exists()) {
-                        val saveRes = MediaStoreHelper.saveMp4Video(appContext, file)
-                        _uiState.update { state ->
-                            state.copy(
-                                statusMessage = saveRes.fold(
-                                    onSuccess = { "Saved MP4 video to Movies/GlitchCamera" },
-                                    onFailure = { "MP4 save failed: ${it.message}" },
-                                ),
-                            )
+                // Finalize on an independent IO scope so leaving the screen after pressing Stop
+                // still finishes writing and deletes temporary cache files cleanly.
+                recorderCleanupScope.launch {
+                    try {
+                        val finishResult = runCatching { existing.finish() }
+                        val file = finishResult.getOrNull()
+                        if (file != null && file.exists() && file.length() > 0L) {
+                            val saveRes = MediaStoreHelper.saveMp4Video(appContext, file)
+                            _uiState.update { state ->
+                                state.copy(
+                                    statusMessage = saveRes.fold(
+                                        onSuccess = { "Saved MP4 video to Movies/GlitchCamera" },
+                                        onFailure = { "MP4 save failed: ${it.message}" },
+                                    ),
+                                )
+                            }
+                        } else {
+                            val failure = finishResult.exceptionOrNull()
+                            _uiState.update { state ->
+                                state.copy(
+                                    statusMessage = if (failure != null) {
+                                        "Recording failed: ${failure.message}"
+                                    } else {
+                                        "Recording stopped"
+                                    },
+                                )
+                            }
                         }
-                    } else {
-                        _uiState.update { it.copy(statusMessage = "Recording stopped") }
+                    } finally {
+                        runCatching { existing.close() }
+                        runCatching { existing.outputFile.delete() }
                     }
                 }
             } else {
@@ -667,6 +687,7 @@ class GlitchViewModel : ViewModel() {
                         )
                     }
                 }.onFailure { err ->
+                    runCatching { tempFile.delete() }
                     _uiState.update {
                         it.copy(statusMessage = "Failed to start recorder: ${err.message}")
                     }
@@ -731,11 +752,19 @@ class GlitchViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        synchronized(recorderLock) {
-            activeRecorder?.close()
-            activeRecorder = null
+        val recorderToClose = synchronized(recorderLock) {
+            activeRecorder.also { activeRecorder = null }
         }
-        engine.close()
+        if (recorderToClose != null) {
+            recorderCleanupScope.launch {
+                try {
+                    runCatching { recorderToClose.close() }
+                } finally {
+                    runCatching { recorderToClose.outputFile.delete() }
+                }
+            }
+        }
+        runCatching { engine.close() }
         presentationExecutor.shutdown()
     }
 

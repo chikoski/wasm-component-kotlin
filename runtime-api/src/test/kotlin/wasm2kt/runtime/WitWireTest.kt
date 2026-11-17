@@ -107,4 +107,31 @@ class WitWireTest {
         small.byte(1)
         assertThrows<IllegalArgumentException> { small.reserve(Int.MAX_VALUE) }
     }
+
+    @Test
+    fun `reset shrinks backing array larger than 64 KiB`() {
+        val w = WitWriter()
+        w.raw(ByteArray(128 * 1024), 0, 128 * 1024)
+        assertTrue(w.buffer.size > 64 * 1024)
+        w.reset()
+        assertEquals(0, w.size)
+        assertEquals(64, w.buffer.size)
+    }
+
+    @Test
+    fun `reset preserves explicit initial capacity larger than 64 KiB and shrinks excess growth back to it`() {
+        val initial = 128 * 1024
+        val w = WitWriter(initial)
+        val initialBacking = w.buffer
+        w.raw(ByteArray(initial), 0, initial)
+        w.reset()
+        assertEquals(0, w.size)
+        kotlin.test.assertSame(initialBacking, w.buffer)
+
+        w.raw(ByteArray(initial * 2), 0, initial * 2)
+        assertTrue(w.buffer.size > initial)
+        w.reset()
+        assertEquals(0, w.size)
+        assertEquals(initial, w.buffer.size)
+    }
 }

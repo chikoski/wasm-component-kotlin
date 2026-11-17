@@ -15,8 +15,14 @@ import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.li
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.Session as LiveSession
 import com.example.wasm2kt.glitchcamera.pngglitch.openSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class PngFilterOption(
     val label: String,
@@ -51,10 +57,17 @@ data class GlitchFrameOutput(
 
 class GlitchEngine : AutoCloseable {
     private val mutex = Mutex()
+    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val cleanupScheduled = AtomicBoolean(false)
+    @Volatile
+    private var closeCleanupJob: Job? = null
+    @Volatile
+    private var closed: Boolean = false
     private var worldSession: WorldSession? = null
     private var liveSession: LiveSession? = null
 
     private fun ensureWorldSessionLocked(): WorldSession {
+        check(!closed) { "GlitchEngine is closed" }
         return worldSession ?: openSession(PngglitchComponent).also { worldSession = it }
     }
 
@@ -90,6 +103,8 @@ class GlitchEngine : AutoCloseable {
         seedMode: SeedMode = currentSeedMode,
         filterOption: PngFilterOption = currentFilterOption,
     ) = mutex.withLock {
+        // Ignore configuration updates once closed; callers racing with shutdown exit quietly.
+        if (closed) return@withLock
         if (filterOption != currentFilterOption) {
             currentFilterOption = filterOption
             liveSession?.close()
@@ -104,6 +119,9 @@ class GlitchEngine : AutoCloseable {
     }
 
     suspend fun processFrame(width: Int, height: Int, rgba: ByteArray): Result<GlitchFrameOutput> = mutex.withLock {
+        if (closed) {
+            return Result.failure(IllegalStateException("GlitchEngine is closed"))
+        }
         val expectedBytes = width * height * 4
         if (rgba.size != expectedBytes) {
             return Result.failure(
@@ -138,6 +156,9 @@ class GlitchEngine : AutoCloseable {
     }
 
     suspend fun captureSnapshotPng(): Result<ByteArray> = mutex.withLock {
+        if (closed) {
+            return Result.failure(IllegalStateException("GlitchEngine is closed"))
+        }
         val session = liveSession
             ?: return Result.failure(IllegalStateException("No active camera frame in live session"))
         when (val snapRes = session.snapshot()) {
@@ -154,6 +175,9 @@ class GlitchEngine : AutoCloseable {
         seed: ULong = 42uL,
         filterOption: PngFilterOption? = null,
     ): Map<String, ByteArray> = mutex.withLock {
+        if (closed) {
+            return emptyMap()
+        }
         val expectedBytes = width * height * 4
         if (baseRgba.size != expectedBytes || recipes.isEmpty()) {
             return emptyMap()
@@ -174,6 +198,7 @@ class GlitchEngine : AutoCloseable {
         val results = LinkedHashMap<String, ByteArray>(recipes.size)
         try {
             for ((key, yaml) in recipes) {
+                if (closed) break
                 if (thumbSession.setRecipe(yaml, seed, SeedMode.FIXED) is WitResult.Err) continue
                 when (val rendered = thumbSession.processFrame(baseRgba)) {
                     is WitResult.Ok -> results[key] = rendered.value
@@ -216,10 +241,41 @@ class GlitchEngine : AutoCloseable {
     }
 
     override fun close() {
-        liveSession?.close()
-        liveSession = null
-        worldSession?.close()
-        worldSession = null
+        closed = true
+        if (mutex.tryLock()) {
+            try {
+                closeSessionsLocked()
+            } finally {
+                mutex.unlock()
+            }
+            return
+        }
+        // An in-flight worker holds the mutex; finish session disposal once it unlocks so
+        // callers on the main thread (such as ViewModel.onCleared) never block.
+        if (cleanupScheduled.compareAndSet(false, true)) {
+            closeCleanupJob = closeScope.launch {
+                mutex.withLock {
+                    closeSessionsLocked()
+                }
+            }
+        }
+    }
+
+    private fun closeSessionsLocked() {
+        try {
+            liveSession?.close()
+        } finally {
+            liveSession = null
+            try {
+                worldSession?.close()
+            } finally {
+                worldSession = null
+            }
+        }
+    }
+
+    internal suspend fun awaitCloseForTest() {
+        closeCleanupJob?.join()
     }
 
     companion object {

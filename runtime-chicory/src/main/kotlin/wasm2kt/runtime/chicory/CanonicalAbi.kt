@@ -27,61 +27,12 @@ internal object CanonicalAbi {
 
     enum class CoreType { I32, I64, F32, F64 }
 
-    fun alignOf(t: WitType): Int = when (t) {
-        WitType.Bool, WitType.S8, WitType.U8 -> 1
-        WitType.S16, WitType.U16 -> 2
-        WitType.S32, WitType.U32, WitType.F32, WitType.Char -> 4
-        WitType.S64, WitType.U64, WitType.F64 -> 8
-        WitType.Str, is WitType.ListOf -> 4
-        is WitType.Record -> t.fields.maxOfOrNull { alignOf(it.second) } ?: 1
-        is WitType.Tuple -> t.types.maxOfOrNull { alignOf(it) } ?: 1
-        is WitType.Variant -> maxOf(discriminantSize(t.cases.size), maxCaseAlign(t))
-        is WitType.Flags -> flagsSize(t.names.size).coerceAtMost(4)
-        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> 4
-        is WitType.Unsupported -> unsupported(t)
-    }
-
-    fun sizeOf(t: WitType): Int = when (t) {
-        WitType.Bool, WitType.S8, WitType.U8 -> 1
-        WitType.S16, WitType.U16 -> 2
-        WitType.S32, WitType.U32, WitType.F32, WitType.Char -> 4
-        WitType.S64, WitType.U64, WitType.F64 -> 8
-        WitType.Str, is WitType.ListOf -> 8
-        is WitType.Record -> recordSize(t.fields.map { it.second })
-        is WitType.Tuple -> recordSize(t.types)
-        is WitType.Variant -> {
-            var s = alignTo(discriminantSize(t.cases.size), maxCaseAlign(t))
-            s += t.cases.maxOfOrNull { c -> c.second?.let { sizeOf(it) } ?: 0 } ?: 0
-            alignTo(s, alignOf(t))
-        }
-        is WitType.Flags -> flagsSize(t.names.size)
-        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> 4
-        is WitType.Unsupported -> unsupported(t)
-    }
-
-    fun flatten(t: WitType): List<CoreType> = when (t) {
-        WitType.Bool, WitType.S8, WitType.U8, WitType.S16, WitType.U16, WitType.S32, WitType.U32, WitType.Char -> listOf(CoreType.I32)
-        WitType.S64, WitType.U64 -> listOf(CoreType.I64)
-        WitType.F32 -> listOf(CoreType.F32)
-        WitType.F64 -> listOf(CoreType.F64)
-        WitType.Str, is WitType.ListOf -> listOf(CoreType.I32, CoreType.I32)
-        is WitType.Record -> t.fields.flatMap { flatten(it.second) }
-        is WitType.Tuple -> t.types.flatMap { flatten(it) }
-        is WitType.Variant -> {
-            val joined = mutableListOf<CoreType>()
-            for ((_, payload) in t.cases) {
-                payload?.let { flatten(it) }?.forEachIndexed { i, ft ->
-                    if (i < joined.size) joined[i] = join(joined[i], ft) else joined += ft
-                }
-            }
-            listOf(CoreType.I32) + joined
-        }
-        is WitType.Flags -> List((t.names.size + 31) / 32) { CoreType.I32 }
-        is WitType.Own, is WitType.Borrow, is WitType.Stream, is WitType.Future, WitType.ErrorContext -> listOf(CoreType.I32)
-        is WitType.Unsupported -> unsupported(t)
-    }
-
-    fun flattenAll(types: List<WitType>): List<CoreType> = types.flatMap { flatten(it) }
+    val EMPTY_LONG_ARRAY = LongArray(0)
+    val FLAT_I32 = listOf(CoreType.I32)
+    val FLAT_I64 = listOf(CoreType.I64)
+    val FLAT_F32 = listOf(CoreType.F32)
+    val FLAT_F64 = listOf(CoreType.F64)
+    val FLAT_I32_I32 = listOf(CoreType.I32, CoreType.I32)
 
     fun discriminantSize(cases: Int): Int = when {
         cases <= 1 shl 8 -> 1
@@ -97,26 +48,79 @@ internal object CanonicalAbi {
         else -> CoreType.I64
     }
 
-    private fun maxCaseAlign(t: WitType.Variant): Int = t.cases.maxOfOrNull { c -> c.second?.let { alignOf(it) } ?: 1 } ?: 1
-
-    private fun recordSize(types: List<WitType>): Int {
-        var s = 0
-        for (ft in types) s = alignTo(s, alignOf(ft)) + sizeOf(ft)
-        return alignTo(s, types.maxOfOrNull { alignOf(it) } ?: 1)
+    internal fun computeMaxCaseAlign(t: WitType.Variant): Int {
+        var max = 1
+        for ((_, payload) in t.cases) {
+            if (payload != null) {
+                val a = payload.align
+                if (a > max) max = a
+            }
+        }
+        return max
     }
 
-    private fun flagsSize(n: Int): Int = when {
+    internal fun computeVariantSize(t: WitType.Variant): Int {
+        var maxPayload = 0
+        for ((_, payload) in t.cases) {
+            if (payload != null) {
+                val s = payload.size
+                if (s > maxPayload) maxPayload = s
+            }
+        }
+        return alignTo(t.payloadOffset + maxPayload, t.align)
+    }
+
+    internal fun computeVariantPayloadFlat(t: WitType.Variant): List<CoreType> {
+        val joined = mutableListOf<CoreType>()
+        for ((_, payload) in t.cases) {
+            if (payload != null) {
+                val flat = payload.flat
+                for (i in flat.indices) {
+                    val ft = flat[i]
+                    if (i < joined.size) joined[i] = join(joined[i], ft) else joined += ft
+                }
+            }
+        }
+        return joined
+    }
+
+    internal fun computeVariantFlat(payloadFlat: List<CoreType>): List<CoreType> =
+        if (payloadFlat.isEmpty()) FLAT_I32
+        else ArrayList<CoreType>(1 + payloadFlat.size).apply { add(CoreType.I32); addAll(payloadFlat) }
+
+    internal fun computeRecordAlign(types: List<WitType>): Int {
+        var max = 1
+        for (ft in types) {
+            val a = ft.align
+            if (a > max) max = a
+        }
+        return max
+    }
+
+    internal fun computeRecordSize(types: List<WitType>): Int {
+        var s = 0
+        var maxAlign = 1
+        for (ft in types) {
+            val a = ft.align
+            if (a > maxAlign) maxAlign = a
+            s = alignTo(s, a) + ft.size
+        }
+        return alignTo(s, maxAlign)
+    }
+
+    internal fun computeFlattenAll(types: List<WitType>): List<CoreType> = when (types.size) {
+        0 -> emptyList()
+        1 -> types[0].flat
+        else -> types.flatMap { it.flat }
+    }
+
+    internal fun flagsSize(n: Int): Int = when {
         n == 0 -> 0
         n <= 8 -> 1
         n <= 16 -> 2
         else -> 4 * ((n + 31) / 32)
     }
 
-    /** Integer types whose values have the same bytes in linear memory and in the binary format. */
-    fun isRawInteger(t: WitType): Boolean = when (t) {
-        WitType.S8, WitType.U8, WitType.S16, WitType.U16, WitType.S32, WitType.U32, WitType.S64, WitType.U64 -> true
-        else -> false
-    }
 
     internal fun unsupported(t: WitType.Unsupported): Nothing =
         throw UnsupportedOperationException("WIT type is not supported by the Chicory backend yet: ${t.detail}")
@@ -153,46 +157,71 @@ private fun unsupportedAsync(what: String): Nothing =
  * do not fit the WIT type are host errors ([IllegalArgumentException]).
  */
 internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
-    fun lowerFlat(t: WitType, out: MutableList<Long>) {
+    fun lowerFlat(t: WitType, out: LongArray, pos: Int): Int {
         when (t) {
-            WitType.Bool -> out += bool().toLong()
-            WitType.S8 -> out += r.byte().toLong()
-            WitType.U8 -> out += (r.byte().toLong() and 0xFF)
-            WitType.S16 -> out += r.short().toLong()
-            WitType.U16 -> out += (r.short().toLong() and 0xFFFF)
-            WitType.S32, WitType.U32 -> out += r.int().toLong()
-            WitType.S64, WitType.U64 -> out += r.long()
-            WitType.F32 -> out += f32Bits().toLong()
-            WitType.F64 -> out += f64Bits()
-            WitType.Char -> out += char().toLong()
+            WitType.Bool -> { out[pos] = bool().toLong(); return pos + 1 }
+            WitType.S8 -> { out[pos] = r.byte().toLong(); return pos + 1 }
+            WitType.U8 -> { out[pos] = r.byte().toLong() and 0xFF; return pos + 1 }
+            WitType.S16 -> { out[pos] = r.short().toLong(); return pos + 1 }
+            WitType.U16 -> { out[pos] = r.short().toLong() and 0xFFFF; return pos + 1 }
+            WitType.S32, WitType.U32 -> { out[pos] = r.int().toLong(); return pos + 1 }
+            WitType.S64, WitType.U64 -> { out[pos] = r.long(); return pos + 1 }
+            WitType.F32 -> { out[pos] = f32Bits().toLong(); return pos + 1 }
+            WitType.F64 -> { out[pos] = f64Bits(); return pos + 1 }
+            WitType.Char -> { out[pos] = char().toLong(); return pos + 1 }
             WitType.Str -> {
-                val (ptr, len) = storeString()
-                out += ptr.toLong(); out += len.toLong()
+                val packed = storeString()
+                out[pos] = packed.toInt().toLong()
+                out[pos + 1] = (packed ushr 32).toInt().toLong()
+                return pos + 2
             }
             is WitType.ListOf -> {
-                val (ptr, len) = storeList(t.element)
-                out += ptr.toLong(); out += len.toLong()
+                val packed = storeList(t.element)
+                out[pos] = packed.toInt().toLong()
+                out[pos + 1] = (packed ushr 32).toInt().toLong()
+                return pos + 2
             }
-            is WitType.Record -> for ((_, ft) in t.fields) lowerFlat(ft, out)
-            is WitType.Tuple -> for (et in t.types) lowerFlat(et, out)
-            is WitType.Flags -> flagWords(t).forEach { out += it.toLong() }
+            is WitType.Record -> {
+                var p = pos
+                for (ft in t.fieldTypes) p = lowerFlat(ft, out, p)
+                return p
+            }
+            is WitType.Tuple -> {
+                var p = pos
+                for (et in t.types) p = lowerFlat(et, out, p)
+                return p
+            }
+            is WitType.Flags -> {
+                var p = pos
+                for (w in flagWords(t)) out[p++] = w.toLong()
+                return p
+            }
             is WitType.Variant -> {
+                var p = pos
                 val index = discriminant(t)
-                out += index.toLong()
-                val joined = CanonicalAbi.flatten(t).drop(1)
+                out[p++] = index.toLong()
+                val joined = t.payloadFlat
                 val caseType = t.cases[index].second
-                val flat = mutableListOf<Long>()
-                caseType?.let { lowerFlat(it, flat) }
-                val caseFlat = caseType?.let { CanonicalAbi.flatten(it) } ?: emptyList()
-                joined.forEachIndexed { i, jt ->
-                    out += if (i < flat.size) coerce(flat[i], caseFlat[i], jt) else 0L
+                if (caseType != null) {
+                    val caseFlat = caseType.flat
+                    lowerFlat(caseType, out, p)
+                    for (i in caseFlat.indices) {
+                        val cf = caseFlat[i]
+                        val jt = joined[i]
+                        if (cf != jt) out[p + i] = coerce(out[p + i], cf, jt)
+                    }
+                    p += caseFlat.size
                 }
+                for (i in (p - pos - 1) until joined.size) {
+                    out[p++] = 0L
+                }
+                return p
             }
-            is WitType.Own -> out += cx.lowerOwn(t.table, r.int()).toLong()
-            is WitType.Borrow -> out += cx.lowerBorrow(t.table, r.int()).toLong()
-            is WitType.Stream -> out += cx.lowerStream(t.table, r.int()).toLong()
-            is WitType.Future -> out += cx.lowerFuture(t.table, r.int()).toLong()
-            WitType.ErrorContext -> out += cx.lowerErrorContext(r.int()).toLong()
+            is WitType.Own -> { out[pos] = cx.lowerOwn(t.table, r.int()).toLong(); return pos + 1 }
+            is WitType.Borrow -> { out[pos] = cx.lowerBorrow(t.table, r.int()).toLong(); return pos + 1 }
+            is WitType.Stream -> { out[pos] = cx.lowerStream(t.table, r.int()).toLong(); return pos + 1 }
+            is WitType.Future -> { out[pos] = cx.lowerFuture(t.table, r.int()).toLong(); return pos + 1 }
+            WitType.ErrorContext -> { out[pos] = cx.lowerErrorContext(r.int()).toLong(); return pos + 1 }
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
@@ -209,18 +238,20 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             WitType.F64 -> m.writeLong(ptr, f64Bits())
             WitType.Char -> m.writeI32(ptr, char())
             WitType.Str -> {
-                val (p, len) = storeString()
-                m.writeI32(ptr, p); m.writeI32(ptr + 4, len)
+                val packed = storeString()
+                m.writeI32(ptr, packed.toInt())
+                m.writeI32(ptr + 4, (packed ushr 32).toInt())
             }
             is WitType.ListOf -> {
-                val (p, len) = storeList(t.element)
-                m.writeI32(ptr, p); m.writeI32(ptr + 4, len)
+                val packed = storeList(t.element)
+                m.writeI32(ptr, packed.toInt())
+                m.writeI32(ptr + 4, (packed ushr 32).toInt())
             }
-            is WitType.Record -> storeFields(t.fields.map { it.second }, ptr)
+            is WitType.Record -> storeFields(t.fieldTypes, ptr)
             is WitType.Tuple -> storeFields(t.types, ptr)
             is WitType.Flags -> {
                 val words = flagWords(t)
-                when (CanonicalAbi.sizeOf(t)) {
+                when (t.size) {
                     0 -> Unit
                     1 -> m.writeByte(ptr, words[0].toByte())
                     2 -> m.writeShort(ptr, words[0].toShort())
@@ -229,15 +260,13 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             }
             is WitType.Variant -> {
                 val index = discriminant(t)
-                val discSize = CanonicalAbi.discriminantSize(t.cases.size)
-                when (discSize) {
+                when (t.discSize) {
                     1 -> m.writeByte(ptr, index.toByte())
                     2 -> m.writeShort(ptr, index.toShort())
                     else -> m.writeI32(ptr, index)
                 }
                 t.cases[index].second?.let { caseType ->
-                    val maxAlign = t.cases.maxOfOrNull { c -> c.second?.let { CanonicalAbi.alignOf(it) } ?: 1 } ?: 1
-                    store(caseType, ptr + CanonicalAbi.alignTo(discSize, maxAlign))
+                    store(caseType, ptr + t.payloadOffset)
                 }
             }
             is WitType.Own -> m.writeI32(ptr, cx.lowerOwn(t.table, r.int()))
@@ -252,24 +281,22 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
     private fun storeFields(types: List<WitType>, ptr: Int) {
         var off = 0
         for (ft in types) {
-            off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
+            off = CanonicalAbi.alignTo(off, ft.align)
             store(ft, ptr + off)
-            off += CanonicalAbi.sizeOf(ft)
+            off += ft.size
         }
     }
 
-    /** Stores the next values as a tuple in freshly allocated memory and returns its address. */
-    fun storeTuple(types: List<WitType>): Int {
-        val tuple = WitType.Tuple(types)
-        val ptr = alloc(CanonicalAbi.alignOf(tuple), CanonicalAbi.sizeOf(tuple).toLong())
+    /** Stores [tuple] in freshly allocated memory and returns its address. */
+    fun storeTuple(tuple: WitType.Tuple): Int {
+        val ptr = alloc(tuple.align, tuple.size.toLong())
         store(tuple, ptr)
         return ptr
     }
 
-    /** Stores the next values as a tuple at a guest-provided return pointer, which must be aligned and in bounds. */
-    fun storeTupleAt(types: List<WitType>, ptr: Int) {
-        val tuple = WitType.Tuple(types)
-        checkRange(cx.memory, ptr, CanonicalAbi.sizeOf(tuple).toLong(), CanonicalAbi.alignOf(tuple), "return pointer")
+    /** Stores [tuple] at a guest-provided return pointer, which must be aligned and in bounds. */
+    fun storeTupleAt(tuple: WitType.Tuple, ptr: Int) {
+        checkRange(cx.memory, ptr, tuple.size.toLong(), tuple.align, "return pointer")
         store(tuple, ptr)
     }
 
@@ -280,8 +307,10 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
         return ptr
     }
 
+    private fun packPtrLen(ptr: Int, len: Int): Long = (ptr.toLong() and 0xFFFF_FFFFL) or (len.toLong() shl 32)
+
     /** The binary format carries UTF-8: copied as is for a UTF-8 guest, transcoded otherwise. */
-    private fun storeString(): Pair<Int, Int> {
+    private fun storeString(): Long {
         val n = r.length()
         require(n <= CanonicalAbi.MAX_STRING_BYTE_LENGTH) { "String of $n bytes exceeds the Canonical ABI limit" }
         return r.region(n) { a, off ->
@@ -290,24 +319,24 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
                 StringEncoding.UTF8 -> {
                     val ptr = alloc(1, n.toLong())
                     if (n > 0) cx.memory.write(ptr, a, off, n)
-                    ptr to n
+                    packPtrLen(ptr, n)
                 }
                 StringEncoding.UTF16 -> {
                     val s = String(a, off, n, Charsets.UTF_8)
                     val ptr = alloc(2, 2L * s.length)
                     cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
-                    ptr to s.length
+                    packPtrLen(ptr, s.length)
                 }
                 StringEncoding.LATIN1_UTF16 -> {
                     val s = String(a, off, n, Charsets.UTF_8)
                     if (s.all { it.code <= 0xFF }) {
                         val ptr = alloc(2, s.length.toLong())
                         cx.memory.write(ptr, s.toByteArray(Charsets.ISO_8859_1))
-                        ptr to s.length
+                        packPtrLen(ptr, s.length)
                     } else {
                         val ptr = alloc(2, 2L * s.length)
                         cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
-                        ptr to (s.length or UTF16_TAG)
+                        packPtrLen(ptr, s.length or UTF16_TAG)
                     }
                 }
             }
@@ -315,18 +344,18 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
     }
 
     /** Lists of integers are copied as is; other elements are stored one by one. */
-    private fun storeList(element: WitType): Pair<Int, Int> {
+    private fun storeList(element: WitType): Long {
         val n = r.length()
-        val size = CanonicalAbi.sizeOf(element)
+        val size = element.size
         val byteLength = size.toLong() * n
         require(byteLength <= CanonicalAbi.MAX_LIST_BYTE_LENGTH) { "List of $byteLength bytes exceeds the Canonical ABI limit" }
-        val ptr = alloc(CanonicalAbi.alignOf(element), byteLength)
-        if (CanonicalAbi.isRawInteger(element)) {
+        val ptr = alloc(element.align, byteLength)
+        if (element.isRawInteger) {
             if (byteLength > 0) r.region(byteLength.toInt()) { a, off -> cx.memory.write(ptr, a, off, byteLength.toInt()) }
         } else {
             for (i in 0 until n) store(element, ptr + i * size)
         }
-        return ptr to n
+        return packPtrLen(ptr, n)
     }
 
     private fun bool(): Int = when (val b = r.byte().toInt()) {
@@ -395,6 +424,22 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     class FlatReader(private val values: LongArray) {
         private var i = 0
         fun next(): Long = values[i++]
+        fun skip(count: Int) { i += count }
+        internal fun sliceUncoerced(joined: List<CanonicalAbi.CoreType>, caseFlat: List<CanonicalAbi.CoreType>): FlatReader {
+            val start = i
+            i += joined.size
+            val uncoerced = LongArray(caseFlat.size) { k ->
+                val raw = values[start + k]
+                val from = joined[k]
+                val to = caseFlat[k]
+                when {
+                    from == to -> raw
+                    to == CanonicalAbi.CoreType.I32 || to == CanonicalAbi.CoreType.F32 -> raw.toInt().toLong()
+                    else -> raw
+                }
+            }
+            return FlatReader(uncoerced)
+        }
     }
 
     fun liftFlat(t: WitType, r: FlatReader) {
@@ -409,18 +454,36 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             WitType.Char -> char(r.next().toInt())
             WitType.Str -> loadString(r.next().toInt(), r.next().toInt())
             is WitType.ListOf -> loadList(r.next().toInt(), r.next().toInt(), t.element)
-            is WitType.Record -> for ((_, ft) in t.fields) liftFlat(ft, r)
+            is WitType.Record -> for (ft in t.fieldTypes) liftFlat(ft, r)
             is WitType.Tuple -> for (et in t.types) liftFlat(et, r)
             is WitType.Flags -> flags(IntArray((t.names.size + 31) / 32) { r.next().toInt() }, t)
             is WitType.Variant -> {
                 val index = r.next().toInt()
                 checkDiscriminant(index, t)
-                val joined = CanonicalAbi.flatten(t).drop(1)
-                val raw = LongArray(joined.size) { r.next() }
-                discriminant(t, index)
-                t.cases[index].second?.let { ct ->
-                    val caseFlat = CanonicalAbi.flatten(ct)
-                    liftFlat(ct, FlatReader(LongArray(caseFlat.size) { i -> uncoerce(raw[i], joined[i], caseFlat[i]) }))
+                val joined = t.payloadFlat
+                val ct = t.cases[index].second
+                if (ct == null) {
+                    r.skip(joined.size)
+                    discriminant(t, index)
+                } else {
+                    val caseFlat = ct.flat
+                    var needsUncoerce = false
+                    for (k in caseFlat.indices) {
+                        if (joined[k] != caseFlat[k]) {
+                            needsUncoerce = true
+                            break
+                        }
+                    }
+                    if (needsUncoerce) {
+                        val sub = r.sliceUncoerced(joined, caseFlat)
+                        discriminant(t, index)
+                        liftFlat(ct, sub)
+                    } else {
+                        discriminant(t, index)
+                        liftFlat(ct, r)
+                        val rem = joined.size - caseFlat.size
+                        if (rem > 0) r.skip(rem)
+                    }
                 }
             }
             is WitType.Own -> w.int(cx.liftOwn(t.table, r.next().toInt()))
@@ -445,10 +508,10 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             WitType.Char -> char(m.readInt(ptr))
             WitType.Str -> loadString(m.readInt(ptr), m.readInt(ptr + 4))
             is WitType.ListOf -> loadList(m.readInt(ptr), m.readInt(ptr + 4), t.element)
-            is WitType.Record -> loadFields(t.fields.map { it.second }, ptr)
+            is WitType.Record -> loadFields(t.fieldTypes, ptr)
             is WitType.Tuple -> loadFields(t.types, ptr)
             is WitType.Flags -> flags(
-                when (CanonicalAbi.sizeOf(t)) {
+                when (t.size) {
                     0 -> IntArray(0)
                     1 -> intArrayOf(m.read(ptr).toInt() and 0xFF)
                     2 -> intArrayOf(m.readShort(ptr).toInt() and 0xFFFF)
@@ -457,16 +520,14 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
                 t,
             )
             is WitType.Variant -> {
-                val discSize = CanonicalAbi.discriminantSize(t.cases.size)
-                val index = when (discSize) {
+                val index = when (t.discSize) {
                     1 -> m.read(ptr).toInt() and 0xFF
                     2 -> m.readShort(ptr).toInt() and 0xFFFF
                     else -> m.readInt(ptr)
                 }
                 checkDiscriminant(index, t)
                 discriminant(t, index)
-                val maxAlign = t.cases.maxOfOrNull { c -> c.second?.let { CanonicalAbi.alignOf(it) } ?: 1 } ?: 1
-                t.cases[index].second?.let { load(it, ptr + CanonicalAbi.alignTo(discSize, maxAlign)) }
+                t.cases[index].second?.let { load(it, ptr + t.payloadOffset) }
             }
             is WitType.Own -> w.int(cx.liftOwn(t.table, m.readInt(ptr)))
             is WitType.Borrow -> w.int(cx.liftBorrow(t.table, m.readInt(ptr)))
@@ -480,16 +541,15 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     private fun loadFields(types: List<WitType>, ptr: Int) {
         var off = 0
         for (ft in types) {
-            off = CanonicalAbi.alignTo(off, CanonicalAbi.alignOf(ft))
+            off = CanonicalAbi.alignTo(off, ft.align)
             load(ft, ptr + off)
-            off += CanonicalAbi.sizeOf(ft)
+            off += ft.size
         }
     }
 
-    /** Loads a tuple from a guest-provided pointer (spilled params or results), which must be aligned and in bounds. */
-    fun loadTuple(ptr: Int, types: List<WitType>) {
-        val tuple = WitType.Tuple(types)
-        checkRange(cx.memory, ptr, CanonicalAbi.sizeOf(tuple).toLong(), CanonicalAbi.alignOf(tuple), "tuple pointer")
+    /** Loads [tuple] from a guest-provided pointer (spilled params or results), which must be aligned and in bounds. */
+    fun loadTuple(ptr: Int, tuple: WitType.Tuple) {
+        checkRange(cx.memory, ptr, tuple.size.toLong(), tuple.align, "tuple pointer")
         load(tuple, ptr)
     }
 
@@ -498,12 +558,30 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
         val m = cx.memory
         val tagged = taggedLen.toLong() and 0xFFFF_FFFFL
         val utf16Tag = UTF16_TAG.toLong() and 0xFFFF_FFFFL
-        val (align, byteLength, kind) = when (cx.encoding) {
-            StringEncoding.UTF8 -> Triple(1, tagged, StringEncoding.UTF8)
-            StringEncoding.UTF16 -> Triple(2, 2 * tagged, StringEncoding.UTF16)
-            StringEncoding.LATIN1_UTF16 ->
-                if (tagged and utf16Tag != 0L) Triple(2, 2 * (tagged xor utf16Tag), StringEncoding.UTF16)
-                else Triple(2, tagged, StringEncoding.LATIN1_UTF16)
+        val align: Int
+        val byteLength: Long
+        val kind: StringEncoding
+        when (cx.encoding) {
+            StringEncoding.UTF8 -> {
+                align = 1
+                byteLength = tagged
+                kind = StringEncoding.UTF8
+            }
+            StringEncoding.UTF16 -> {
+                align = 2
+                byteLength = 2 * tagged
+                kind = StringEncoding.UTF16
+            }
+            StringEncoding.LATIN1_UTF16 -> {
+                align = 2
+                if (tagged and utf16Tag != 0L) {
+                    byteLength = 2 * (tagged xor utf16Tag)
+                    kind = StringEncoding.UTF16
+                } else {
+                    byteLength = tagged
+                    kind = StringEncoding.LATIN1_UTF16
+                }
+            }
         }
         if (byteLength > CanonicalAbi.MAX_STRING_BYTE_LENGTH) trap("String byte length $byteLength exceeds the maximum")
         checkRange(m, ptr, byteLength, align, "string")
@@ -533,13 +611,13 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
 
     /** Lists of integers are copied as is; other elements are loaded one by one. */
     private fun loadList(ptr: Int, len: Int, element: WitType) {
-        val size = CanonicalAbi.sizeOf(element)
+        val size = element.size
         val length = len.toLong() and 0xFFFF_FFFFL
         val byteLength = length * size
         if (byteLength > CanonicalAbi.MAX_LIST_BYTE_LENGTH) trap("List byte length $byteLength exceeds the maximum")
-        checkRange(cx.memory, ptr, byteLength, CanonicalAbi.alignOf(element), "list")
+        checkRange(cx.memory, ptr, byteLength, element.align, "list")
         w.length(length.toInt())
-        if (CanonicalAbi.isRawInteger(element)) {
+        if (element.isRawInteger) {
             if (byteLength > 0) copyFromMemory(cx.memory, ptr, byteLength.toInt())
         } else {
             for (i in 0 until length.toInt()) load(element, ptr + i * size)
@@ -601,7 +679,7 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     }
 
     private fun discriminant(t: WitType.Variant, index: Int) {
-        when (CanonicalAbi.discriminantSize(t.cases.size)) {
+        when (t.discSize) {
             1 -> w.byte(index)
             2 -> w.short(index)
             else -> w.int(index)
@@ -620,13 +698,6 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             n <= 16 -> w.short(words[0])
             else -> words.forEach { w.int(it) }
         }
-    }
-
-    private fun uncoerce(value: Long, from: CanonicalAbi.CoreType, to: CanonicalAbi.CoreType): Long = when {
-        from == to -> value
-        // i64 -> i32 / f32: wrap; the f32 bits live in the low 32 bits either way.
-        to == CanonicalAbi.CoreType.I32 || to == CanonicalAbi.CoreType.F32 -> value.toInt().toLong()
-        else -> value
     }
 
     private fun char(codePoint: Int) {

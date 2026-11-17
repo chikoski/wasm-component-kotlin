@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DynamicContainer
 import org.junit.jupiter.api.DynamicNode
 import org.junit.jupiter.api.DynamicTest
@@ -20,6 +21,8 @@ import wasm2kt.tooling.Decomposer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.io.path.name
 
@@ -57,6 +60,14 @@ class ConformanceTest {
         }
     }
 
+    private val activeRuns = Collections.synchronizedList(mutableListOf<WastRun>())
+
+    @AfterEach
+    fun closeRuns() {
+        val snapshot = synchronized(activeRuns) { activeRuns.toList().also { activeRuns.clear() } }
+        snapshot.forEach { it.close() }
+    }
+
     @TestFactory
     fun `component model reference tests on Chicory`(): List<DynamicNode> = directories.flatMap { dir ->
         Files.list(suite.resolve(dir)).use { s -> s.filter { it.name.endsWith(".wast") }.sorted().toList() }.map { wast ->
@@ -65,20 +76,23 @@ class ConformanceTest {
             if (fileSkip != null) {
                 DynamicTest.dynamicTest(rel) { throw TestAbortedException("skipped: $fileSkip") }
             } else {
-                DynamicContainer.dynamicContainer(rel, WastRun(wast, rel).tests())
+                val run = WastRun(wast, rel).also { activeRuns.add(it) }
+                DynamicContainer.dynamicContainer(rel, run.tests())
             }
         }
     }
 
     /** One `.wast` file: its commands run in order against the current component instance. */
-    private inner class WastRun(private val wast: Path, private val rel: String) {
+    private inner class WastRun(private val wast: Path, private val rel: String) : AutoCloseable {
         private val out = work.resolve(rel.removeSuffix(".wast"))
         private val definitions = HashMap<String, Path>()
         private val failedDefinitions = HashMap<String, String>()
         private val instances = HashMap<String, Instance>()
         private var current: Instance? = null
+        private var activeCommandId: Long = 0L
 
         /** The command whose component could not be created; later commands on it are skipped, not failed. */
+        @Volatile
         private var broken: String? = null
 
         private inner class Instance(dir: Path) : AutoCloseable {
@@ -87,20 +101,45 @@ class ConformanceTest {
             override fun close() = backend.close()
         }
 
+        override fun close() {
+            val toClose = synchronized(this) {
+                ++activeCommandId
+                LinkedHashSet<Instance>().apply {
+                    current?.let { add(it) }
+                    addAll(instances.values)
+                    current = null
+                    instances.clear()
+                }
+            }
+            for (inst in toClose) {
+                runCatching { inst.close() }
+            }
+        }
+
         fun tests(): List<DynamicTest> {
             val commands = convert()
-            return commands.map { c ->
+            if (commands.isEmpty()) {
+                close()
+                return emptyList()
+            }
+            return commands.mapIndexed { index, c ->
                 val line = c.getValue("line").jsonPrimitive.content
                 val type = c.getValue("type").jsonPrimitive.content
                 DynamicTest.dynamicTest("$rel:$line $type ${c["action"]?.jsonObject?.get("field")?.jsonPrimitive?.content.orEmpty()}") {
-                    val skip = skips["$rel:$line"]
-                    val failure = runCatching { withTimeout { run(c) } }.exceptionOrNull()
-                        .also { if (it != null && type in CREATES) broken = "$rel:$line" else if (type in CREATES) broken = null }
-                    when {
-                        failure is TestAbortedException -> throw failure
-                        skip != null && failure == null -> throw AssertionError("$rel:$line passes now; remove it from conformance/skip.txt ($skip)")
-                        skip != null -> throw TestAbortedException("skipped: $skip (${failure!!.message})")
-                        failure != null -> throw failure
+                    try {
+                        val skip = skips["$rel:$line"]
+                        val failure = runCatching { withTimeout { cmdId -> run(c, cmdId) } }.exceptionOrNull()
+                            .also { if (it != null && type in CREATES) broken = "$rel:$line" else if (type in CREATES) broken = null }
+                        when {
+                            failure is TestAbortedException -> throw failure
+                            skip != null && failure == null -> throw AssertionError("$rel:$line passes now; remove it from conformance/skip.txt ($skip)")
+                            skip != null -> throw TestAbortedException("skipped: $skip (${failure!!.message})")
+                            failure != null -> throw failure
+                        }
+                    } finally {
+                        if (index == commands.lastIndex) {
+                            close()
+                        }
                     }
                 }
             }
@@ -110,30 +149,71 @@ class ConformanceTest {
          * Runs a command on its own thread, failing it if it takes too long: a task that waits
          * forever must fail its test, not hang the run (async, #16).
          */
-        private fun withTimeout(block: () -> Unit) {
-            var failure: Throwable? = null
+        private fun withTimeout(block: (Long) -> Unit) {
+            val cmdId = synchronized(this) { ++activeCommandId }
+            val failure = AtomicReference<Throwable?>()
             val t = Thread {
                 try {
-                    block()
+                    block(cmdId)
                 } catch (e: Throwable) {
-                    failure = e
+                    failure.set(e)
                 }
             }
             t.isDaemon = true
             t.start()
             t.join(TIMEOUT_MILLIS)
             if (t.isAlive) {
-                current = null
+                t.interrupt()
+                val timedOut = synchronized(this) {
+                    ++activeCommandId
+                    val prev = current
+                    current = null
+                    if (prev != null) instances.entries.removeIf { it.value === prev }
+                    prev
+                }
+                if (timedOut != null) runCatching { timedOut.close() }
                 throw AssertionError("timed out after ${TIMEOUT_MILLIS / 1000} s")
             }
-            failure?.let { throw it }
+            failure.get()?.let { throw it }
+        }
+
+        /**
+         * Installs a newly constructed instance for `cmdId`, or closes it immediately if the
+         * command timed out or the run was closed in the meantime, also closing any replaced
+         * `current` or displaced alias instance.
+         */
+        private fun installInstance(cmdId: Long, alias: String?, inst: Instance) {
+            val toClose = mutableListOf<Instance>()
+            synchronized(this) {
+                if (cmdId != activeCommandId) {
+                    toClose.add(inst)
+                } else {
+                    val prevCurrent = current
+                    current = inst
+                    if (alias != null) {
+                        val prevAlias = instances.put(alias, inst)
+                        if (prevAlias != null && prevAlias !== current && prevAlias !in instances.values) {
+                            toClose.add(prevAlias)
+                        }
+                    }
+                    if (prevCurrent != null && prevCurrent !== current && prevCurrent !in instances.values) {
+                        toClose.add(prevCurrent)
+                    }
+                }
+            }
+            for (old in toClose) {
+                runCatching { old.close() }
+            }
         }
 
         /** Closes the instance being replaced, unless a named instance still refers to it. */
         private fun replaceCurrent(next: Instance?) {
-            val previous = current
-            current = next
-            if (previous != null && previous !in instances.values) runCatching { previous.close() }
+            val previous = synchronized(this) {
+                val prev = current
+                current = next
+                if (prev != null && prev !in instances.values) prev else null
+            }
+            if (previous != null) runCatching { previous.close() }
         }
 
         private fun convert(): List<JsonObject> {
@@ -153,11 +233,11 @@ class ConformanceTest {
             return dir
         }
 
-        private fun run(c: JsonObject) {
+        private fun run(c: JsonObject, cmdId: Long) {
             when (val type = c.getValue("type").jsonPrimitive.content) {
                 "module" -> {
                     replaceCurrent(null)
-                    replaceCurrent(Instance(decompose(c.getValue("filename").jsonPrimitive.content)))
+                    installInstance(cmdId, null, Instance(decompose(c.getValue("filename").jsonPrimitive.content)))
                 }
                 "module_definition" -> {
                     val name = c.getValue("name").jsonPrimitive.content
@@ -171,7 +251,8 @@ class ConformanceTest {
                     val def = definitions[name]
                         ?: failedDefinitions[name]?.let { throw TestAbortedException("its component could not be created ($it)") }
                         ?: error("Unknown definition in $c")
-                    replaceCurrent(Instance(def).also { i -> c["instance"]?.jsonPrimitive?.content?.let { instances[it] = i } })
+                    val inst = Instance(def)
+                    installInstance(cmdId, c["instance"]?.jsonPrimitive?.content, inst)
                 }
                 "assert_return" -> {
                     val actual = invoke(c.getValue("action").jsonObject)
@@ -206,8 +287,10 @@ class ConformanceTest {
 
         private fun invoke(action: JsonObject): JsonArray {
             check(action.getValue("type").jsonPrimitive.content == "invoke") { "Unsupported action $action" }
-            val instance = action["module"]?.jsonPrimitive?.content?.let { instances[it] ?: error("Unknown instance $it") }
-                ?: current
+            val instance = synchronized(this) {
+                action["module"]?.jsonPrimitive?.content?.let { instances[it] ?: error("Unknown instance $it") }
+                    ?: current
+            }
                 ?: broken?.let { throw TestAbortedException("its component could not be created ($it)") }
                 ?: error("No component instance")
             val field = action.getValue("field").jsonPrimitive.content

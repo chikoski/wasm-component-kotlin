@@ -36,4 +36,4 @@ WIT・Canonical ABI・Component Model の各機能について、バックエン
 
 Component Model の公式リファレンステストスイート（`values/`、`resources/`、`async/`）を `conformance/component-model/` に取り込み、`ConformanceTest` で Chicory バックエンドに対して実行しています（[ADR-0017](../adr/0017-component-model-conformance-suite.md)、[#30](https://github.com/chikoski/wasm-component-kotlin/issues/30)）。
 
-`ConformanceTest` では、`values/` と `resources/` が 191 コマンド中 190 コマンド、`async/` が 514 コマンド中 480 コマンド成功しています。仕様の `nyi.txt` に載ったファイルは 1 つと数えています。残りは Wasmtime 48 LTS の制約と未対応機能に該当し、`conformance/skip.txt` に理由付きで記録しています。制約の内訳は、同じインスタンスや祖先インスタンスへの再入がアダプターでトラップになる点と、wasmparser 0.254 が `task.return` の `borrow` を拒否しない点です。未対応機能としては `map` 型を扱う [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) が残っています。
+`ConformanceTest` では、`values/` と `resources/` が 191 コマンド中 190 コマンド、`async/` が 514 コマンド中 482 コマンド成功しています。仕様の `nyi.txt` に載ったファイルは 1 つと数えています。残りは Wasmtime 48 LTS の制約と未対応機能に該当し、`conformance/skip.txt` に理由付きで記録しています。制約の内訳は、同じインスタンスや祖先インスタンスへの再入がアダプターでトラップになる点です。未対応機能としては `map` 型を扱う [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) が残っています。

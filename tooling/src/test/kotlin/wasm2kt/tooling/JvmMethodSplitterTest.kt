@@ -12,6 +12,9 @@ import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.tree.InsnNode
+import org.objectweb.asm.tree.IntInsnNode
+import org.objectweb.asm.tree.LdcInsnNode
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.chicory.ChicoryComponent
 import java.io.ByteArrayOutputStream
@@ -696,4 +699,168 @@ class JvmMethodSplitterTest {
     }
 
     private fun writeSleb(out: ByteArrayOutputStream, v: Int) = writeSleb(out, v.toLong())
+
+    @Test
+    fun `splits non-static func reading instance field on this without VerifyError`(@TempDir dir: Path) {
+        val cw = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "test/sample/ThisFieldMachine", null, "java/lang/Object", null)
+        cw.visitField(Opcodes.ACC_PUBLIC, "bias", "I", null, null).visitEnd()
+
+        cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitIntInsn(Opcodes.BIPUSH, 7)
+            visitFieldInsn(Opcodes.PUTFIELD, "test/sample/ThisFieldMachine", "bias", "I")
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+
+        cw.visitMethod(Opcodes.ACC_PUBLIC, "func_0", "(I)I", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.ICONST_0)
+            visitVarInsn(Opcodes.ISTORE, 2)
+            for (i in 0 until 45) {
+                visitVarInsn(Opcodes.ALOAD, 0)
+                visitFieldInsn(Opcodes.GETFIELD, "test/sample/ThisFieldMachine", "bias", "I")
+                visitVarInsn(Opcodes.ILOAD, 2)
+                visitInsn(Opcodes.IADD)
+                visitVarInsn(Opcodes.ILOAD, 1)
+                visitInsn(Opcodes.IXOR)
+                visitIntInsn(Opcodes.BIPUSH, (i % 19) + 1)
+                visitInsn(Opcodes.IADD)
+                visitVarInsn(Opcodes.ISTORE, 2)
+                // Also mutate the instance field with PUTFIELD on `this` inside the outlined body.
+                visitVarInsn(Opcodes.ALOAD, 0)
+                visitVarInsn(Opcodes.ILOAD, 2)
+                visitIntInsn(Opcodes.BIPUSH, 1)
+                visitInsn(Opcodes.IAND)
+                visitIntInsn(Opcodes.BIPUSH, 7)
+                visitInsn(Opcodes.IADD)
+                visitFieldInsn(Opcodes.PUTFIELD, "test/sample/ThisFieldMachine", "bias", "I")
+            }
+            visitVarInsn(Opcodes.ILOAD, 2)
+            visitInsn(Opcodes.IRETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        cw.visitEnd()
+
+        val unsplitDir = dir.resolve("unsplit")
+        val splitDir = dir.resolve("split")
+        Files.createDirectories(unsplitDir.resolve("test/sample"))
+        Files.createDirectories(splitDir.resolve("test/sample"))
+        val bytes = cw.toByteArray()
+        Files.write(unsplitDir.resolve("test/sample/ThisFieldMachine.class"), bytes)
+        Files.write(splitDir.resolve("test/sample/ThisFieldMachine.class"), bytes)
+
+        val stats = JvmMethodSplitter.processClasses(splitDir, "test/sample/ThisFieldMachine", targetMethodBytes = 350)
+        assertEquals(1, stats.splitMethods, "expected non-static method to split: $stats")
+        assertTrue(stats.generatedHelpers >= 1)
+
+        fun runOn(classesDir: Path, arg: Int): Int =
+            URLClassLoader(arrayOf(classesDir.toUri().toURL()), javaClass.classLoader).use { loader ->
+                val cls = loader.loadClass("test.sample.ThisFieldMachine")
+                val obj = cls.getConstructor().newInstance()
+                cls.getMethod("func_0", Int::class.javaPrimitiveType).invoke(obj, arg) as Int
+            }
+
+        assertEquals(runOn(unsplitDir, 13), runOn(splitDir, 13))
+        assertEquals(runOn(unsplitDir, -42), runOn(splitDir, -42))
+    }
+
+    @Test
+    fun `skips splitting when a two-slot local overlaps a one-slot local`(@TempDir dir: Path) {
+        fun buildOverlapClass(internalName: String, twoSlotFirst: Boolean, oneSlotIndex: Int = 2): ByteArray {
+            val cw = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+            cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, internalName, null, "java/lang/Object", null)
+            cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "func_0", "(I)J", null, null).apply {
+                visitCode()
+                if (twoSlotFirst) {
+                    visitInsn(Opcodes.LCONST_1)
+                    visitVarInsn(Opcodes.LSTORE, 1)
+                    for (i in 0 until 60) {
+                        visitVarInsn(Opcodes.LLOAD, 1)
+                        visitInsn(Opcodes.LCONST_1)
+                        visitInsn(Opcodes.LADD)
+                        visitVarInsn(Opcodes.LSTORE, 1)
+                    }
+                    visitInsn(Opcodes.ICONST_0)
+                    visitVarInsn(Opcodes.ISTORE, oneSlotIndex)
+                    visitVarInsn(Opcodes.ILOAD, oneSlotIndex)
+                    visitInsn(Opcodes.I2L)
+                } else {
+                    visitInsn(Opcodes.ICONST_0)
+                    visitVarInsn(Opcodes.ISTORE, oneSlotIndex)
+                    visitVarInsn(Opcodes.ILOAD, oneSlotIndex)
+                    visitInsn(Opcodes.POP)
+                    visitInsn(Opcodes.LCONST_1)
+                    visitVarInsn(Opcodes.LSTORE, 1)
+                    for (i in 0 until 60) {
+                        visitVarInsn(Opcodes.LLOAD, 1)
+                        visitInsn(Opcodes.LCONST_1)
+                        visitInsn(Opcodes.LADD)
+                        visitVarInsn(Opcodes.LSTORE, 1)
+                    }
+                    visitVarInsn(Opcodes.LLOAD, 1)
+                }
+                visitInsn(Opcodes.LRETURN)
+                visitMaxs(0, 0)
+                visitEnd()
+            }
+            cw.visitEnd()
+            return cw.toByteArray()
+        }
+
+        val classesDir = dir.resolve("classes")
+        Files.createDirectories(classesDir.resolve("test/sample"))
+        Files.write(classesDir.resolve("test/sample/OverlapOneBeforeTwo.class"), buildOverlapClass("test/sample/OverlapOneBeforeTwo", twoSlotFirst = false))
+        Files.write(classesDir.resolve("test/sample/OverlapTwoBeforeOne.class"), buildOverlapClass("test/sample/OverlapTwoBeforeOne", twoSlotFirst = true))
+        Files.write(classesDir.resolve("test/sample/NonOverlappingControl.class"), buildOverlapClass("test/sample/NonOverlappingControl", twoSlotFirst = true, oneSlotIndex = 3))
+
+        // Confirm all three classes load and execute cleanly before and after processClasses.
+        fun invokeStatic(clsName: String): Long =
+            URLClassLoader(arrayOf(classesDir.toUri().toURL()), javaClass.classLoader).use { loader ->
+                loader.loadClass(clsName).getMethod("func_0", Int::class.javaPrimitiveType).invoke(null, 5) as Long
+            }
+        assertEquals(61L, invokeStatic("test.sample.OverlapOneBeforeTwo"))
+        assertEquals(0L, invokeStatic("test.sample.OverlapTwoBeforeOne"))
+        assertEquals(0L, invokeStatic("test.sample.NonOverlappingControl"))
+
+        val s1 = JvmMethodSplitter.processClasses(classesDir, "test/sample/OverlapOneBeforeTwo", targetMethodBytes = 200)
+        val s2 = JvmMethodSplitter.processClasses(classesDir, "test/sample/OverlapTwoBeforeOne", targetMethodBytes = 200)
+        val sControl = JvmMethodSplitter.processClasses(classesDir, "test/sample/NonOverlappingControl", targetMethodBytes = 200)
+        assertEquals(0, s1.splitMethods, "1-slot before overlapping 2-slot local must fall back")
+        assertEquals(0, s2.splitMethods, "2-slot before overlapping 1-slot local must fall back")
+        assertEquals(1, sControl.splitMethods, "non-overlapping 1-slot at slot 3 must split: $sControl")
+        assertEquals(61L, invokeStatic("test.sample.OverlapOneBeforeTwo"))
+        assertEquals(0L, invokeStatic("test.sample.OverlapTwoBeforeOne"))
+        assertEquals(0L, invokeStatic("test.sample.NonOverlappingControl"))
+    }
+
+    @Test
+    fun `pushIntInsn emits ICONST, BIPUSH, SIPUSH, and LDC across integer ranges`() {
+        val iconst = JvmMethodSplitter.pushIntInsn(3) as InsnNode
+        assertEquals(Opcodes.ICONST_3, iconst.opcode)
+
+        val bipush = JvmMethodSplitter.pushIntInsn(Byte.MAX_VALUE.toInt()) as IntInsnNode
+        assertEquals(Opcodes.BIPUSH, bipush.opcode)
+        assertEquals(127, bipush.operand)
+
+        val sipushMax = JvmMethodSplitter.pushIntInsn(Short.MAX_VALUE.toInt()) as IntInsnNode
+        assertEquals(Opcodes.SIPUSH, sipushMax.opcode)
+        assertEquals(32767, sipushMax.operand)
+
+        val sipushMin = JvmMethodSplitter.pushIntInsn(Short.MIN_VALUE.toInt()) as IntInsnNode
+        assertEquals(Opcodes.SIPUSH, sipushMin.opcode)
+        assertEquals(-32768, sipushMin.operand)
+
+        val ldcAbove = JvmMethodSplitter.pushIntInsn(Short.MAX_VALUE.toInt() + 1) as LdcInsnNode
+        assertEquals(32768, ldcAbove.cst)
+
+        val ldcBelow = JvmMethodSplitter.pushIntInsn(Short.MIN_VALUE.toInt() - 1) as LdcInsnNode
+        assertEquals(-32769, ldcBelow.cst)
+    }
 }

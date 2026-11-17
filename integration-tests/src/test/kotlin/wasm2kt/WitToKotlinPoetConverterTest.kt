@@ -1847,4 +1847,116 @@ class WitToKotlinPoetConverterTest {
         val reuse = runCatching { ffmDescribe(bridge, closingHandle, "Z", 2) }.exceptionOrNull()
         assertTrue(reuse is IllegalStateException, "Invoke after reentrant close must throw IllegalStateException")
     }
+
+    @Test
+    fun `type aliases to handles, colliding param and member names, and TypeRef world resources compile cleanly`(@TempDir tempDir: Path) {
+        val witText = """
+            package example:edgecase@0.1.0;
+
+            interface types {
+                resource blob {
+                    constructor(bytes: list<u8>);
+                    size: func() -> u32;
+                }
+                resource hidden-res {
+                    constructor(id: u32);
+                }
+            }
+
+            interface middle {
+                use types.{hidden-res};
+                take-hidden: func(h: borrow<hidden-res>);
+            }
+
+            interface api {
+                use types.{blob};
+                record tricky {
+                    data: list<u8>,
+                    other: u32,
+                    %result: string,
+                }
+                variant status {
+                    status(list<u8>),
+                    companion(u32),
+                    ok,
+                }
+                flags perms {
+                    raw,
+                    none,
+                    read,
+                }
+                resource counter {
+                    constructor(session: u32, exports: u32, handle: u32, is-closed: bool, result-handle: u32);
+                    tick: func(session: u32, exports: u32, handle: u32, is-closed: bool, result-handle: u32) -> u32;
+                    make-next: static func(session: u32, exports: u32, result-handle: u32) -> counter;
+                }
+                type my-own = own<counter>;
+                type my-borrow = borrow<counter>;
+                type blob-borrow = borrow<blob>;
+                exchange: func(a: my-own, b: my-borrow, h: blob-borrow) -> my-own;
+                use-tricky: func(session: u32, exports: u32, result-handle: u32, r: tricky, v: status, p: perms) -> my-own;
+            }
+
+            world edge-world {
+                use types.{blob};
+                import middle;
+                import bounce: func(b: borrow<blob>) -> blob;
+                export api;
+                export top: func(session: u32, exports: u32, handle: u32, result-handle: u32);
+            }
+        """.trimIndent()
+
+        val witFile = tempDir.resolve("edgecase.wit")
+        Files.writeString(witFile, witText)
+        GenerateCommand().parse(
+            listOf(
+                "--wasm-tools-path", wasmToolsBin,
+                "-o", tempDir.toString(),
+                "-p", "com.example.edgecase",
+                witFile.toString(),
+            ),
+        )
+
+        val pkgDir = tempDir.resolve("com/example/edgecase")
+        Files.writeString(
+            pkgDir.resolve("EdgeHarness.kt"),
+            """
+            package com.example.edgecase
+
+            import com.example.edgecase.exports.example.edgecase.api.Perms
+            import com.example.edgecase.exports.example.edgecase.api.Status
+            import com.example.edgecase.exports.example.edgecase.api.Tricky
+            import com.example.edgecase.example.edgecase.types.Blob
+
+            fun checkGeneratedTypes(): Boolean {
+                val r1 = Tricky(byteArrayOf(1, 2), 7u, "ok")
+                val r2 = Tricky(byteArrayOf(1, 2), 7u, "ok")
+                val v1: Status = Status.StatusCase(byteArrayOf(3))
+                val v2: Status = Status.CompanionCase(9u)
+                val p: Perms = Perms.RAW or Perms.FLAG_NONE or Perms.READ
+                return r1 == r2 && r1.hashCode() == r2.hashCode() && v1 != v2 && p.rawFlag && p.none && p.read
+            }
+            """.trimIndent(),
+        )
+
+        val classesOutDir = tempDir.resolve("classes")
+        Files.createDirectories(classesOutDir)
+        val compilerExitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters",
+            "-jvm-target",
+            "21",
+            "-no-stdlib",
+            "-classpath",
+            System.getProperty("java.class.path"),
+            "-d",
+            classesOutDir.toString(),
+            *generatedSources(tempDir).toTypedArray(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, compilerExitCode)
+
+        val classLoader = java.net.URLClassLoader(arrayOf(classesOutDir.toUri().toURL()), javaClass.classLoader)
+        val ok = classLoader.loadClass("com.example.edgecase.EdgeHarnessKt").getDeclaredMethod("checkGeneratedTypes").invoke(null) as Boolean
+        assertTrue(ok)
+    }
 }

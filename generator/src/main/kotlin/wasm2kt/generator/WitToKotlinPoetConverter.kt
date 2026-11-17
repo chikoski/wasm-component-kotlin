@@ -325,6 +325,33 @@ class WitToKotlinPoetConverter(
         return InterfaceFile(ifaceId, direction, FileSpec.builder(pkg, name)).also { interfaceFiles[pkg] = it }
     }
 
+    private fun collectImportedInterfaces(world: WitWorld): LinkedHashSet<Int> {
+        val importedIds = linkedSetOf<Int>()
+        world.imports.values.forEach { item ->
+            if (item is WitWorldItem.InterfaceRef) importedIds += item.id
+            if (item is WitWorldItem.TypeRef) {
+                var cur: WitTypeRef? = WitTypeRef.Id(item.id)
+                val seen = mutableSetOf<Int>()
+                while (cur is WitTypeRef.Id && seen.add(cur.index)) {
+                    val def = resolve.types.getOrNull(cur.index) ?: break
+                    def.owner?.`interface`?.let { importedIds += it }
+                    cur = when (val kind = def.kind) {
+                        is WitTypeDefKind.TypeAlias -> kind.type
+                        is WitTypeDefKind.Handle -> WitTypeRef.Id(kind.resourceId)
+                        else -> null
+                    }
+                }
+            }
+        }
+        val queue = ArrayDeque(importedIds)
+        while (queue.isNotEmpty()) {
+            for (dep in interfaceDependencies(queue.removeFirst())) {
+                if (importedIds.add(dep)) queue += dep
+            }
+        }
+        return importedIds
+    }
+
     /**
      * A world can use only one version of a package (ADR-0011): the Kotlin package has no version, so
      * `wasi:http@0.2.0` and `wasi:http@0.3.0` would map to the same classes.
@@ -332,9 +359,10 @@ class WitToKotlinPoetConverter(
     private fun checkPackageVersions(worlds: List<WitWorld>) {
         val versions = linkedMapOf<String, MutableSet<String?>>()
         for (world in worlds) {
-            for (item in world.imports.values + world.exports.values) {
-                if (item !is WitWorldItem.InterfaceRef) continue
-                val pkg = packageNameOf(item.id) ?: continue
+            val interfaceIds = collectImportedInterfaces(world) +
+                world.exports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { it.id }
+            for (ifaceId in interfaceIds) {
+                val pkg = packageNameOf(ifaceId) ?: continue
                 versions.getOrPut("${pkg.namespace}:${pkg.name}") { linkedSetOf() } += pkg.version
             }
         }
@@ -393,14 +421,13 @@ class WitToKotlinPoetConverter(
         // world-level functions, and a typed `imports(...)` that builds a complete linker.
         val importParams = mutableListOf<ImportParam>()
         val requiredKeys = mutableListOf<String>()
-        for (item in world.imports.values) {
-            if (item !is WitWorldItem.InterfaceRef) continue
-            val contract = hostContract(item.id) ?: continue
+        for (ifaceId in importedIds) {
+            val contract = hostContract(ifaceId) ?: continue
             importParams += ImportParam(
-                importParameterName(item.id),
+                importParameterName(ifaceId),
                 contract.className,
                 contract.addFunction,
-                isMapped = item.id in mappedPackages,
+                isMapped = ifaceId in mappedPackages,
             )
             requiredKeys += contract.keys
         }
@@ -631,20 +658,7 @@ class WitToKotlinPoetConverter(
      */
     private fun enterWorld(world: WitWorld) {
         currentWorldId = resolve.worlds.indexOf(world)
-        val importedIds = linkedSetOf<Int>()
-        world.imports.values.forEach { item ->
-            if (item is WitWorldItem.InterfaceRef) importedIds += item.id
-            if (item is WitWorldItem.TypeRef) {
-                val targetId = resolveRootTypeIndex(item.id)
-                resolve.types.getOrNull(targetId)?.owner?.`interface`?.let { importedIds += it }
-            }
-        }
-        val queue = ArrayDeque(importedIds)
-        while (queue.isNotEmpty()) {
-            for (dep in interfaceDependencies(queue.removeFirst())) {
-                if (importedIds.add(dep)) queue += dep
-            }
-        }
+        val importedIds = collectImportedInterfaces(world)
         val exportedIds = linkedSetOf<Int>()
         world.exports.values.forEach { item -> if (item is WitWorldItem.InterfaceRef) exportedIds += item.id }
         currentImportedIfaces = importedIds
@@ -1478,9 +1492,13 @@ class WitToKotlinPoetConverter(
                 .build(),
         )
 
+        val usedProps = mutableSetOf("raw")
+        val usedConsts = mutableSetOf("NONE")
         flags.forEachIndexed { index, flag ->
-            val propName = NamingConventions.toCamelCase(flag.name)
-            val constName = NamingConventions.toUpperSnakeCase(flag.name)
+            var propName = NamingConventions.toCamelCase(flag.name)
+            while (!usedProps.add(propName)) propName += "Flag"
+            var constName = NamingConventions.toUpperSnakeCase(flag.name)
+            while (!usedConsts.add(constName)) constName = "FLAG_$constName"
             val maskExpr = "($oneLiteral shl $index)"
 
             val propBuilder = PropertySpec.builder(propName, BOOLEAN)
@@ -1555,10 +1573,17 @@ class WitToKotlinPoetConverter(
             .addModifiers(KModifier.SEALED)
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
+        val usedCaseNames = mutableSetOf(name, "Companion")
+        val caseNames = cases.map { case ->
+            var candidate = NamingConventions.toPascalCase(case.name)
+            while (!usedCaseNames.add(candidate)) candidate += "Case"
+            candidate
+        }
+
         val writeTo = CodeBlock.builder().beginControlFlow("when (this)")
         localVarCounter = 0
         cases.forEachIndexed { index, case ->
-            val caseName = NamingConventions.toPascalCase(case.name)
+            val caseName = caseNames[index]
             if (case.type == null) {
                 val objBuilder = TypeSpec.objectBuilder(caseName)
                     .addModifiers(KModifier.DATA)
@@ -1604,7 +1629,7 @@ class WitToKotlinPoetConverter(
         val read = CodeBlock.builder()
             .beginControlFlow("return when (val d = ${discriminantRead(cases.size, "reader")})")
         cases.forEachIndexed { index, case ->
-            val caseName = NamingConventions.toPascalCase(case.name)
+            val caseName = caseNames[index]
             if (case.type == null) {
                 read.addStatement("$index -> %N", caseName)
             } else {
@@ -1714,16 +1739,18 @@ class WitToKotlinPoetConverter(
             val key = "$keyPrefix${fn.name}"
             when (fn.kind) {
                 is WitFunctionKind.Constructor -> {
+                    val paramNames = fn.params.map { NamingConventions.toCamelCase(it.name) }.toSet()
                     val invokeBuilder = FunSpec.builder("invoke")
                         .addModifiers(KModifier.OPERATOR)
-                        .apply { addSessionContext(this, contextClassName, viaMarker = true) }
                         .returns(resourceClassName)
+                    val sessionName = addSessionContext(invokeBuilder, contextClassName, viaMarker = true, paramNames = paramNames)
                     addFunctionKdoc(invokeBuilder, fn)
                     for (param in fn.params) invokeBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
-                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
                     invokeBuilder.addCode(call.prelude)
-                    invokeBuilder.addStatement("val handle = session.runtimeSession.newResource(%S, %L, %L)%L", key, call.args, call.encode, call.after)
-                    invokeBuilder.addStatement("return %T(session, handle)", resourceClassName)
+                    val handleVar = if ("handle" in paramNames) "__handle" else "handle"
+                    invokeBuilder.addStatement("val $handleVar = $sessionName.runtimeSession.newResource(%S, %L, %L)%L", key, call.args, call.encode, call.after)
+                    invokeBuilder.addStatement("return %T($sessionName, $handleVar)", resourceClassName)
                     companionBuilder.addFunction(invokeBuilder.build())
                 }
                 is WitFunctionKind.Method -> {
@@ -1731,35 +1758,40 @@ class WitToKotlinPoetConverter(
                     addFunctionKdoc(methodBuilder, fn)
                     if (fn.isAsync) methodBuilder.addModifiers(KModifier.SUSPEND)
                     val userParams = fn.params.drop(1)
+                    val paramNames = userParams.map { NamingConventions.toCamelCase(it.name) }.toSet()
                     for (param in userParams) methodBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
                     methodBuilder.returns(mapFunctionReturnType(fn, worldClassName))
-                    methodBuilder.addStatement("check(!isClosed) { %P }", "Resource $resourcePascalName(handle=\$handle) is already closed or moved")
-                    methodBuilder.addStatement("val session = boundSession")
-                    val call = buildCallParts(fn, userParams, selfHandle = true, sessionExpr = CodeBlock.of("session"))
+                    methodBuilder.addStatement("check(!this.isClosed) { %P }", "Resource $resourcePascalName(handle=\${this.handle}) is already closed or moved")
+                    val sessionName = if ("session" in paramNames) "__session" else "session"
+                    methodBuilder.addStatement("val $sessionName = this.boundSession")
+                    val call = buildCallParts(fn, userParams, selfHandle = true, sessionExpr = CodeBlock.of(sessionName))
                     methodBuilder.addCode(call.prelude)
-                    val target = if (returnsOwnedResource(fn)) "val resultHandle =" else "return"
+                    val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
+                    val target = if (returnsOwnedResource(fn)) "val $resultHandleVar =" else "return"
                     methodBuilder.addStatement(
-                        "$target session.runtimeSession.${if (fn.isAsync) "invokeMethodSuspending" else "invokeMethod"}(handle, %S, %L, %L, %L)%L",
+                        "$target $sessionName.runtimeSession.${if (fn.isAsync) "invokeMethodSuspending" else "invokeMethod"}(this.handle, %S, %L, %L, %L)%L",
                         key, call.args, call.encode, call.decode, call.after,
                     )
-                    if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
+                    if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
                     builder.addFunction(methodBuilder.build())
                 }
                 is WitFunctionKind.Static -> {
+                    val paramNames = fn.params.map { NamingConventions.toCamelCase(it.name) }.toSet()
                     val staticBuilder = FunSpec.builder(NamingConventions.extractResourceMemberName(fn.name))
-                        .apply { addSessionContext(this, contextClassName, viaMarker = true) }
+                    val sessionName = addSessionContext(staticBuilder, contextClassName, viaMarker = true, paramNames = paramNames)
                     addFunctionKdoc(staticBuilder, fn)
                     if (fn.isAsync) staticBuilder.addModifiers(KModifier.SUSPEND)
                     for (param in fn.params) staticBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
                     staticBuilder.returns(mapFunctionReturnType(fn, worldClassName))
-                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
                     staticBuilder.addCode(call.prelude)
                     val staticInvoke = if (fn.isAsync) "invokeSuspending" else "invoke"
+                    val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
                     if (returnsOwnedResource(fn)) {
-                        staticBuilder.addStatement("val resultHandle = session.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
-                        staticBuilder.addStatement("return %T(session, resultHandle)", mapFunctionReturnType(fn, worldClassName))
+                        staticBuilder.addStatement("val $resultHandleVar = $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+                        staticBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
                     } else {
-                        staticBuilder.addStatement("return session.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+                        staticBuilder.addStatement("return $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
                     }
                     companionBuilder.addFunction(staticBuilder.build())
                 }
@@ -1808,9 +1840,10 @@ class WitToKotlinPoetConverter(
     ): FunSpec {
         val fnName = NamingConventions.toCamelCase(fn.name)
         val viaMarker = sessionClassName != ClassName(targetPackage, "Session")
+        val paramNames = fn.params.map { NamingConventions.toCamelCase(it.name) }.toSet()
         val builder = FunSpec.builder(fnName)
             .apply { if (receiverClassName != null) receiver(receiverClassName) }
-            .apply { addSessionContext(this, sessionClassName, viaMarker) }
+        val sessionName = addSessionContext(builder, sessionClassName, viaMarker, paramNames)
 
         addFunctionKdoc(builder, fn)
         // An `async func` is a `suspend fun` (ADR-0006) that suspends until the component returns (ADR-0019).
@@ -1819,15 +1852,16 @@ class WitToKotlinPoetConverter(
         val returnType = mapFunctionReturnType(fn, worldClassName)
         builder.returns(returnType)
 
-        val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of("session"))
+        val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
         builder.addCode(call.prelude)
         val key = "$invokeTargetPrefix${fn.name}"
         val invoke = if (fn.isAsync) "invokeSuspending" else "invoke"
+        val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
         if (returnsOwnedResource(fn)) {
-            builder.addStatement("val resultHandle = session.runtimeSession.$invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
-            builder.addStatement("return %T(session, resultHandle)", returnType)
+            builder.addStatement("val $resultHandleVar = $sessionName.runtimeSession.$invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+            builder.addStatement("return %T($sessionName, $resultHandleVar)", returnType)
         } else {
-            builder.addStatement("return session.runtimeSession.$invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+            builder.addStatement("return $sessionName.runtimeSession.$invoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
         }
         return builder.build()
     }
@@ -1836,13 +1870,21 @@ class WitToKotlinPoetConverter(
      * World functions take the world's `Session`; interface-level functions take the interface's
      * `<Iface>Exports` marker and reach the session through it (ADR-0012).
      */
-    private fun addSessionContext(builder: FunSpec.Builder, contextClass: ClassName, viaMarker: Boolean) {
+    private fun addSessionContext(
+        builder: FunSpec.Builder,
+        contextClass: ClassName,
+        viaMarker: Boolean,
+        paramNames: Set<String> = emptySet(),
+    ): String {
+        val sessionName = if ("session" in paramNames) "__session" else "session"
         if (viaMarker) {
-            builder.contextParameter("exports", contextClass)
-            builder.addStatement("val session = exports.%M", MemberName(targetPackage, "witSession"))
+            val exportsName = if ("exports" in paramNames) "__exports" else "exports"
+            builder.contextParameter(exportsName, contextClass)
+            builder.addStatement("val $sessionName = $exportsName.%M", MemberName(targetPackage, "witSession"))
         } else {
-            builder.contextParameter("session", contextClass)
+            builder.contextParameter(sessionName, contextClass)
         }
+        return sessionName
     }
 
     // ------------------------------------------------------------------ binary format (ADR-0015)
@@ -1958,7 +2000,11 @@ class WitToKotlinPoetConverter(
                         b.endControlFlow()
                     }
                 }
-                b.addStatement("$w.int(%T.current().newStream(__chunks$id))", componentBackendClass)
+                b.addStatement(
+                    "$w.int(%T.current().newStream(__chunks$id, $streamVar as? %T))",
+                    componentBackendClass,
+                    ClassName("java.lang", "AutoCloseable"),
+                )
             }
             is WitTypeDefKind.FutureType -> {
                 val id = localVarCounter++
@@ -2102,6 +2148,21 @@ class WitToKotlinPoetConverter(
      */
     private class CallParts(val prelude: CodeBlock, val args: CodeBlock, val encode: CodeBlock, val decode: CodeBlock, val after: CodeBlock)
 
+    private fun resolveHandleOrResource(typeRef: WitTypeRef): WitTypeDefKind.Handle? {
+        var cur = typeRef
+        val visited = mutableSetOf<Int>()
+        while (cur is WitTypeRef.Id && visited.add(cur.index)) {
+            val def = resolve.types.getOrNull(cur.index) ?: return null
+            when (val kind = def.kind) {
+                is WitTypeDefKind.TypeAlias -> cur = kind.type
+                is WitTypeDefKind.Handle -> return kind
+                is WitTypeDefKind.Resource -> return WitTypeDefKind.Handle(resourceId = cur.index, kind = wasm2kt.ast.HandleKind.OWN)
+                else -> return null
+            }
+        }
+        return null
+    }
+
     /**
      * [params] are the WIT parameters after `self`; [selfHandle] writes the resource's own handle
      * first (methods). A top-level `own` of a guest resource gives up the Kotlin object's ownership.
@@ -2113,10 +2174,10 @@ class WitToKotlinPoetConverter(
         val moved = mutableListOf<CodeBlock>()
         val target = sessionExpr ?: CodeBlock.of("null")
         localVarCounter = 0
-        if (selfHandle) encode.addStatement("__w.int(handle)")
+        if (selfHandle) encode.addStatement("__w.int(this.handle)")
         params.forEachIndexed { i, param ->
             val name = NamingConventions.toCamelCase(param.name)
-            val handle = (param.type as? WitTypeRef.Id)?.let { resolve.types.getOrNull(it.index)?.kind as? WitTypeDefKind.Handle }
+            val handle = resolveHandleOrResource(param.type)
             when {
                 handle != null && !isHostResource(handle.resourceId) -> {
                     prelude.addStatement("val __handle$i = %N.handleFor(%L)", name, target)
@@ -2160,16 +2221,8 @@ class WitToKotlinPoetConverter(
 
     private fun returnsOwnedResource(fn: WitFunction): Boolean {
         if (fn.results.size != 1) return false
-        val ref = fn.results.first().type
-        if (ref is WitTypeRef.Id) {
-            val def = resolve.types.getOrNull(ref.index)
-            when (val kind = def?.kind) {
-                is WitTypeDefKind.Handle -> return !isHostResource(kind.resourceId)
-                is WitTypeDefKind.Resource -> return !isHostResource(ref.index)
-                else -> Unit
-            }
-        }
-        return false
+        val handle = resolveHandleOrResource(fn.results.first().type) ?: return false
+        return handle.kind == wasm2kt.ast.HandleKind.OWN && !isHostResource(handle.resourceId)
     }
 
     private fun mapFunctionReturnType(fn: WitFunction, worldClassName: ClassName): TypeName {
@@ -2206,14 +2259,15 @@ class WitToKotlinPoetConverter(
     private fun addContentEqualityIfNeeded(builder: TypeSpec.Builder, className: ClassName, props: List<Pair<String, TypeName>>) {
         val arrayProps = props.filter { it.second.copy(nullable = false) == BYTE_ARRAY }
         if (arrayProps.isEmpty()) return
+        val resultVar = if (props.any { it.first == "result" }) "__result" else "result"
         val eq = CodeBlock.builder()
             .addStatement("if (this === other) return true")
             .addStatement("if (other !is %T) return false", className)
         for ((name, type) in props) {
             if (type.copy(nullable = false) == BYTE_ARRAY) {
-                eq.addStatement("if (!%N.contentEquals(other.%N)) return false", name, name)
+                eq.addStatement("if (!this.%N.contentEquals(other.%N)) return false", name, name)
             } else {
-                eq.addStatement("if (%N != other.%N) return false", name, name)
+                eq.addStatement("if (this.%N != other.%N) return false", name, name)
             }
         }
         eq.addStatement("return true")
@@ -2221,17 +2275,17 @@ class WitToKotlinPoetConverter(
             FunSpec.builder("equals").addModifiers(KModifier.OVERRIDE)
                 .addParameter("other", ANY.copy(nullable = true)).returns(BOOLEAN).addCode(eq.build()).build(),
         )
-        val hash = CodeBlock.builder().addStatement("var result = 0")
+        val hash = CodeBlock.builder().addStatement("var $resultVar = 0")
         for ((name, type) in props) {
-            val h = if (type.copy(nullable = false) == BYTE_ARRAY) "%N.contentHashCode()" else "%N.hashCode()"
-            hash.addStatement("result = 31 * result + $h", name)
+            val h = if (type.copy(nullable = false) == BYTE_ARRAY) "this.%N.contentHashCode()" else "this.%N.hashCode()"
+            hash.addStatement("$resultVar = 31 * $resultVar + $h", name)
         }
-        hash.addStatement("return result")
+        hash.addStatement("return $resultVar")
         builder.addFunction(FunSpec.builder("hashCode").addModifiers(KModifier.OVERRIDE).returns(INT).addCode(hash.build()).build())
         val str = CodeBlock.builder().add("return %S", "${className.simpleName}(")
         props.forEachIndexed { i, (name, type) ->
             str.add(" + %S + ", (if (i > 0) ", " else "") + "$name=")
-            if (type.copy(nullable = false) == BYTE_ARRAY) str.add("%N.contentToString()", name) else str.add("%N", name)
+            if (type.copy(nullable = false) == BYTE_ARRAY) str.add("this.%N.contentToString()", name) else str.add("this.%N", name)
         }
         str.add(" + %S\n", ")")
         builder.addFunction(

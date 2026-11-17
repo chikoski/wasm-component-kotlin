@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-15。対象ブランチは `feat/phase3-runtime-and-docs`、主な変更点は共有テーブル適合と借用貸与追跡による公式テスト `resources/` 全件通過、`Transcoder` の `CharsetDecoder` と中間 `String` 確保の削除、`echo-name` の時間差に関わる要因の追記、大規模メソッド分割後の制約文書化、PR テンプレートの追加です。
+> 最終更新: 2026-11-16。対象ブランチは `feat/phase3-runtime-and-docs`、主な変更点は共有テーブル適合と借用貸与追跡による公式テスト `resources/` 全件通過、`runtime-chicory` の境界呼び出しと `Transcoder` の最適化による #58 完了、大規模メソッド分割後の制約文書化、PR テンプレートの追加です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -49,7 +49,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 検証済み
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
-* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 480 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目と wasmparser 0.254 の検証差
+* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 482 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目
 * async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future、ホストの `suspend fun` の import、並行の呼び出しと取り消し（ADR-0019）は、`async-stream` と `async-import` フィクスチャの E2E テストで確認
 * 差分テストは、Wasmtime の FFM と JNI の両方で流す。型付きブリッジでは、結果とブリッジ自身のエラーメッセージが汎用ブリッジと同じであることも確かめる（Wasmtime の lift のエラーは、種類だけを比べる）。境界値（空と 256 KiB の list、サロゲートペア、char の端、長い list<option>）も含む
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
@@ -112,8 +112,6 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 | [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
-| [#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) | — | 大きな wasm 関数が JIT されない・インタプリタに回る問題への対策。#106 と ADR-0021 で 8,000 バイト超の自動分割と警告は実装済み。architecture.md と gradle-plugin.md へ未分割の `call_dispatch_0` と 64 KB 上限および `-XX:-DontCompileHugeMethods` を明記した。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは継続課題として維持 |
-| [#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) | — | ART で文字列の受け渡しが遅い。`Transcoder` から `CharsetDecoder` と中間 `String` の確保を削除し、`echo-name` と `echo-bytes` の時間差に関わる要因を [performance.md](explanation/performance.md) へ追記した。Android ART 上でのメソッドトレースと `echoName5_aot_dsl` の再計測が残る |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
 | [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない）。LICENSE、Dokka、英語版（#50 の残り）と、rust-bridge の複数プラットフォーム向けのビルド（#59 を統合）も含む |
@@ -128,16 +126,35 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* Rust クレートに対する差分ミューテーションテストの導入と境界テスト補強
+* ランタイムと WASI 0.3 の状態機械・有界並行性・資源寿命テストの追加および書込ストリーム始動前キャンセルの修正
+* ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
+* コード生成の名前解決と Rust ブリッジの資源所有権修正
+* ランタイムと WASI 0.3 の安定性と境界制御の改善
 * 合成コンポーネントの共有テーブルと借用貸与追跡
-* `Transcoder` のデコーダー生成削除と文字列処理要因の整理
+* ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
 
+[#166](https://github.com/chikoski/wasm-component-kotlin/issues/166) では `rust-bridge` と `decomposer` へ `cargo-mutants` を導入しました。各ワークスペースに `.cargo/mutants.toml` を配置しています。FFI と JNI のエントリポイント群および `main` 関数は検査対象から除外しました。`rust-bridge` の `wire.rs`、`typed.rs`、および `lib.rs` では境界値の単体テストを補強しました。対象の純粋ヘルパーとエラー境界関数について変異体がテストで検出されることも確認しています。`decomposer` では隔離作業ディレクトリからもフィクスチャを参照できるよう `WASM2KT_FIXTURES` の解決を追加しました。あわせて開発手順とレビュー手順へ差分ミューテーション検査の運用を組み込んでいます。
+
+[#159](https://github.com/chikoski/wasm-component-kotlin/issues/159) では外部依存を増やさずに JUnit とコルーチン上で動作する状態機械テストと有界並行性テストを追加しました。[#160](https://github.com/chikoski/wasm-component-kotlin/issues/160) では `HostResourceTable` の借用規則と `SessionLoop` のハンドル回収やポイズン遷移を参照モデルと照合しています。[#161](https://github.com/chikoski/wasm-component-kotlin/issues/161) では単一ルートスレッド排他や逆圧、遅延 `newStream` 解放、デッドロック検知、待機セッション終了を確認しました。[#162](https://github.com/chikoski/wasm-component-kotlin/issues/162) では `WasiPathDescriptor` のサンドボックス検査とストリーム解放を検証しました。あわせて `writeViaStream` と `appendViaStream` が開始前キャンセル時に `Flow` を閉じない不具合を修正しています。
+
+[#136](https://github.com/chikoski/wasm-component-kotlin/issues/136) では `JvmMethodSplitter`、`PlanCheck`、`decomposer`、および `ConformanceTest` の境界処理を修正しました。`JvmMethodSplitter` では非静的メソッドのスロット 0 にオーナー型を設定し、2 スロット変数の重複検査と定数プッシュの `LdcInsnNode` 分岐を加えています。`PlanCheck` では `streamTables`、`futureTables`、および `task-return` の結果型を走査対象へ含めました。`decomposer` では `task.return` の結果型に含まれる `borrow` を拒否するようにし、`conformance/skip.txt` の該当 2 件を削除しています。`ConformanceTest` では実行完了時とタイムアウト時のスレッド中断とインスタンス解放を追加しました。
+
+[#138](https://github.com/chikoski/wasm-component-kotlin/issues/138) では `samples/android-glitch-camera` の録画停止ループ、`GlitchEngine.close` の競合、および一時ファイルの残留を修正しました。`Mp4VideoRecorder` では 0 フレーム終了時の送信省略、EOS 待機回数の上限、初期化失敗時の解放、および未確定出力の削除を実装しています。`GlitchEngine` では `closed` フラグとバックグラウンド解放によりメインスレッドの停止と再生成を防ぎました。`MediaStoreHelper` と `GlitchViewModel` では失敗時の保留レコードと一時ファイルを確実に削除します。
+
+[#134](https://github.com/chikoski/wasm-component-kotlin/issues/134) と [#135](https://github.com/chikoski/wasm-component-kotlin/issues/135) では、コード生成の名前解決と Wasmtime 向け Rust ブリッジの資源管理を修正しました。`WitToKotlinPoetConverter` ではリソースハンドルへの型エイリアスを再帰的に解決し、引数やメンバー名の衝突回避と `equals` の修飾を追加しました。ワールド直下の `use` と推移的依存のホストリソースも、コード生成と `TypedBridge` の双方で契約対象へ含めています。`rust-bridge` では引数検証後に移動済みハンドルを確定し、ゲストトラップ時に消費済み `ResourceAny` を復元しないよう改めました。あわせて 65 ビット以上の `flags` 読み取りと重複ハンドル時のエラー文言も揃えています。
+
+[#130](https://github.com/chikoski/wasm-component-kotlin/issues/130) と [#131](https://github.com/chikoski/wasm-component-kotlin/issues/131) では、ホスト資源表の貸出スコープ管理と非同期引数変換のロールバックを修正しました。`HostResourceTable` ではテーブル単位のインスタンスと参照同一性でスコープを管理します。`witFuture` 取り消し時に起きる読み取り側解除との競合と、`WitWriter` の明示的な初期容量の保持も改善しました。非同期エクスポートで引数変換に失敗した際も、実行中の他の呼び出しへ影響させずその呼び出しのみを失敗させます。ロールバックは `stream` と `future` に加えて `error-context` のハンドルも対象とします。
+
+[#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) と [#133](https://github.com/chikoski/wasm-component-kotlin/issues/133) では、内部型の非公開化と WASI 0.3 の入出力およびファイルシステム境界を修正しました。`WitType` と `ComponentPlan` の内部構文木型を `internal` に制限しています。`WasiStdin.readViaStream` の完了 `Deferred` は読み切りまたはクローズ時に完了するよう改めました。`WasiStdin` では出力先で生じた `IOException` を捕捉せず下流へ伝播します。遅延起動の `writeViaStream` と `newStream` は、開始前の取り消し時にも `AutoCloseable` な `Flow` を閉じます。`WasiFilesystem` では末尾スラッシュ判定とキャンセル時のチャネル解放を改めました。さらに `readlinkAt`、`unlinkFileAt`、および `renameAt` で境界外やルート自身を指定した場合は `ErrorCode.NotPermitted` を返します。
+
 [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) では、`ChicoryComponent` に共有テーブルビューとアダプターモジュールを導入しました。これにより、異なる型インデックスを持つモジュール間の間接呼び出しとデストラクター呼び出しを解決しています。あわせて `AsyncAbi` と `Task` に借用中の貸与追跡を追加し、同期トラップ時の `StackSwitching` 後始末も入れました。その結果、`resources/` の公式テストは 36 件すべてが通過するようになり、`conformance/skip.txt` から該当 2 件を削除しています。
 
-[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、`Transcoder` の文字列検証と UTF-16 から UTF-8 への変換から `CharsetDecoder` と中間 `String` の確保を取り除きました。`echo-name` が `echo-bytes` より時間を要する要因も [performance.md](explanation/performance.md) へ追記しています。Android ART 上でのメソッドトレースと再計測は未実施のため、残件を P2 に残しています。
+[#58](https://github.com/chikoski/wasm-component-kotlin/issues/58) では、Android 16 ARM64 エミュレーター上のメソッドトレース解析を踏まえ、`runtime-chicory` の境界処理を最適化しました。`WitType` と `FuncType` のレイアウト情報を遅延キャッシュし、`Lowerer` と `Lifter` の一時確保を減らしています。`WitType` は `sealed interface` から `sealed class` へ変更し、その後の [#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) によって `internal` へ移行しました。あわせて `ChicoryComponentInstance` でのエクスポート解決結果の保持と `Context` コレクションの遅延生成、および `Transcoder` からの `CharsetDecoder` と中間 `String` 確保の削除を行いました。その結果、同じエミュレーター上で `echoName5_aot_dsl` は最小値 8,309 ns と 113.0 回のアロケーションから、最小値 770.71 ns と 26.0 回のアロケーションへ変化しました。`echoBytes16_aot_dsl` との差は最小値で 49.13 ns に縮まり、`#58` の課題は完了しています。変更後は Apple Silicon の Host JVM 上で `echo-name` が 355 ns となることも確認しました。ローカル機には変更前の Host JVM 計測値がないため単独の参照値とし、セクション 3.1 の CI 表全体の更新や実機計測は通常運用の課題として分けています。詳細は [performance.md](explanation/performance.md) に記載しています。
 
-[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。64 KB 超のインタプリタ実行とディスパッチメソッドの扱いは P2 で継続して管理します。
+[#57](https://github.com/chikoski/wasm-component-kotlin/issues/57) では、`JvmMethodSplitter` による分割後も残る制約と回避策を [architecture.md](explanation/architecture.md) と [gradle-plugin.md](reference/gradle-plugin.md) へ明文化しました。対象は未分割の `call_dispatch_0` と Chicory の 64 KB 上限および `-XX:-DontCompileHugeMethods` です。これにより [#106](https://github.com/chikoski/wasm-component-kotlin/issues/106) と [ADR-0021](adr/0021-split-large-chicory-methods.md) の実装とあわせて #57 の全項目を完了しました。
 
 [#95](https://github.com/chikoski/wasm-component-kotlin/issues/95) では、PR テンプレートを `.github/pull_request_template.md` に追加し、`CONTRIBUTING.md` から参照しました。
 
