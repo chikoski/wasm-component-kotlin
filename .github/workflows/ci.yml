@@ -33,7 +33,7 @@ jobs:
       # (ExamplesBuildTest), and relative Markdown link checks (MarkdownLinkCheckTest).
       - run: ./gradlew check -x :integration-tests:test --continue
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jvm-test-reports
           path: "**/build/reports/tests/"
@@ -100,7 +100,7 @@ jobs:
       # Builds a typed bridge for the fixtures (ADR-0016) with cargo, sharing rust-bridge/target.
       - run: ./gradlew :integration-tests:typedBridgeTest
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-test-reports
           path: integration-tests/build/reports/tests/
@@ -119,7 +119,7 @@ jobs:
       # The runner image ships the Android SDK and sets ANDROID_HOME.
       - run: ./gradlew -p samples/android -PgenerateBaselineProfileOnBuild=false :app:testDebugUnitTest :app:assembleRelease :app:assembleDebugAndroidTest
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-reports
           path: samples/android/app/build/reports/
@@ -150,7 +150,7 @@ jobs:
           disable-animations: true
           script: ./gradlew -p samples/android :app:connectedAndroidTest
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: emulator-reports
           path: samples/android/app/build/reports/androidTests/
