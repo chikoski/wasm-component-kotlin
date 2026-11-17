@@ -45,6 +45,7 @@
 
 ### 主な追加・改善
 
+* AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
 * ランタイムと WASI 0.3 の安定性と境界制御の改善
@@ -52,6 +53,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) と [#150](https://github.com/chikoski/wasm-component-kotlin/pull/150) に対応し、Gradle 9.9.1 と Kotlin 2.4.21 および AGP 9.5.1 の検証と機能テストの整備を完了しました。テスト環境向けに `gradle-plugin` をローカルのテストリポジトリへ公開する構成へ改めています。さらに `Wasm2KtPluginFunctionalTest` へ Android ライブラリプロジェクトの検証ケースを追加しました。これにより `com.android.library` 構成でのコンポーネント生成、ホスト JVM 単体テストの実行、設定キャッシュの再利用、および `runtime-wasi` インタフェースの再利用を検証します。
 
 [#136](https://github.com/chikoski/wasm-component-kotlin/issues/136) に対応し、`JvmMethodSplitter`、`PlanCheck`、`decomposer`、および `ConformanceTest` の境界処理を修正しました。`inferLocalTypes` では非静的メソッドのスロット 0 にオーナー型を設定し、2 スロット変数の重複検査と定数プッシュ時の `LdcInsnNode` 分岐を追加しています。`PlanCheck` では `streamTables`、`futureTables`、および `task-return` の `results` も検査対象に加えました。`decomposer` では `task.return` の結果型に含まれる `borrow` を検証段階で拒否するようにし、`conformance/skip.txt` から該当 2 件を削除しています。`ConformanceTest` では実行終了時とタイムアウト時にスレッド中断およびインスタンスのクローズを実行します。
 

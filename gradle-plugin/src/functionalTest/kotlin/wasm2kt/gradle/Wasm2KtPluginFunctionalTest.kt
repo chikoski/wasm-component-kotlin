@@ -17,11 +17,13 @@ class Wasm2KtPluginFunctionalTest {
     private val fixtures: Path = Paths.get(System.getProperty("wasm2kt.fixtures"))
     private val examples: Path = Paths.get(System.getProperty("wasm2kt.examples"))
     private val testRepo = System.getProperty("wasm2kt.testRepo")
+    private val wasm2ktVersion = System.getProperty("wasm2kt.version")
     private val kotlinVersion = System.getProperty("wasm2kt.kotlinVersion")
+    private val agpVersion = System.getProperty("wasm2kt.agpVersion")
 
-    private fun runner(dir: File, vararg args: String): GradleRunner = GradleRunner.create()
+    private fun runner(dir: File, vararg args: String, withPluginClasspath: Boolean = true): GradleRunner = GradleRunner.create()
         .withProjectDir(dir)
-        .withPluginClasspath()
+        .apply { if (withPluginClasspath) withPluginClasspath() }
         .withArguments(*args, "--stacktrace")
         .forwardOutput()
         .apply { System.getProperty("wasm2kt.testKitDir")?.takeIf { it.isNotBlank() }?.let { withTestKitDir(File(it)) } }
@@ -501,6 +503,233 @@ class Wasm2KtPluginFunctionalTest {
         val generatedPkg = dir.resolve("build/wasm2kt/app/kotlin/com/example/wasiapp")
         assertTrue(generatedPkg.resolve("RootWorld.kt").isFile, generatedPkg.list().orEmpty().joinToString())
         assertTrue(generatedPkg.resolve("wasi").isDirectory, generatedPkg.list().orEmpty().joinToString())
+    }
+
+    @Test
+    fun `android library project compiles components and runs unit tests with configuration cache`(@TempDir dir: File) {
+        val androidSdk = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+        check(!androidSdk.isNullOrBlank()) {
+            "ANDROID_HOME (or ANDROID_SDK_ROOT) must be set to run the Android functional test (requires Android SDK Platform 35)"
+        }
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
+        Files.copy(fixtures.resolve("wasi-03.wasm"), dir.resolve("wasi-03.wasm").toPath())
+        val workDir = dir.resolve("work").apply { mkdirs() }
+        val escapedRepo = testRepo.replace("\\", "/")
+        dir.resolve("gradle.properties").writeText("org.gradle.jvmargs=-Xmx2g\n")
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "android-consumer"
+            pluginManagement {
+                repositories {
+                    maven(url = uri("$escapedRepo"))
+                    google()
+                    mavenCentral()
+                    gradlePluginPortal()
+                }
+            }
+            dependencyResolutionManagement {
+                repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+                repositories {
+                    maven(url = uri("$escapedRepo"))
+                    google()
+                    mavenCentral()
+                }
+            }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("com.android.library") version "$agpVersion"
+                // Pins AGP 9's built-in Kotlin compiler plugin to this repo's Kotlin version so it can read runtime-chicory metadata.
+                id("org.jetbrains.kotlin.jvm") version "$kotlinVersion" apply false
+                id("io.github.wasm2kt") version "$wasm2ktVersion"
+            }
+            android {
+                namespace = "com.example.androidapp"
+                compileSdk = 35
+                defaultConfig {
+                    minSdk = 26
+                }
+                compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_11
+                    targetCompatibility = JavaVersion.VERSION_11
+                }
+            }
+            kotlin {
+                compilerOptions {
+                    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+                }
+            }
+            wasm2kt {
+                addWasiDependency.set(true)
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                    }
+                    register("counter") {
+                        source.set(file("counter.wasm"))
+                        packageName.set("com.example.ct")
+                    }
+                    register("wasi-app") {
+                        source.set(file("wasi-03.wasm"))
+                        packageName.set("com.example.wasiapp")
+                    }
+                }
+            }
+            dependencies {
+                testImplementation("junit:junit:4.13.2")
+            }
+            """.trimIndent(),
+        )
+        val escapedWorkDir = workDir.absolutePath.replace("\\", "\\\\")
+        val testSrc = dir.resolve("src/test/kotlin/com/example/androidapp").apply { mkdirs() }
+        testSrc.resolve("AndroidComponentTest.kt").writeText(
+            """
+            package com.example.androidapp
+
+            import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
+            import com.example.rt.RoundtripComponent
+            import com.example.rt.describeCode
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.scale
+            import com.example.rt.imports
+            import com.example.rt.withSession
+            import com.example.wasiapp.WasiAppComponent
+            import com.example.wasiapp.example.wasi_app.audit.Audit
+            import com.example.wasiapp.imports as wasiImports
+            import com.example.wasiapp.runSummary
+            import com.example.wasiapp.withSession as withWasiSession
+            import kotlinx.coroutines.runBlocking
+            import org.junit.Assert.assertEquals
+            import org.junit.Assert.assertTrue
+            import org.junit.Test
+            import wasm2kt.wasi.wasi03Imports
+            import java.io.ByteArrayOutputStream
+            import java.io.File
+
+            class AndroidComponentTest {
+                @Test
+                fun runsCompiledComponents() {
+                    val rtImports = imports(
+                        exampleRoundtripEnvProvider = {
+                            object : EnvProvider {
+                                override fun getMultiplier(): Int = 6
+                                override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                            }
+                        },
+                    )
+                    val rt = withSession(RoundtripComponent, rtImports) {
+                        "scaled=${'$'}{scale(7)},tag=${'$'}{describeCode("ERR", 404u)}"
+                    }
+                    val ct = com.example.ct.withSession(CounterComponent) {
+                        Counter(41).use { c -> c.increment(); "counter=${'$'}{c.getValue()}" }
+                    }
+                    assertEquals("scaled=42,tag=ERR#404;counter=42", "${'$'}rt;${'$'}ct")
+
+                    val work = File("$escapedWorkDir")
+                    work.mkdirs()
+                    File(work, "input.txt").writeText("android wasi")
+                    File(work, "output.txt").delete()
+                    val stdoutBuf = ByteArrayOutputStream()
+                    val steps = mutableListOf<String>()
+                    val wasiBase = wasi03Imports {
+                        args("wasi-app", "--from-android")
+                        env("WASI_PLUGIN" to "enabled")
+                        stdin("hi-android".encodeToByteArray())
+                        stdout = stdoutBuf
+                        mounts {
+                            readWrite("/work", work.toPath())
+                        }
+                    }
+                    val appImports = wasiImports(
+                        base = wasiBase,
+                        exampleWasiAppAudit = {
+                            object : Audit {
+                                override fun recordStep(tag: String) {
+                                    steps += tag
+                                }
+                            }
+                        },
+                    )
+                    val summary = withWasiSession(WasiAppComponent, appImports) {
+                        runBlocking { runSummary() }
+                    }
+                    assertTrue(
+                        "unexpected summary: ${'$'}summary",
+                        "fs=[mount=/work,read_ok=true,write_ok=true,data=android wasi!]" in summary,
+                    )
+                    assertEquals("out:hi-android", stdoutBuf.toString(Charsets.UTF_8))
+                    assertEquals(listOf("start", "done"), steps)
+                    assertEquals("android wasi!", File(work, "output.txt").readText())
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val wasm2ktTasks = listOf(
+            ":wasm2ktDecomposeRoundtrip",
+            ":wasm2ktCompileRoundtrip",
+            ":wasm2ktGenerateRoundtripDebug",
+            ":wasm2ktDecomposeCounter",
+            ":wasm2ktCompileCounter",
+            ":wasm2ktGenerateCounterDebug",
+            ":wasm2ktDecomposeWasiApp",
+            ":wasm2ktCompileWasiApp",
+            ":wasm2ktGenerateWasiAppDebug",
+        )
+
+        val first = runner(
+            dir,
+            "testDebugUnitTest",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        for (task in wasm2ktTasks + ":testDebugUnitTest") {
+            assertEquals(TaskOutcome.SUCCESS, first.task(task)?.outcome, "$task should succeed")
+        }
+        val wasiGenerated = dir.resolve("build/generated")
+            .walkTopDown()
+            .filter { it.isDirectory && it.invariantSeparatorsPath.endsWith("com/example/wasiapp") }
+            .toList()
+        assertTrue(wasiGenerated.isNotEmpty(), "variant.sources.java should contain generated WasiApp sources")
+        assertTrue(
+            wasiGenerated.none { it.resolve("wasi").exists() },
+            "Android compileClasspath should reuse runtime-wasi interfaces instead of regenerating wasi/",
+        )
+
+        val second = runner(
+            dir,
+            "testDebugUnitTest",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        assertTrue(
+            "Reusing configuration cache" in second.output || "Configuration cache entry reused" in second.output,
+            second.output,
+        )
+        for (task in wasm2ktTasks + ":testDebugUnitTest") {
+            assertEquals(TaskOutcome.UP_TO_DATE, second.task(task)?.outcome, "$task should be up to date")
+        }
+
+        val third = runner(
+            dir,
+            "clean",
+            "testDebugUnitTest",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        for (task in wasm2ktTasks) {
+            assertEquals(TaskOutcome.FROM_CACHE, third.task(task)?.outcome, "$task should come from build cache after clean")
+        }
+        assertEquals(TaskOutcome.FROM_CACHE, third.task(":testDebugUnitTest")?.outcome, ":testDebugUnitTest should come from build cache after clean")
     }
 }
 

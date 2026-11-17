@@ -49,6 +49,7 @@ decomposer/regenerate-fixtures.sh               # 同上（runtime-chicory の�
 
 CI（`.github/workflows/ci.yml`）は jvm / decomposer / native / android / emulator の 5 ジョブです。decomposer ジョブは、同梱 wasm とテスト用分解結果が最新でないと失敗します。ローカルで同じことを確認するには上のコマンドを使います。
 integration-tests には `wasm-tools` が必要です（CI は 1.258.0 に固定。`cargo install wasm-tools --version 1.258.0 --locked`。`WASM_TOOLS_BIN` か `~/.cargo/bin` か PATH から探します）。
+`gradle-plugin` の `functionalTest` を含む `./gradlew check` と `samples/android` のビルドには、Android SDK Platform 35 と `ANDROID_HOME` の設定が必要です。`samples/android` 単体では `local.properties` の `sdk.dir` 指定も利用できます。
 `rust-bridge` と `decomposer` は `rust-toolchain.toml` で同じ Rust に固定し、CI で `cargo clippy -- -D warnings` と `cargo test` を実行します。
 Wasmtime は、decomposer の `wasmtime-environ` と rust-bridge の `wasmtime` を、同じ LTS の同じパッチ版に固定します（今は `=48.0.8`。ADR-0010）。上げるときは両方を同じ PR で上げ、`build-wasm.sh` と `regenerate-fixtures.sh` も実行します。
 Gradle デーモンは `gradle/gradle-daemon-jvm.properties` の指定で **JDK 21** で動きます（`./gradlew` を起動した JDK や `JAVA_HOME` とは無関係）。

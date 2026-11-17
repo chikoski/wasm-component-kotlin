@@ -11,6 +11,9 @@
   ```bash
   cargo install wasm-tools --version 1.258.0 --locked
   ```
+* Android SDK
+
+`gradle-plugin` の `functionalTest` を含む `./gradlew check` と `samples/android` のビルドには、Android SDK Platform 35 と `ANDROID_HOME` 環境変数が必要です。`samples/android` 単体のビルドでは `local.properties` の `sdk.dir` 指定にも対応しています。
 
 ## 2. よく使うコマンド
 

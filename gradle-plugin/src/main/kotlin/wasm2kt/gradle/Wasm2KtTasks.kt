@@ -18,6 +18,7 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.workers.WorkAction
 import org.gradle.workers.WorkParameters
 import org.gradle.workers.WorkerExecutor
@@ -36,6 +37,7 @@ import javax.inject.Inject
  * Base for tasks that run wasm2kt's tooling. The tooling (Chicory's compiler, ASM, KotlinPoet, ...)
  * runs in an isolated class loader so it cannot clash with the Android Gradle plugin's own ASM.
  */
+@DisableCachingByDefault(because = "Abstract base task; concrete subclasses opt into caching.")
 abstract class Wasm2KtToolingTask : DefaultTask() {
     /** `io.github.wasm2kt:tooling` and its dependencies, from the `wasm2ktTooling` configuration. */
     @get:Classpath
@@ -271,6 +273,7 @@ internal const val WARNINGS_FILE = "wasm2kt-warnings.txt"
  * may be UP-TO-DATE or come FROM-CACHE, where its own action does not run; this task declares no
  * outputs, so it runs on every build that runs (or skips) the producing task, which it finalizes (#78).
  */
+@DisableCachingByDefault(because = "Prints build-time warnings on every build, including when cacheable tasks are skipped.")
 abstract class Wasm2KtWarningsTask : DefaultTask() {
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.NONE)

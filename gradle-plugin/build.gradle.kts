@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     id("org.jetbrains.kotlin.jvm")
     `java-gradle-plugin`
+    `maven-publish`
 }
 
 val functionalTest by sourceSets.creating
@@ -85,12 +86,14 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
         ":runtime-chicory:publishAllPublicationsToTestRepository",
         ":runtime-wasi:publishAllPublicationsToTestRepository",
         ":tooling:publishAllPublicationsToTestRepository",
+        ":gradle-plugin:publishAllPublicationsToTestRepository",
     )
     systemProperty("wasm2kt.testRepo", testRepo.get().asFile.absolutePath)
     systemProperty("wasm2kt.version", project.version.toString())
     systemProperty("wasm2kt.fixtures", rootProject.file("fixtures").absolutePath)
     systemProperty("wasm2kt.examples", rootProject.file("examples").absolutePath)
     systemProperty("wasm2kt.kotlinVersion", libs.versions.kotlin.get())
+    systemProperty("wasm2kt.agpVersion", libs.versions.android.gradle.api.get())
     // Optional: reuse a Gradle user home (caches, init scripts) for the builds under test.
     systemProperty("wasm2kt.testKitDir", providers.gradleProperty("wasm2kt.testKitDir").getOrElse(""))
 }
