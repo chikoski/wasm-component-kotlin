@@ -475,4 +475,74 @@ mod tests {
         write_val(&mut out, &val, &flags_ty, &mut store.as_context_mut()).unwrap();
         assert_eq!(out, input);
     }
+
+    #[test]
+    fn reader_reads_primitives_tags_and_enforces_bounds() {
+        let mut buf = Vec::new();
+        buf.push(0x42u8);
+        buf.extend_from_slice(&0x1234u16.to_le_bytes());
+        buf.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        buf.extend_from_slice(&0x0807_0605_0403_0201u64.to_le_bytes());
+        buf.extend_from_slice(&[0u8, 1u8, 2u8, 0xAAu8]);
+
+        let mut r = Reader::new(&buf);
+        assert_eq!(r.remaining(), buf.len());
+        assert_eq!(r.take(0).unwrap(), &[] as &[u8]);
+        assert_eq!(r.remaining(), buf.len());
+        assert!(r.finish().is_err());
+
+        assert_eq!(r.u8().unwrap(), 0x42);
+        assert_eq!(r.u16().unwrap(), 0x1234);
+        assert_eq!(r.u32().unwrap(), 0x1234_5678);
+        assert_eq!(r.u64().unwrap(), 0x0807_0605_0403_0201);
+        assert!(!r.tag("flag").unwrap());
+        assert!(r.tag("flag").unwrap());
+
+        let err = r.tag("flag").unwrap_err();
+        assert!(format!("{err:#}").contains("Invalid flag tag 2"), "{err:#}");
+        assert_eq!(r.remaining(), 1);
+        assert!(r.take(2).is_err());
+        assert_eq!(r.take(1).unwrap(), &[0xAAu8]);
+        assert_eq!(r.remaining(), 0);
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn discriminant_width_and_roundtrip_boundaries() {
+        assert_eq!(discriminant_width(0), 1);
+        assert_eq!(discriminant_width(1), 1);
+        assert_eq!(discriminant_width(256), 1);
+        assert_eq!(discriminant_width(257), 2);
+        assert_eq!(discriminant_width(65536), 2);
+        assert_eq!(discriminant_width(65537), 4);
+
+        for (count, index, expected_len) in [
+            (256usize, 200usize, 1usize),
+            (257usize, 256usize, 2usize),
+            (65536usize, 65535usize, 2usize),
+            (65537usize, 65536usize, 4usize),
+        ] {
+            let mut bytes = Vec::new();
+            write_discriminant(&mut bytes, count, index);
+            assert_eq!(bytes.len(), expected_len, "count={count} index={index}");
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(read_discriminant(&mut reader, count).unwrap(), index);
+            reader.finish().unwrap();
+
+            if expected_len > 1 {
+                let mut truncated = Reader::new(&bytes[..expected_len - 1]);
+                assert!(read_discriminant(&mut truncated, count).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn flag_words_handles_32_bit_boundaries() {
+        assert_eq!(flag_words(0), 0);
+        assert_eq!(flag_words(1), 1);
+        assert_eq!(flag_words(32), 1);
+        assert_eq!(flag_words(33), 2);
+        assert_eq!(flag_words(64), 2);
+        assert_eq!(flag_words(65), 3);
+    }
 }

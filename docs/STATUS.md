@@ -126,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* Rust クレートに対する差分ミューテーションテストの導入と境界テスト補強
 * ランタイムと WASI 0.3 の状態機械・有界並行性・資源寿命テストの追加および書込ストリーム始動前キャンセルの修正
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
@@ -134,6 +135,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#166](https://github.com/chikoski/wasm-component-kotlin/issues/166) では `rust-bridge` と `decomposer` へ `cargo-mutants` を導入しました。各ワークスペースに `.cargo/mutants.toml` を配置しています。FFI と JNI のエントリポイント群および `main` 関数は検査対象から除外しました。`rust-bridge` の `wire.rs`、`typed.rs`、および `lib.rs` では境界値の単体テストを補強しました。対象の純粋ヘルパーとエラー境界関数について変異体がテストで検出されることも確認しています。`decomposer` では隔離作業ディレクトリからもフィクスチャを参照できるよう `WASM2KT_FIXTURES` の解決を追加しました。あわせて開発手順とレビュー手順へ差分ミューテーション検査の運用を組み込んでいます。
 
 [#159](https://github.com/chikoski/wasm-component-kotlin/issues/159) では外部依存を増やさずに JUnit とコルーチン上で動作する状態機械テストと有界並行性テストを追加しました。[#160](https://github.com/chikoski/wasm-component-kotlin/issues/160) では `HostResourceTable` の借用規則と `SessionLoop` のハンドル回収やポイズン遷移を参照モデルと照合しています。[#161](https://github.com/chikoski/wasm-component-kotlin/issues/161) では単一ルートスレッド排他や逆圧、遅延 `newStream` 解放、デッドロック検知、待機セッション終了を確認しました。[#162](https://github.com/chikoski/wasm-component-kotlin/issues/162) では `WasiPathDescriptor` のサンドボックス検査とストリーム解放を検証しました。あわせて `writeViaStream` と `appendViaStream` が開始前キャンセル時に `Flow` を閉じない不具合を修正しています。
 

@@ -1,0 +1,7 @@
+# Mutation testing configuration for decomposer (#166).
+# Focuses on component decomposition, WIT extraction, and deterministic plan.json numbering.
+exclude_re = [
+    ": replace main | in main$",
+]
+timeout_multiplier = 3.0
+minimum_test_timeout = 20

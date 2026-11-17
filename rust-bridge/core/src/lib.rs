@@ -1241,4 +1241,29 @@ mod tests {
         let drop_err = session_drop_resource_internal(&mut session, h1).unwrap_err();
         assert!(format!("{:#}", drop_err).contains("is not active or already dropped"), "{:#}", drop_err);
     }
+
+    #[test]
+    fn panic_and_error_buffer_helpers_behave_safely_at_boundaries() {
+        assert_eq!(panic_payload_to_string(Box::new("boom")), "boom");
+        assert_eq!(panic_payload_to_string(Box::new("owned".to_string())), "owned");
+        assert_eq!(panic_payload_to_string(Box::new(42usize)), "Unknown Rust panic in wasm2kt bridge");
+
+        let caught = run_catching(|| -> Result<()> { panic!("unexpected failure") }).unwrap_err();
+        assert!(format!("{caught:#}").contains("unexpected failure"));
+
+        let err = anyhow!("abcdef");
+        write_err_buf(&err, ptr::null_mut(), 8);
+
+        let mut zero_cap = [b'x' as c_char; 2];
+        write_err_buf(&err, zero_cap.as_mut_ptr(), 0);
+        assert_eq!(zero_cap[0], b'x' as c_char);
+
+        let mut exact_nul = [b'x' as c_char; 2];
+        write_err_buf(&err, exact_nul.as_mut_ptr(), 1);
+        assert_eq!(exact_nul[0], 0);
+
+        let mut truncated = [b'x' as c_char; 4];
+        write_err_buf(&err, truncated.as_mut_ptr(), truncated.len());
+        assert_eq!(unsafe { CStr::from_ptr(truncated.as_ptr()) }.to_str().unwrap(), "abc");
+    }
 }

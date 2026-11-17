@@ -162,3 +162,44 @@ pub fn write_flag_words(w: &mut Vec<u8>, count: usize, words: &[u32]) {
 pub fn bad_discriminant(what: &str, d: usize, count: usize) -> wasmtime::Error {
     anyhow!("{} discriminant {} out of range for {} cases", what, d, count)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flag_words_roundtrip_across_canonical_widths() {
+        let mut empty = Vec::new();
+        write_flag_words(&mut empty, 0, &[0xFF]);
+        assert!(empty.is_empty());
+        let mut r_empty = Reader::new(&empty);
+        assert_eq!(read_flag_words::<1>(&mut r_empty, 0).unwrap(), [0]);
+        r_empty.finish().unwrap();
+
+        let mut byte_buf = Vec::new();
+        write_flag_words(&mut byte_buf, 8, &[0xAB]);
+        assert_eq!(byte_buf, [0xAB]);
+        let mut r_byte = Reader::new(&byte_buf);
+        assert_eq!(read_flag_words::<1>(&mut r_byte, 8).unwrap(), [0xAB]);
+        r_byte.finish().unwrap();
+
+        let mut short_buf = Vec::new();
+        write_flag_words(&mut short_buf, 16, &[0xCAFE]);
+        assert_eq!(short_buf, 0xCAFEu16.to_le_bytes());
+        let mut r_short = Reader::new(&short_buf);
+        assert_eq!(read_flag_words::<1>(&mut r_short, 16).unwrap(), [0xCAFE]);
+        r_short.finish().unwrap();
+
+        let words_in = [0xDEAD_BEEFu32, 0x0102_0304u32];
+        let mut wide_buf = Vec::new();
+        write_flag_words(&mut wide_buf, 33, &words_in);
+        assert_eq!(wide_buf.len(), 8);
+        let mut r_wide = Reader::new(&wide_buf);
+        assert_eq!(read_flag_words::<2>(&mut r_wide, 33).unwrap(), words_in);
+        r_wide.finish().unwrap();
+
+        assert!(read_flag_words::<1>(&mut Reader::new(&[]), 8).is_err());
+        assert!(read_flag_words::<1>(&mut Reader::new(&[1]), 9).is_err());
+        assert!(read_flag_words::<2>(&mut Reader::new(&[0u8; 7]), 33).is_err());
+    }
+}

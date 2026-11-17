@@ -1,0 +1,14 @@
+# Mutation testing configuration for rust-bridge (#166).
+# Focuses on pure Rust logic in `core/src/wire.rs`, `core/src/typed.rs`, and `core/src/lib.rs`
+# while skipping raw C ABI / JNI pointer wrappers that are exercised from JVM integration tests.
+exclude_globs = [
+    "src/lib.rs",
+    "core/src/exports.rs",
+]
+exclude_re = [
+    "\\bffi_(session_open|session_open_bytes|precompile_component|alloc_bytes|free_bytes|session_resolve|session_invoke|session_drop_resource|session_close)\\b",
+    "\\bjni_(session_open|session_open_bytes|session_resolve|session_invoke|session_drop_resource|session_close|precompile_component|string_opt|callback)\\b",
+    "\\b(extract_and_clear_jni_exception|or_throw|write_out|finish_call|c_str_opt)\\b",
+]
+timeout_multiplier = 3.0
+minimum_test_timeout = 20

@@ -53,10 +53,13 @@ description: Issue の信頼境界チェックと設計判断ゲートを経て�
 * `animalsnifferMain`
 * `cargo clippy --locked --all-targets -- -D warnings`
 * `cargo test --locked`
+* `cargo mutants --in-diff`
 * `decomposer/build-wasm.sh`
 * `decomposer/regenerate-fixtures.sh`
 
 `runtime-api` や `runtime-chicory` を変更した場合は JVM 11 および Android API 26 互換性を `animalsnifferMain` で確認し、Chicory 側の挙動変更時は `ChicoryDifferentialTest` と `ConformanceTest` を通します。`decomposer` を変更した場合は生成物を再ビルドおよび再生成し、差分を取り込みます。テストのスキップ、無効化、しきい値の緩和、`conformance/skip.txt` への安易な追記で検査を通過させてはなりません。
+
+`rust-bridge` または `decomposer` の Rust コードを変更した場合は、`cargo mutants --in-diff` による差分ミューテーション検査を実行します。`cargo-mutants` が未インストールの環境では差分検査を省略し、通常のテストとレビューへ進みます。新規ファイルがある場合は `git add -N` の後、`git diff --no-ext-diff --no-color --relative=...` と `git merge-base origin/main HEAD` でワークスペース基準の差分パッチを作成します。生き残った変異体があればコードレビューの前に境界値テストの追加を検討します。なお数値閾値による強制的なビルド失敗ゲートは設けません。
 
 ## ステップ5 Claude コードレビューとドキュメント同期
 

@@ -810,7 +810,11 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> Vec<u8> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures").join(name);
+        let dir = std::env::var_os("WASM2KT_FIXTURES")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures"));
+        let path = dir.join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
     }
 
