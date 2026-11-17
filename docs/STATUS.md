@@ -61,7 +61,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * Wasmtime の型付きブリッジ（[ADR-0016](adr/0016-typed-bridge-from-wit-json.md)、#64）: tooling が wit.json から Rust の型と型付きの呼び出しを生成し、`wasm2kt bridge` で 1 つのクレートにする。`typedBridgeTest` で、すべてのフィクスチャの差分テストと型マッピングの E2E が、型付きブリッジでも Chicory と一致する。ライブラリは `wasm2kt bridge --build --resources-output` で jar のリソースにでき、`runtime-wasmtime` がクラスパスから読み込む（#65）。Gradle プラグインでの Wasmtime の対応は、今は行わない（2026-11-04 に決定。プラグインは Chicory 向けのまま）
 * Wasmtime の FFM ブリッジ: ホスト import の戻り値とエラーメッセージに大きさの上限がない（#35）。事前コンパイル済みの `.cwasm` は `openPrecompiledSession` / `withPrecompiledSession` からだけ読み込む（#33）
 * decomposer の出力は決定的（exports と canonical options の順序）。各フィクスチャを繰り返し分解して同じ plan になることを `cargo test` で確認
-* Gradle プラグイン: Kotlin/JVM の実ビルドで実行結果、configuration cache の再利用、UP-TO-DATE、FROM-CACHE を確認
+* Gradle プラグイン機能テストでの Kotlin/JVM と Android ビルド、設定キャッシュ再利用、およびタスクキャッシュ動作の確認
 * 性能とサイズ（[docs/performance.md](performance.md)、#19。バイナリ形式のあとは 8 節）: 64 KiB の `list<u8>` の往復は JVM（Chicory AOT）12 µs / Wasmtime FFM 3.5 ms / ART 0.3 ms（JSON 境界のときは 6.6 ms / 16.5 ms / 52 ms）。Wasmtime の型付きブリッジでは 29 µs（同じランナーの汎用ブリッジは 5.7 ms。9 節）。整数だけの呼び出しは JVM 0.19 µs / ART 2〜6 µs。小さな関数の計算は Wasmtime と同等です。大きな wasm 関数に対しては `JvmMethodSplitter` による 7,500 バイト単位の自動分割を導入済みで、詳細と `cyber_sort` の比較は [performance.md](explanation/performance.md) と [ADR-0021](adr/0021-split-large-chicory-methods.md) にあります。初回の `openSession` は ART で 57〜239 ms。APK はランタイムで +181 KB
 * Android サンプル: ホスト JVM のユニットテスト、ART（ヘッドレスエミュレーター）での `connectedAndroidTest`、R8 で縮小した release 版の起動がいずれも成功（初回実行 2 ms）。手順は [samples/android/README.md](../samples/android/README.md)
 
@@ -76,7 +76,6 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
 * async と WASI 0.3 は Chicory バックエンドだけで実装する方針。Wasmtime バックエンドは同期の機能の参照実装として維持（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)）
 * async の制約（[ADR-0018](adr/0018-async-abi-on-chicory.md)、[ADR-0019](adr/0019-suspending-async-boundary.md)）: async の export と import は `suspend fun` だが、ゲストの wasm を実行している間は中断しない（取り消しは、ゲストが次にホストを待つか yield したときに届く）。ホストが受け渡せる stream / future は、要素に resource / stream / future 自体を含まないもの。同じインスタンスや祖先のインスタンスへの再入は、wasmtime-environ 48 がトラップにする
-* `gradle-plugin` の `functionalTest` に Android プロジェクトの検証ケースが未追加です。Kotlin 2.4.21 と Gradle 9.9.1 および AGP 9.5.1 での両サンプルのビルドは確認済みです。テストケースの追加は [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) で追跡しています
 * Gradle デーモンの JDK 21 指定。`tooling` と `gradle-plugin` が JVM 21 を対象とするため、`gradle/gradle-daemon-jvm.properties` で指定しています
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
 * 実行時間とメモリの上限、実行中の中断はない。読み込むコンポーネントは信頼できるものに限る（[README](../README.md) の「安全性の前提」、#77）
@@ -113,7 +112,6 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
 | [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) | — | `map<K, V>` 型に対応するかを決める（公式テストで発見） |
-| [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) | A-17 | AGP 9 / Gradle 9 対応の確認 |
 | [#10](https://github.com/chikoski/wasm-component-kotlin/issues/10) | A-7 | Maven Central / Gradle Plugin Portal への公開準備（当面は公開しない）。LICENSE、Dokka、英語版（#50 の残り）と、rust-bridge の複数プラットフォーム向けのビルド（#59 を統合）も含む |
 
 ### 閉じたもの（対応しない）
@@ -126,6 +124,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
 * Rust クレートに対する差分ミューテーションテストの導入と境界テスト補強
 * ランタイムと WASI 0.3 の状態機械・有界並行性・資源寿命テストの追加および書込ストリーム始動前キャンセルの修正
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
@@ -135,6 +134,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) と [#150](https://github.com/chikoski/wasm-component-kotlin/pull/150) では、Gradle 9.9.1 と Kotlin 2.4.21 および AGP 9.5.1 の動作検証を完了しました。両サンプルを AGP 9 のビルトイン Kotlin 構成へ移行し、ホストテストとリリースビルドおよび ART エミュレーター実行を通過させています。さらに `gradle-plugin` の `functionalTest` へ Android ライブラリ向けテストを追加しました。これにより `com.android.library` のビルド、設定キャッシュの再利用、`variant.sources.java` へのソース登録、および `runtime-wasi` インタフェースの再利用を継続的に検査します。
 
 [#166](https://github.com/chikoski/wasm-component-kotlin/issues/166) では `rust-bridge` と `decomposer` へ `cargo-mutants` を導入しました。各ワークスペースに `.cargo/mutants.toml` を配置しています。FFI と JNI のエントリポイント群および `main` 関数は検査対象から除外しました。`rust-bridge` の `wire.rs`、`typed.rs`、および `lib.rs` では境界値の単体テストを補強しました。対象の純粋ヘルパーとエラー境界関数について変異体がテストで検出されることも確認しています。`decomposer` では隔離作業ディレクトリからもフィクスチャを参照できるよう `WASM2KT_FIXTURES` の解決を追加しました。あわせて開発手順とレビュー手順へ差分ミューテーション検査の運用を組み込んでいます。
 

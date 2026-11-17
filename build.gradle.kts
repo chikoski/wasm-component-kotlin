@@ -13,23 +13,30 @@ allprojects {
     }
 }
 
-// Every library module that applies `maven-publish` gets a Maven publication with sources, and the
-// local "test" repository used by the Gradle plugin's functional tests (real publishing: #10).
+// Every module that applies `maven-publish` publishes to the local "test" repository used by the Gradle
+// plugin's functional tests (real publishing: #10). Library modules also get a "maven" publication;
+// plugins using `java-gradle-plugin` register their own `pluginMaven` publication instead.
 subprojects {
     plugins.withId("maven-publish") {
         plugins.withId("java") {
             extensions.configure<JavaPluginExtension> { withSourcesJar() }
         }
         extensions.configure<PublishingExtension> {
-            publications {
-                create<MavenPublication>("maven") {
-                    from(components["java"])
-                }
-            }
             repositories {
                 maven {
                     name = "test"
                     url = uri(rootProject.layout.buildDirectory.dir("test-repo"))
+                }
+            }
+        }
+        afterEvaluate {
+            if (!plugins.hasPlugin("java-gradle-plugin")) {
+                extensions.configure<PublishingExtension> {
+                    publications {
+                        create<MavenPublication>("maven") {
+                            from(components["java"])
+                        }
+                    }
                 }
             }
         }

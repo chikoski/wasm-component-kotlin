@@ -28,6 +28,7 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
       # Everything except integration-tests, which need native tools (see the `native` job).
+      # The runner image ships the Android SDK and sets ANDROID_HOME for the Android functional test.
       # Includes the gradle-plugin functional tests (TestKit builds of consumer projects and
       # examples/05-chicory-gradle-plugin), compilation/execution of examples/*/Main.kt
       # (ExamplesBuildTest), and relative Markdown link checks (MarkdownLinkCheckTest).
