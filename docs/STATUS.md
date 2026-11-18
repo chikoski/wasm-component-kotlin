@@ -36,13 +36,13 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `integration-tests` | CLI・生成・両ランタイムの E2E テストと差分テスト | 21 | 稼働 |
 | `rust-bridge/` | Wasmtime ブリッジ（Rust のワークスペース。共通部 `core/` と汎用ブリッジの cdylib） | — | 稼働 |
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
-| `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 11 | 稼働 |
-| `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 11 | 稼働 |
-| `runtime-wasi` | WASI 0.3 コアインターフェースのホスト実装 | 11 | 稼働 |
+| `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 17 | 稼働 |
+| `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 17 | 稼働 |
+| `runtime-wasi` | WASI 0.3 コアインターフェースのホスト実装 | 17 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
-| `samples/android` | Android サンプルアプリ（composite build） | 11 | ART（エミュレーター）で debug / release とも動作確認済み |
-| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 11 | ホスト JVM のユニットテストと debug / release APK ビルド、ART エミュレーターでの `nonMinifiedRelease` 実行と `dex2oat64` 警告ゼロを確認済み |
+| `samples/android` | Android サンプルアプリ（composite build） | 17 | ART（エミュレーター）で debug / release とも動作確認済み |
+| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 17 | ホスト JVM のユニットテストと debug / release APK ビルド、ART エミュレーターでの `nonMinifiedRelease` 実行と `dex2oat64` 警告ゼロを確認済み |
 
 ## 2. 現在の状態
 

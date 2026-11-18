@@ -1,6 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-// Host implementations of WASI 0.3 core interfaces (random, clocks, cli). Kept at JVM 11 so it
+// Host implementations of WASI 0.3 core interfaces (random, clocks, cli). Kept at JVM 17 so it
 // can ship alongside :runtime-api and :runtime-chicory on Android.
 plugins {
     id("org.jetbrains.kotlin.jvm")
@@ -67,14 +67,14 @@ tasks.test {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
-        freeCompilerArgs.add("-Xjdk-release=11")
+        jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-Xjdk-release=17")
     }
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
