@@ -8,7 +8,7 @@
 ## 前提条件
 
 * **Gradle デーモン用の JDK 21 以上**: ビルド時のツール群（`tooling` と `gradle-plugin`）が JDK 21 向けにコンパイルされているためです。`gradle/gradle-daemon-jvm.properties` に `toolchainVersion=21` を指定しておくと、シェルの `JAVA_HOME` に関わらず JDK 21 が使われます
-* **Android `minSdk 26` 以上**、アプリの `compileOptions` / `jvmTarget` は **Java 11 以上**
+* **Android `minSdk 26` 以上**、アプリの `compileOptions` / `jvmTarget` は **Java 17 以上**
 * Kotlin 2.4.21 で検証済みです。ルートプロジェクトの `plugins` ブロックに `id("org.jetbrains.kotlin.jvm") version "2.4.21" apply false` を配置すると、AGP 9 のビルトイン Kotlin とバージョンを揃えられます
 * Rust ツールチェーンや `wasm-tools` は不要です（コンポーネント分解ツールは WebAssembly としてプラグインに同梱されています）
 
@@ -63,14 +63,14 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 

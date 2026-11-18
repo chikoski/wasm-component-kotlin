@@ -194,7 +194,7 @@ class ComponentBuildTest {
             .joinToString(java.io.File.pathSeparator)
         val exit = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
             System.err,
-            *(listOf("-Xcontext-parameters", "-jvm-target", "11", "-no-stdlib", "-classpath", classpath, "-d", out.toString()) + sources).toTypedArray(),
+            *(listOf("-Xcontext-parameters", "-jvm-target", "17", "-no-stdlib", "-classpath", classpath, "-d", out.toString()) + sources).toTypedArray(),
         )
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exit, "generated sources must compile")
 

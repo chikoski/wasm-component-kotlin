@@ -6,6 +6,10 @@
 
 ### 破壊的変更 (Breaking Changes)
 
+* `runtime-api`、`runtime-chicory`、`runtime-wasi` のターゲット JVM を 17 へ引き上げ
+
+[#172](https://github.com/chikoski/wasm-component-kotlin/pull/172) に伴い、ランタイムモジュール群の JVM バイトコードターゲットを 11 から 17 へ引き上げました。Android 向けの利用プロジェクトでも `compileOptions` と `jvmTarget` に Java 17 以上を指定する必要があります。なお、`animalsniffer` による Android API 26 シグネチャ検査は引き続き維持しています。
+
 * `WitType` と `ComponentPlan` 内部構文木型の `internal` 化
 
 [#132](https://github.com/chikoski/wasm-component-kotlin/issues/132) により、`runtime-chicory` の `WitType` と `ComponentPlan` の内部構文木型、`fromJson` を `internal` へ変更しました。`ComponentPlan` の公開メンバーは `parse`、`usesAsync`、および `SUPPORTED_VERSION` に絞られます。`WitType` や解析済みプランの内部構文木を直接参照していたコードはコンパイルできなくなります。コンポーネントの呼び出しには生成コードまたは `ComponentBackend` を使用してください。

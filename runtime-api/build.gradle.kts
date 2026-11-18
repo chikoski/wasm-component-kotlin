@@ -1,6 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-// Shared runtime contract for generated bindings. Kept at JVM 11 so it can ship to Android.
+// Shared runtime contract for generated bindings. Kept at JVM 17 so it can ship to Android.
 plugins {
     id("org.jetbrains.kotlin.jvm")
     alias(libs.plugins.animalsniffer)
@@ -21,17 +21,17 @@ tasks.test {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
-        freeCompilerArgs.add("-Xjdk-release=11")
+        jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-Xjdk-release=17")
     }
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
-// Android's API level, not only the JDK 11 API: Android lacks some Java 9-11 APIs (#80). The minSdk
+// Android's API level, not only the JDK 17 API: Android lacks some Java 9-17 APIs (#80). The minSdk
 // matches samples/android; calls into the class path (Kotlin, Chicory) are checked by their own use.
 dependencies {
     signature("${libs.android.api.signature.get()}@signature")

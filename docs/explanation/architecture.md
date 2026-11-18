@@ -34,8 +34,8 @@ flowchart TD
 | `cli` | `wasm2kt` コマンド（`generate` と `bridge` サブコマンド） | 21 |
 | `tooling` | コンポーネント分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`）、`<Name>Component` 生成（`ComponentCodegen`）、未対応機能検査（`PlanCheck`）、型付きブリッジ生成（`TypedBridge`） | 21 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン。Gradle Worker の独立クラスローダーで `tooling` を実行（[ADR-0004](../adr/0004-isolated-tooling-classloader.md)） | 21 |
-| `runtime-api` | 生成コードと各バックエンドの契約（`ComponentBackend`、`Linker`、`HostResourceTable`、バイナリ形式の `WitWriter` / `WitReader`） | 11（Android API 26 互換） |
-| `runtime-chicory` | `plan.json` を再生して Canonical ABI の lift / lower を行う純 JVM バックエンド（`ChicoryComponent`） | 11（Android API 26 互換） |
+| `runtime-api` | 生成コードと各バックエンドの契約（`ComponentBackend`、`Linker`、`HostResourceTable`、バイナリ形式の `WitWriter` / `WitReader`） | 17（Android API 26 互換） |
+| `runtime-chicory` | `plan.json` を再生して Canonical ABI の lift / lower を行う純 JVM バックエンド（`ChicoryComponent`） | 17（Android API 26 互換） |
 | `runtime-wasmtime` | Wasmtime ブリッジの Kotlin 側（`FfmWasmtimeBridge`、`JniWasmtimeBridge`、`BridgeLibrary`） | 21（`--enable-preview`） |
 | `decomposer/` | `wasmtime-environ` を使って `.wasm` を core モジュールと `plan.json`・`wit.json` に分解する Rust ツール。`wasm32-wasip1` にビルドしたバイナリを `tooling` に同梱（[ADR-0002](../adr/0002-wasmtime-environ-decomposer.md)） | — |
 | `rust-bridge/` | Wasmtime ブリッジの Rust ワークスペース。共通部 `core/`（`wasm2kt-bridge-core`）と汎用ブリッジの `cdylib` | — |

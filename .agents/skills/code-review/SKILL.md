@@ -16,7 +16,7 @@ description: テストケースの変更時や一定規模以上のコード変�
 * 複数ファイルにまたがる本番コード変更
 * 重要境界に関わる本番コード変更
 
-重要境界にはCanonical ABI、値のバイナリ形式、JNIやFFMのブリッジ、asyncスケジューラ、Gradleプラグインのクラスローダー分離、JVM 11互換性が含まれます。実行タイミングはローカルでのビルドおよびテストがすべて成功した直後とします。コミットおよびPRの作成は、このレビューと指摘事項の修正を完了させてから行います。
+重要境界にはCanonical ABI、値のバイナリ形式、JNIやFFMのブリッジ、asyncスケジューラ、Gradleプラグインのクラスローダー分離、JVM 17互換性が含まれます。実行タイミングはローカルでのビルドおよびテストがすべて成功した直後とします。コミットおよびPRの作成は、このレビューと指摘事項の修正を完了させてから行います。
 
 ## ステップ1 レビューの実行手段の選択と起動
 
@@ -44,7 +44,7 @@ description: テストケースの変更時や一定規模以上のコード変�
 * テストの妥当性と網羅性
 * 差分ミューテーション検査の生き残り確認
 
-不変条件の遵守では、`runtime-api` と `runtime-chicory` におけるJVM 11およびAndroid API 26互換性の維持を確認させます。さらに、WasmtimeとChicoryの両バックエンド間での値形式や関数解決の整合性、`plan.json` バージョンや `decomposer` 成果物の更新漏れ、Gradleプラグインにおけるクラスローダー分離も点検させます。
+不変条件の遵守では、`runtime-api` と `runtime-chicory` におけるJVM 17およびAndroid API 26互換性の維持を確認させます。さらに、WasmtimeとChicoryの両バックエンド間での値形式や関数解決の整合性、`plan.json` バージョンや `decomposer` 成果物の更新漏れ、Gradleプラグインにおけるクラスローダー分離も点検させます。
 
 例外とトラップの境界では、Canonical ABIの検証が仕様の `trap_if` に沿っているかを確認させます。ゲスト起因の違反がインスタンスをpoisonする `ComponentTrapException` になり、ホスト側の引数誤りがpoisonしない `IllegalArgumentException` または `IllegalStateException` になっているかを検査させます。
 

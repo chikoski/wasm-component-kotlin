@@ -215,7 +215,7 @@ fun Linker.addWasiFilesystem(configure: WasiMountsBuilder.() -> Unit): Linker = 
 /**
  * Sandboxed [Descriptor] implementation backed by `java.nio.file.Path` and [FileChannel].
  *
- * Compatible with JVM 11 and Android API 26+. All relative operations stay strictly confined to
+ * Compatible with JVM 17 and Android API 26+. All relative operations stay strictly confined to
  * [rootPath]; attempts to escape via leading `/`, `\`, NUL bytes, `..`, or symlinks pointing
  * outside [rootPath] fail with [ErrorCode.NotPermitted].
  */

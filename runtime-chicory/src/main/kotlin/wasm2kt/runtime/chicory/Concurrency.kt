@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicInteger
 //
 // The reference implements stack switching with one Python thread per continuation, of which
 // exactly one runs at a time. This port does the same with JVM threads (there is no stack
-// switching on JVM 11 or Android): resuming a continuation hands control to its thread and blocks
+// switching on JVM 17 or Android): resuming a continuation hands control to its thread and blocks
 // the resumer until the continuation blocks or finishes. Every hand-over goes through a
 // [Semaphore], so each thread sees the memory written by the previous one.
 //
