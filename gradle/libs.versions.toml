@@ -2,7 +2,7 @@
 kotlin = "2.4.21"
 kotlinpoet = "2.2.0"
 kotlinx-serialization = "1.13.0"
-clikt = "5.0.3"
+clikt = "5.1.0"
 junit = "5.11.4"
 chicory = "1.7.5"
 # ASM 9.11+ hardcodes ComputeLimits(10MB, 100M ops) in ClassWriter, throwing LimitExceededException:
