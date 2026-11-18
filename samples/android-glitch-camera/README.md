@@ -9,6 +9,8 @@
 主なソースコードと役割は以下の通りです。
 
 - `GlitchEngine.kt`
+- `FrameMaskCompositor.kt`
+- `MediaPipeFrameSegmenter.kt`
 - `RecipePresets.kt`
 - `FrameConverter.kt`
 - `RgbaFrameTransform.kt`
@@ -33,6 +35,25 @@
 
 PNG セッションのエンコード色空間は `ColorType.RGB` です。入力のアルファチャンネルを破棄して RGB の 3 バイトでスキャンラインを構成し、出力時にアルファ値を不透明へ固定するため、スキャンライン単位の破壊で画素が半透明に欠ける現象を防ぎます。PNG 予測フィルタ戦略の既定値 `PngFilterOption.DEFAULT` は Paeth です。差分フィルタを有効にすることでバイト置換やスキャンラインシフトの効果が周囲の画素へ伝播しますが、ホスト JVM の 540p 環境では None に比べて `reloadPixels` と `renderRgba` の処理時間が 1 フレームあたり約 50〜75 ms 増加するトレードオフがあります。
 
+### 4パスの動的切り替えとマスク合成
+
+プレビュー右上の対象セレクターにより、エフェクトの適用対象を次の4パスから動的に切り替えられます。
+
+- 全体
+- 前景
+- 背景
+- なし
+
+アプリ起動時の初期値は全体です。全体パスではセグメンテーションを実行せず、グリッチ処理のみを行います。なしパスではセグメンテーションとグリッチ処理の両方を省略します。その上で、変換済みの元フレームをそのまま表示へ渡します。
+
+前景パスと背景パスでは、MediaPipe Tasks Vision の `ImageSegmenter` を用いて被写体と背景を分離します。Selfie Segmenter のモデルファイルはリポジトリへ同梱しません。`app/build.gradle.kts` の `downloadSelfieSegmenterModel` タスクがビルド時に公式配布元から取得します。取得時には SHA-256 チェックサムを検証した上で生成アセットへ組み込みます。
+
+前景パスと背景パスの処理では、Wasm コンポーネントによるグリッチ処理とセグメンテーション推論を並列に実行します。推論で得られた前景信頼度は `FrameMaskCompositor.kt` で 0 から 255 の整数重みへ変換します。その重みを使い、元フレームとグリッチ済みフレームの RGB 各チャンネルをホスト側で線形補間します。
+
+動画録画では表示用の最終画像をそのままエンコーダーへ渡します。そのため、すべてのパスで表示内容と一致した映像が記録されます。静止画保存の全体パスでは既存の `snapshot` を使います。前景、背景、なしの3パスでは最終合成後の RGBA フレームから PNG バイト列を生成します。
+
+なお、`com.google.mediapipe:tasks-vision:0.10.21` は `arm64-v8a`、`armeabi-v7a`、`x86` 向けのネイティブライブラリのみを同梱しています。そのため、`x86_64` エミュレーターではセグメンテーションの初期化に失敗します。失敗時は画面へ通知を表示した上で全体パスと同等の処理へフォールバックします。また、4パスの動的切り替えとセグメンテーション連携について、実機およびエミュレーター上のライブカメラ動作は未確認です。
+
 ## WebAssembly コンポーネントの更新手順
 
 ローカルの `png-glitch` リポジトリから `png-glitch-component.wasm` を再ビルドする場合は、付属のスクリプトを実行します。
@@ -53,7 +74,7 @@ PNG セッションのエンコード色空間は `ColorType.RGB` です。入�
 ./gradlew -p samples/android-glitch-camera :app:assembleRelease
 ```
 
-`testDebugUnitTest` はホスト JVM 上で `PngglitchComponent` を起動し、`listFilters` のメタデータ検証、全プリセットと全フィルタの `validateRecipe` 検証、複数フレームにわたる `processFrame` と `captureSnapshotPng` の動作を検証します。
+`testDebugUnitTest` はホスト JVM 上で `FrameMaskCompositorTest` と `GlitchEngineTest` を実行します。全4パスのマスク合成、全プリセットと全フィルタの `validateRecipe` 検証、複数フレームにわたる `processFrame` と `captureSnapshotPng` の動作を検証します。初回ビルド時は `selfie_segmenter.tflite` を取得するためネットワーク接続が必要です。
 
 ## フレーム処理の計測
 

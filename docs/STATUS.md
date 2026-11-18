@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-16。対象ブランチは `feat/phase3-runtime-and-docs`、主な変更点は共有テーブル適合と借用貸与追跡による公式テスト `resources/` 全件通過、`runtime-chicory` の境界呼び出しと `Transcoder` の最適化による #58 完了、大規模メソッド分割後の制約文書化、PR テンプレートの追加です。
+> 最終更新: 2026-11-18。対象ブランチは `feat/glitch-camera-4pass-175`。主な変更点は #175 による `samples/android-glitch-camera` への前景と背景の4パス動的切り替え機能の追加です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -42,7 +42,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
 | `samples/android` | Android サンプルアプリ（composite build） | 17 | ART（エミュレーター）で debug / release とも動作確認済み |
-| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 17 | ホスト JVM のユニットテストと debug / release APK ビルド、ART エミュレーターでの `nonMinifiedRelease` 実行と `dex2oat64` 警告ゼロを確認済み |
+| `samples/android-glitch-camera` | `png-glitch-component` を使った Android カメラグリッチデモアプリ | 17 | ホスト JVM テストと debug / release APK ビルドを確認済み。4パス機能の実機およびエミュレーター動作は未確認 |
 
 ## 2. 現在の状態
 
@@ -68,6 +68,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 未検証・既知の制約
 
 * 実機（物理端末）での確認はまだ。エミュレーターでは確認済み
+* `samples/android-glitch-camera` の4パス動的切り替えと MediaPipe 推論について、実機およびエミュレーター動作は未確認。`tasks-vision:0.10.21` は `x86_64` ネイティブライブラリを持たないため、`x86_64` エミュレーターではセグメンテーションが動作せず全体処理へフォールバックする
 * Chicory バックエンドの未対応機能: `wasi:http` は [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117)、`wasi:sockets` は [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) として P2 に分離しており、詳細は [ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) を参照してください。`map<K, V>` は [#71](https://github.com/chikoski/wasm-component-kotlin/issues/71) で追跡しています。いずれも使用時に例外になります。plan から分かるものは Gradle プラグインがビルド時に警告します。WASI 0.3 の `random`、`clocks`、`cli`、`filesystem`、および [ADR-0020](adr/0020-wasi03-filesystem-sandboxing-and-mounts.md) に沿った設定 API と Gradle `addWasiDependency` は実装済みです
 * 同じ package の異なるバージョン（`wasi:http@0.2.0` と `@0.3.0`）を 1 回の生成で使うとエラーになる（Kotlin の package にバージョンを含めないため。[ADR-0011](adr/0011-qualified-interface-keys.md)）
 * 1 回の生成で扱う world は 1 つ（world の API を package のトップレベルに置くため。[ADR-0012](adr/0012-world-at-package-top-level.md)）。複数の world は `--world` で選び、別々の package に生成する。import した interface の型は、`--interfaces-only` と `--with` で world の間で共有できる（[ADR-0014](adr/0014-interface-mappings.md)）
@@ -124,6 +125,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* Android カメラグリッチデモの前景と背景の4パス動的切り替え追加
 * AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
 * Rust クレートに対する差分ミューテーションテストの導入と境界テスト補強
 * ランタイムと WASI 0.3 の状態機械・有界並行性・資源寿命テストの追加および書込ストリーム始動前キャンセルの修正
@@ -134,6 +136,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#175](https://github.com/chikoski/wasm-component-kotlin/issues/175) では、`samples/android-glitch-camera` にエフェクト適用対象を動的に切り替える機能を追加しました。適用対象は全体、前景、背景、なしの4パスです。前景と背景の分離には MediaPipe Tasks Vision の `ImageSegmenter` を使います。Selfie Segmenter モデルはビルド時に公式配布元から取得し、SHA-256 を検証して組み込みます。前景パスと背景パスでは Wasm コンポーネントの実行とセグメンテーション推論を並列に行います。合成にはホスト側の整数補間を使い、元フレームとグリッチ済みフレームを混ぜ合わせます。静止画保存でも4パスすべての最終表示結果と一致した PNG 出力を生成できるようにしました。検証はホスト JVM のユニットテストと debug / release APK ビルドで実施し、いずれも通過しました。一方で、`tasks-vision:0.10.21` は `x86_64` 用ライブラリを含まないため `x86_64` エミュレーターでは全体処理へフォールバックします。実機およびエミュレーター上での4パス動作は未検証です。
 
 [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) と [#150](https://github.com/chikoski/wasm-component-kotlin/pull/150) では、Gradle 9.9.1 と Kotlin 2.4.21 および AGP 9.5.1 の動作検証を完了しました。両サンプルを AGP 9 のビルトイン Kotlin 構成へ移行し、ホストテストとリリースビルドおよび ART エミュレーター実行を通過させています。さらに `gradle-plugin` の `functionalTest` へ Android ライブラリ向けテストを追加しました。これにより `com.android.library` のビルド、設定キャッシュの再利用、`variant.sources.java` へのソース登録、および `runtime-wasi` インタフェースの再利用を継続的に検査します。
 

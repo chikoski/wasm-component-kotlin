@@ -1,6 +1,10 @@
 package com.example.wasm2kt.glitchcamera
 
+import com.example.wasm2kt.glitchcamera.pngglitch.PngglitchComponent
+import com.example.wasm2kt.glitchcamera.pngglitch.WitResult
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
+import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.Session as LiveSession
+import com.example.wasm2kt.glitchcamera.pngglitch.openSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -358,6 +362,214 @@ class GlitchEngineTest {
         assertTrue(filterErr is IllegalStateException)
         val validateErr = runCatching { engine.validate("filters:\n  - type: Invert") }.exceptionOrNull()
         assertTrue(validateErr is IllegalStateException)
+    }
+
+    @Test
+    fun `processFrameWithPass and captureSnapshotPng handle all four passes accurately`() = runBlocking {
+        val width = 16
+        val height = 8
+        val frame = createTestFrame(width, height, alpha = 0x55.toByte())
+        val invertRecipe = """
+            filters:
+              - type: Regenerate
+                strategy:
+                  fixed: none
+              - type: Invert
+        """.trimIndent()
+
+        // Left half: foreground (255), x == 8..9: soft edge (128), right remainder: background (0)
+        val weights = ByteArray(width * height) { idx ->
+            val x = idx % width
+            when {
+                x < 8 -> 255.toByte()
+                x < 10 -> 128.toByte()
+                else -> 0.toByte()
+            }
+        }
+        var segmentCalls = 0
+        val fakeSegmenter = FrameSegmenter { w, h, _ ->
+            segmentCalls++
+            assertEquals(width, w)
+            assertEquals(height, h)
+            ForegroundMask(w, h, weights)
+        }
+
+        GlitchEngine().use { engine ->
+            engine.updateConfig(
+                recipeYaml = invertRecipe,
+                seed = 42uL,
+                seedMode = SeedMode.FIXED,
+                filterOption = PngFilterOption.PAETH,
+            )
+
+            // 1. NONE pass before any liveSession initialization
+            val noneOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.NONE, fakeSegmenter).getOrThrow()
+            assertEquals(0, segmentCalls)
+            for (i in frame.indices step 4) {
+                assertEquals(frame[i], noneOut.rgbaBytes[i])
+                assertEquals(frame[i + 1], noneOut.rgbaBytes[i + 1])
+                assertEquals(frame[i + 2], noneOut.rgbaBytes[i + 2])
+                assertEquals(0xFF.toByte(), noneOut.rgbaBytes[i + 3])
+            }
+            val nonePng = engine.captureSnapshotPng().getOrThrow()
+            assertArrayEquals(noneOut.rgbaBytes, decodePngToRgba(nonePng))
+
+            // 2. FOREGROUND pass (verifying R, G, and B channels)
+            val fgOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, fakeSegmenter).getOrThrow()
+            assertEquals(1, segmentCalls)
+            assertAllPixelsOpaque(fgOut.rgbaBytes)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val p = y * width + x
+                    val off = p * 4
+                    val m = weights[p].toInt() and 0xFF
+                    for (c in 0 until 3) {
+                        val orig = frame[off + c].toInt() and 0xFF
+                        val inv = 255 - orig
+                        val expected = (orig * (255 - m) + inv * m + 127) / 255
+                        assertEquals(expected, fgOut.rgbaBytes[off + c].toInt() and 0xFF)
+                    }
+                }
+            }
+            val fgPng = engine.captureSnapshotPng().getOrThrow()
+            assertArrayEquals(fgOut.rgbaBytes, decodePngToRgba(fgPng))
+
+            // 3. BACKGROUND pass (verifying R, G, and B channels)
+            val bgOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.BACKGROUND, fakeSegmenter).getOrThrow()
+            assertEquals(2, segmentCalls)
+            assertAllPixelsOpaque(bgOut.rgbaBytes)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val p = y * width + x
+                    val off = p * 4
+                    val m = 255 - (weights[p].toInt() and 0xFF)
+                    for (c in 0 until 3) {
+                        val orig = frame[off + c].toInt() and 0xFF
+                        val inv = 255 - orig
+                        val expected = (orig * (255 - m) + inv * m + 127) / 255
+                        assertEquals(expected, bgOut.rgbaBytes[off + c].toInt() and 0xFF)
+                    }
+                }
+            }
+            val bgPng = engine.captureSnapshotPng().getOrThrow()
+            assertArrayEquals(bgOut.rgbaBytes, decodePngToRgba(bgPng))
+
+            // 4. ALL pass skips segmentation and switches snapshot back to liveSession
+            val allOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.ALL, fakeSegmenter).getOrThrow()
+            assertEquals(2, segmentCalls)
+            assertAllPixelsOpaque(allOut.rgbaBytes)
+            for (i in frame.indices step 4) {
+                for (c in 0 until 3) {
+                    assertEquals(255 - (frame[i + c].toInt() and 0xFF), allOut.rgbaBytes[i + c].toInt() and 0xFF)
+                }
+            }
+            val allPng = engine.captureSnapshotPng().getOrThrow()
+            assertArrayEquals(allOut.rgbaBytes, decodePngToRgba(allPng))
+
+            // 5. Fallback when segmenter is null, returns null, or throws
+            val nullSegOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, null).getOrThrow()
+            assertArrayEquals(allOut.rgbaBytes, nullSegOut.rgbaBytes)
+
+            val nullResultSegmenter = FrameSegmenter { _, _, _ -> null }
+            val nullResultOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.BACKGROUND, nullResultSegmenter).getOrThrow()
+            assertArrayEquals(allOut.rgbaBytes, nullResultOut.rgbaBytes)
+
+            val failingSegmenter = FrameSegmenter { _, _, _ -> error("Simulated segmentation error") }
+            val fallbackOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, failingSegmenter).getOrThrow()
+            assertArrayEquals(allOut.rgbaBytes, fallbackOut.rgbaBytes)
+        }
+    }
+
+    @Test
+    fun `processFrameWithPass validates inputs, cancels segmentation on Wasm failure, and serializes with close and snapshot`() = runBlocking {
+        val width = 16
+        val height = 8
+        val frame = createTestFrame(width, height)
+        val mask = ForegroundMask(width, height, ByteArray(width * height) { 255.toByte() })
+
+        GlitchEngine().use { engine ->
+            // Invalid input dimensions / lengths
+            assertTrue(engine.processFrameWithPass(0, height, frame, EffectTargetPass.NONE).isFailure)
+            assertTrue(engine.processFrameWithPass(-2, -2, ByteArray(16), EffectTargetPass.FOREGROUND).isFailure)
+            assertTrue(engine.encodeRgbaToPng(-2, -2, ByteArray(16)).isFailure)
+            assertTrue(engine.generateThumbnails(-2, -2, ByteArray(16), mapOf("inv" to "filters:\n  - type: Invert")).isEmpty())
+
+            // Invalid recipe should fail and cancel in-flight segmentation cleanly
+            val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+            val slowSegmenter = FrameSegmenter { _, _, _ ->
+                try {
+                    Thread.sleep(200)
+                } catch (_: InterruptedException) {
+                    cancelled.set(true)
+                }
+                mask
+            }
+            engine.updateConfig(recipeYaml = "not: valid: yaml: [")
+            val invalidRes = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, slowSegmenter)
+            assertTrue(invalidRes.isFailure)
+
+            // Valid recipe and concurrent passes + snapshot + close
+            engine.updateConfig(
+                recipeYaml = "filters:\n  - type: Invert",
+                seed = 42uL,
+                seedMode = SeedMode.FIXED,
+                filterOption = PngFilterOption.NONE,
+            )
+            val fastSegmenter = FrameSegmenter { _, _, _ -> mask }
+            val jobs = listOf(
+                async(Dispatchers.Default) {
+                    engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, fastSegmenter)
+                },
+                async(Dispatchers.Default) {
+                    engine.processFrameWithPass(width, height, frame, EffectTargetPass.NONE, fastSegmenter)
+                },
+                async(Dispatchers.Default) {
+                    engine.processFrameWithPass(width, height, frame, EffectTargetPass.BACKGROUND, fastSegmenter)
+                },
+                async(Dispatchers.Default) {
+                    engine.captureSnapshotPng()
+                },
+            )
+            engine.close()
+            val results = jobs.awaitAll()
+            engine.awaitCloseForTest()
+            for (res in results) {
+                if (res.isFailure) {
+                    val ex = res.exceptionOrNull()
+                    assertTrue("Unexpected exception type: $ex", ex is IllegalStateException)
+                }
+            }
+
+            // All passes reject calls after close
+            for (pass in EffectTargetPass.entries) {
+                val afterClose = engine.processFrameWithPass(width, height, frame, pass, fastSegmenter)
+                assertTrue(afterClose.isFailure)
+                assertTrue(afterClose.exceptionOrNull() is IllegalStateException)
+            }
+            assertTrue(engine.encodeRgbaToPng(width, height, frame).isFailure)
+        }
+    }
+
+    private suspend fun decodePngToRgba(pngBytes: ByteArray): ByteArray {
+        val expectedSig = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        assertTrue(pngBytes.size > 8 && pngBytes.sliceArray(0 until 8).contentEquals(expectedSig))
+        assertEquals("Expected RGB PNG IHDR color type (2)", 2, pngBytes[25].toInt() and 0xFF)
+        openSession(PngglitchComponent).use { session ->
+            context(session) {
+                val live = when (val created = LiveSession.fromPng(pngBytes)) {
+                    is WitResult.Ok -> created.value
+                    is WitResult.Err -> error("Failed to decode PNG: ${created.error}")
+                }
+                try {
+                    return when (val rendered = live.renderRgba()) {
+                        is WitResult.Ok -> rendered.value
+                        is WitResult.Err -> error("Failed to render PNG: ${rendered.error}")
+                    }
+                } finally {
+                    live.close()
+                }
+            }
+        }
     }
 
     private fun countChangedPixels(before: ByteArray, after: ByteArray): Int {

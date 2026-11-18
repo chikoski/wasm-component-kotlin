@@ -27,6 +27,8 @@ object FrameTrace {
     const val APPLY = "glitch.apply"
     const val RENDER_RGBA = "glitch.renderRgba"
     const val PROCESS_FRAME = "glitch.processFrame"
+    const val SEGMENT = "glitch.segment"
+    const val BLEND = "glitch.blend"
 
     /** Presentation thread: one frame, from the Bitmap copy to the encoder. */
     const val PRESENT = "glitch.present"

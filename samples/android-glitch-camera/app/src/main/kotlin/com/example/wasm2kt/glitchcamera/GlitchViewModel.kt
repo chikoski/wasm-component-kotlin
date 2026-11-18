@@ -72,6 +72,7 @@ data class GlitchUiState(
     val seedMode: SeedMode = SeedMode.PER_FRAME,
     val seed: ULong = 42uL,
     val pngFilterOption: PngFilterOption = PngFilterOption.DEFAULT,
+    val effectPass: EffectTargetPass = EffectTargetPass.DEFAULT,
     val activeRecipeYaml: String = RecipePresets.curated.first().yaml,
     val fallbackPreviewBitmap: Bitmap? = null,
     val presetThumbnails: Map<String, Bitmap> = emptyMap(),
@@ -152,6 +153,10 @@ class GlitchViewModel : ViewModel() {
     private var activeRecorder: Mp4VideoRecorder? = null
     private val recorderCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private val segmenterLock = Any()
+    private var frameSegmenter: FrameSegmenter? = null
+    private var cleared = false
+
     private val _uiState = MutableStateFlow(GlitchUiState())
     val uiState: StateFlow<GlitchUiState> = _uiState.asStateFlow()
 
@@ -179,8 +184,15 @@ class GlitchViewModel : ViewModel() {
     }
 
     fun ensureBaseAssetsLoaded(context: Context) {
-        if (!baseAssetsLoaded.compareAndSet(false, true)) return
         val appContext = context.applicationContext
+        synchronized(segmenterLock) {
+            if (!cleared && frameSegmenter == null) {
+                frameSegmenter = MediaPipeFrameSegmenter(appContext) { reason ->
+                    _uiState.update { state -> state.copy(statusMessage = reason) }
+                }
+            }
+        }
+        if (!baseAssetsLoaded.compareAndSet(false, true)) return
         viewModelScope.launch(Dispatchers.Default) {
             val decoded = runCatching {
                 BitmapFactory.decodeResource(appContext.resources, R.drawable.sample_preview_base)
@@ -388,9 +400,21 @@ class GlitchViewModel : ViewModel() {
      */
     private suspend fun runEngine(frame: ExtractedFrame) {
         try {
+            val pass = _uiState.value.effectPass
+            val segmenter = if (pass.requiresSegmentation) {
+                synchronized(segmenterLock) { frameSegmenter }
+            } else {
+                null
+            }
             // Async: the engine's calls suspend, and may resume on another thread.
             FrameTrace.asyncSection(FrameTrace.ANALYZE) {
-                engine.processFrame(frame.width, frame.height, frame.rgbaBytes)
+                engine.processFrameWithPass(
+                    width = frame.width,
+                    height = frame.height,
+                    rgba = frame.rgbaBytes,
+                    pass = pass,
+                    segmenter = segmenter,
+                )
                     .onSuccess(::handOff)
                     .onFailure { err ->
                         _uiState.update { state -> state.copy(statusMessage = err.message ?: "Glitch failed") }
@@ -463,6 +487,10 @@ class GlitchViewModel : ViewModel() {
 
     fun selectResolution(option: CameraResolutionOption) {
         _uiState.update { state -> state.copy(resolution = option) }
+    }
+
+    fun selectEffectPass(pass: EffectTargetPass) {
+        _uiState.update { state -> state.copy(effectPass = pass) }
     }
 
     fun selectZoom(option: CameraZoomOption) {
@@ -764,6 +792,11 @@ class GlitchViewModel : ViewModel() {
                 }
             }
         }
+        val segmenterToClose = synchronized(segmenterLock) {
+            cleared = true
+            frameSegmenter.also { frameSegmenter = null }
+        }
+        segmenterToClose?.let { runCatching { it.close() } }
         runCatching { engine.close() }
         presentationExecutor.shutdown()
     }
