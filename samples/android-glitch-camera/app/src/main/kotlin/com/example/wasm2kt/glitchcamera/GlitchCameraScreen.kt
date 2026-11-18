@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -232,6 +234,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 ) {
                     LiveCameraSection(
                         resolution = state.resolution,
+                        effectPass = state.effectPass,
                         zoomOption = state.zoomOption,
                         isRecording = state.isRecording,
                         statusMessage = state.statusMessage,
@@ -241,6 +244,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                         isFoldable = true,
                         onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         onSelectResolution = viewModel::selectResolution,
+                        onSelectEffectPass = viewModel::selectEffectPass,
                         onSelectZoom = viewModel::selectZoom,
                         onToggleRecording = { viewModel.toggleVideoRecording(context) },
                         onCapturePng = { viewModel.captureStillPng(context) },
@@ -268,6 +272,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
             } else {
                 LiveCameraSection(
                     resolution = state.resolution,
+                    effectPass = state.effectPass,
                     zoomOption = state.zoomOption,
                     isRecording = state.isRecording,
                     statusMessage = state.statusMessage,
@@ -277,6 +282,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                     isFoldable = false,
                     onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                     onSelectResolution = viewModel::selectResolution,
+                    onSelectEffectPass = viewModel::selectEffectPass,
                     onSelectZoom = viewModel::selectZoom,
                     onToggleRecording = { viewModel.toggleVideoRecording(context) },
                     onCapturePng = { viewModel.captureStillPng(context) },
@@ -366,6 +372,7 @@ private fun PixelfrayAppBar(
 @Composable
 private fun LiveCameraSection(
     resolution: CameraResolutionOption,
+    effectPass: EffectTargetPass,
     zoomOption: CameraZoomOption,
     isRecording: Boolean,
     statusMessage: String?,
@@ -375,6 +382,7 @@ private fun LiveCameraSection(
     isFoldable: Boolean,
     onRequestPermission: () -> Unit,
     onSelectResolution: (CameraResolutionOption) -> Unit,
+    onSelectEffectPass: (EffectTargetPass) -> Unit,
     onSelectZoom: (CameraZoomOption) -> Unit,
     onToggleRecording: () -> Unit,
     onCapturePng: () -> Unit,
@@ -425,14 +433,24 @@ private fun LiveCameraSection(
             // 3x3 rule-of-thirds grid overlay (nodes 2:31..2:34 / 2:75..2:78)
             RuleOfThirdsGrid(modifier = Modifier.fillMaxSize())
 
-            // Resolution selector pill (node 2:38 / 2:82)
-            ResolutionSelectorPill(
-                selected = resolution,
-                onSelect = onSelectResolution,
+            // Resolution and effect pass selector pills (top-right stack)
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 12.dp, end = 16.dp),
-            )
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ResolutionSelectorPill(
+                    selected = resolution,
+                    onSelect = onSelectResolution,
+                )
+
+                EffectPassSelectorPill(
+                    selected = effectPass,
+                    onSelect = onSelectEffectPass,
+                )
+            }
 
             if (showPermissionPrompt) {
                 Surface(
@@ -476,7 +494,8 @@ private fun LiveCameraSection(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(start = 16.dp, bottom = 50.dp),
+                        .padding(start = 16.dp, bottom = 50.dp)
+                        .widthIn(max = 240.dp),
                 ) {
                     Text(
                         text = msg,
@@ -553,6 +572,8 @@ private fun ResolutionSelectorPill(
             color = ColorTextResolutionLabel,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.padding(end = 8.dp),
         )
         CameraResolutionOption.entries.forEach { option ->
@@ -571,6 +592,56 @@ private fun ResolutionSelectorPill(
                     color = if (isSelected) ColorOnAccentDark else ColorTextPillUnselected,
                     fontSize = 12.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EffectPassSelectorPill(
+    selected: EffectTargetPass,
+    onSelect: (EffectTargetPass) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(ColorOverlayPill)
+            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "対象",
+            color = ColorTextResolutionLabel,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        EffectTargetPass.entries.forEach { option ->
+            val isSelected = option == selected
+            Box(
+                modifier = Modifier
+                    .defaultMinSize(minWidth = 44.dp)
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (isSelected) ColorAccentLime else ColorOverlayPill)
+                    .clickable { onSelect(option) }
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = option.label,
+                    color = if (isSelected) ColorOnAccentDark else ColorTextPillUnselected,
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
         }
@@ -765,11 +836,12 @@ private fun FilterStudioSection(
                 fontWeight = FontWeight.Bold,
             )
 
+            val isEffectActive = state.effectPass != EffectTargetPass.NONE
             Row(
                 modifier = Modifier
                     .height(24.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(ColorStatusBadgeBg)
+                    .background(if (isEffectActive) ColorStatusBadgeBg else ColorSegmentedBg)
                     .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -778,10 +850,11 @@ private fun FilterStudioSection(
                     painter = painterResource(id = R.drawable.ic_status_dot),
                     contentDescription = null,
                     modifier = Modifier.size(5.dp),
+                    alpha = if (isEffectActive) 1f else 0.4f,
                 )
                 Text(
-                    text = "適用中",
-                    color = ColorAccentLime,
+                    text = if (isEffectActive) "適用中" else "オフ",
+                    color = if (isEffectActive) ColorAccentLime else ColorTextTabUnselected,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                 )

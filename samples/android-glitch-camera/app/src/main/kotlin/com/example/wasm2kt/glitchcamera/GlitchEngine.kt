@@ -15,10 +15,13 @@ import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.li
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.Session as LiveSession
 import com.example.wasm2kt.glitchcamera.pngglitch.openSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -65,6 +68,7 @@ class GlitchEngine : AutoCloseable {
     private var closed: Boolean = false
     private var worldSession: WorldSession? = null
     private var liveSession: LiveSession? = null
+    private var latestCompositeOutput: GlitchFrameOutput? = null
 
     private fun ensureWorldSessionLocked(): WorldSession {
         check(!closed) { "GlitchEngine is closed" }
@@ -118,15 +122,92 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    suspend fun processFrame(width: Int, height: Int, rgba: ByteArray): Result<GlitchFrameOutput> = mutex.withLock {
+    suspend fun processFrame(width: Int, height: Int, rgba: ByteArray): Result<GlitchFrameOutput> =
+        mutex.withLock {
+            processFrameLocked(width, height, rgba, clearComposite = true)
+        }
+
+    suspend fun processFrameWithPass(
+        width: Int,
+        height: Int,
+        rgba: ByteArray,
+        pass: EffectTargetPass,
+        segmenter: FrameSegmenter? = null,
+    ): Result<GlitchFrameOutput> = mutex.withLock {
+        if (closed) {
+            return@withLock Result.failure(IllegalStateException("GlitchEngine is closed"))
+        }
+        validateRgbaInput(width, height, rgba)?.let { return@withLock Result.failure(it) }
+
+        if (!pass.requiresGlitchEngine) {
+            val startNanos = System.nanoTime()
+            val copied = FrameMaskCompositor.copyOpaqueRgba(rgba)
+            val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000.0
+            val output = GlitchFrameOutput(
+                rgbaBytes = copied,
+                width = width,
+                height = height,
+                processingTimeMs = elapsedMs,
+            )
+            latestCompositeOutput = output
+            return@withLock Result.success(output)
+        }
+
+        if (!pass.requiresSegmentation) {
+            return@withLock processFrameLocked(width, height, rgba, clearComposite = true)
+        }
+
+        val startNanos = System.nanoTime()
+        coroutineScope {
+            val maskDeferred = segmenter?.let { seg ->
+                async(Dispatchers.Default) {
+                    try {
+                        seg.segment(width, height, rgba)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            val glitchResult = processFrameLocked(width, height, rgba, clearComposite = false)
+            if (glitchResult.isFailure) {
+                maskDeferred?.cancel()
+                return@coroutineScope glitchResult
+            }
+            val mask = maskDeferred?.await()
+            val glitchOutput = glitchResult.getOrThrow()
+            if (mask != null) {
+                FrameTrace.section(FrameTrace.BLEND) {
+                    FrameMaskCompositor.blendInPlace(
+                        originalRgba = rgba,
+                        glitchedRgba = glitchOutput.rgbaBytes,
+                        frameWidth = width,
+                        frameHeight = height,
+                        mask = mask,
+                        pass = pass,
+                    )
+                }
+            }
+            val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000.0
+            val finalOutput = glitchOutput.copy(processingTimeMs = elapsedMs)
+            latestCompositeOutput = finalOutput
+            Result.success(finalOutput)
+        }
+    }
+
+    private suspend fun processFrameLocked(
+        width: Int,
+        height: Int,
+        rgba: ByteArray,
+        clearComposite: Boolean,
+    ): Result<GlitchFrameOutput> {
         if (closed) {
             return Result.failure(IllegalStateException("GlitchEngine is closed"))
         }
-        val expectedBytes = width * height * 4
-        if (rgba.size != expectedBytes) {
-            return Result.failure(
-                IllegalArgumentException("Expected $expectedBytes RGBA bytes for ${width}x${height}, got ${rgba.size}"),
-            )
+        validateRgbaInput(width, height, rgba)?.let { return Result.failure(it) }
+        if (clearComposite) {
+            latestCompositeOutput = null
         }
         val startNanos = System.nanoTime()
         val session = ensureLiveSessionLocked(width, height, rgba).getOrElse { return Result.failure(it) }
@@ -155,9 +236,23 @@ class GlitchEngine : AutoCloseable {
         }
     }
 
-    suspend fun captureSnapshotPng(): Result<ByteArray> = mutex.withLock {
+    suspend fun encodeRgbaToPng(width: Int, height: Int, rgba: ByteArray): Result<ByteArray> = mutex.withLock {
         if (closed) {
             return Result.failure(IllegalStateException("GlitchEngine is closed"))
+        }
+        validateRgbaInput(width, height, rgba)?.let { return Result.failure(it) }
+        encodeRgbaToPngLocked(width, height, rgba)
+    }
+
+    suspend fun captureSnapshotPng(overrideFrame: GlitchFrameOutput? = null): Result<ByteArray> = mutex.withLock {
+        if (closed) {
+            return Result.failure(IllegalStateException("GlitchEngine is closed"))
+        }
+        val frameToEncode = overrideFrame ?: latestCompositeOutput
+        if (frameToEncode != null) {
+            validateRgbaInput(frameToEncode.width, frameToEncode.height, frameToEncode.rgbaBytes)
+                ?.let { return Result.failure(it) }
+            return encodeRgbaToPngLocked(frameToEncode.width, frameToEncode.height, frameToEncode.rgbaBytes)
         }
         val session = liveSession
             ?: return Result.failure(IllegalStateException("No active camera frame in live session"))
@@ -165,6 +260,40 @@ class GlitchEngine : AutoCloseable {
             is WitResult.Ok -> Result.success(snapRes.value)
             is WitResult.Err -> Result.failure(IllegalStateException(formatError(snapRes.error)))
         }
+    }
+
+    private suspend fun encodeRgbaToPngLocked(width: Int, height: Int, rgba: ByteArray): Result<ByteArray> {
+        val encoding = Encoding(
+            colorType = ColorType.RGB,
+            bitDepth = 8u,
+            filter = currentFilterOption.strategy,
+        )
+        val created = context(ensureWorldSessionLocked()) {
+            LiveSession.fromPixels(width.toUInt(), height.toUInt(), rgba, encoding)
+        }
+        val snapSession = when (created) {
+            is WitResult.Ok -> created.value
+            is WitResult.Err -> return Result.failure(IllegalStateException(formatError(created.error)))
+        }
+        return try {
+            when (val snapRes = snapSession.snapshot()) {
+                is WitResult.Ok -> Result.success(snapRes.value)
+                is WitResult.Err -> Result.failure(IllegalStateException(formatError(snapRes.error)))
+            }
+        } finally {
+            snapSession.close()
+        }
+    }
+
+    private fun validateRgbaInput(width: Int, height: Int, rgba: ByteArray): IllegalArgumentException? {
+        if (width <= 0 || height <= 0) {
+            return IllegalArgumentException("Invalid frame dimensions ${width}x$height")
+        }
+        val expectedBytesLong = width.toLong() * height.toLong() * 4L
+        if (expectedBytesLong > Int.MAX_VALUE.toLong() || rgba.size.toLong() != expectedBytesLong) {
+            return IllegalArgumentException("Expected $expectedBytesLong RGBA bytes for ${width}x${height}, got ${rgba.size}")
+        }
+        return null
     }
 
     suspend fun generateThumbnails(
@@ -178,8 +307,7 @@ class GlitchEngine : AutoCloseable {
         if (closed) {
             return emptyMap()
         }
-        val expectedBytes = width * height * 4
-        if (baseRgba.size != expectedBytes || recipes.isEmpty()) {
+        if (validateRgbaInput(width, height, baseRgba) != null || recipes.isEmpty()) {
             return emptyMap()
         }
         val resolvedFilterOption = filterOption ?: currentFilterOption
@@ -262,6 +390,7 @@ class GlitchEngine : AutoCloseable {
     }
 
     private fun closeSessionsLocked() {
+        latestCompositeOutput = null
         try {
             liveSession?.close()
         } finally {
