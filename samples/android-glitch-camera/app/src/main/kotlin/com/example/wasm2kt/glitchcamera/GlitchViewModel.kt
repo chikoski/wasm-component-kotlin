@@ -73,6 +73,7 @@ data class GlitchUiState(
     val seed: ULong = 42uL,
     val pngFilterOption: PngFilterOption = PngFilterOption.DEFAULT,
     val effectPass: EffectTargetPass = EffectTargetPass.DEFAULT,
+    val segmentationStatus: SegmentationStatus = SegmentationStatus.INACTIVE,
     val activeRecipeYaml: String = RecipePresets.curated.first().yaml,
     val fallbackPreviewBitmap: Bitmap? = null,
     val presetThumbnails: Map<String, Bitmap> = emptyMap(),
@@ -156,6 +157,7 @@ class GlitchViewModel : ViewModel() {
     private val segmenterLock = Any()
     private var frameSegmenter: FrameSegmenter? = null
     private var cleared = false
+    private val statusTracker = SegmentationStatusTracker()
 
     private val _uiState = MutableStateFlow(GlitchUiState())
     val uiState: StateFlow<GlitchUiState> = _uiState.asStateFlow()
@@ -187,9 +189,7 @@ class GlitchViewModel : ViewModel() {
         val appContext = context.applicationContext
         synchronized(segmenterLock) {
             if (!cleared && frameSegmenter == null) {
-                frameSegmenter = MediaPipeFrameSegmenter(appContext) { reason ->
-                    _uiState.update { state -> state.copy(statusMessage = reason) }
-                }
+                frameSegmenter = MediaPipeFrameSegmenter(appContext)
             }
         }
         if (!baseAssetsLoaded.compareAndSet(false, true)) return
@@ -490,7 +490,13 @@ class GlitchViewModel : ViewModel() {
     }
 
     fun selectEffectPass(pass: EffectTargetPass) {
-        _uiState.update { state -> state.copy(effectPass = pass) }
+        _uiState.update { state ->
+            val nextStatus = statusTracker.resolveForPassSelection(state.segmentationStatus, pass)
+            state.copy(
+                effectPass = pass,
+                segmentationStatus = nextStatus,
+            )
+        }
     }
 
     fun selectZoom(option: CameraZoomOption) {
@@ -660,7 +666,7 @@ class GlitchViewModel : ViewModel() {
             val existing = activeRecorder
             if (existing != null) {
                 activeRecorder = null
-                _uiState.update { it.copy(isRecording = false, statusMessage = "Finalizing MP4...") }
+                _uiState.update { it.copy(isRecording = false, statusMessage = FINALIZING_RECORDING_MESSAGE) }
                 // Finalize on an independent IO scope so leaving the screen after pressing Stop
                 // still finishes writing and deletes temporary cache files cleanly.
                 recorderCleanupScope.launch {
@@ -724,8 +730,14 @@ class GlitchViewModel : ViewModel() {
         }
     }
 
-    fun clearStatusMessage() {
-        _uiState.update { it.copy(statusMessage = null) }
+    fun clearStatusMessage(expectedMessage: String? = null) {
+        _uiState.update { state ->
+            if (SegmentationStatusTracker.shouldClearStatusMessage(state.statusMessage, expectedMessage)) {
+                state.copy(statusMessage = null)
+            } else {
+                state
+            }
+        }
     }
 
     private fun pushConfigToEngine(
@@ -765,6 +777,24 @@ class GlitchViewModel : ViewModel() {
             processingTimeMs = output.processingTimeMs,
             displayFps = if (smoothedFrameIntervalMs > 0.0) 1000.0 / smoothedFrameIntervalMs else 0.0,
         )
+        val currentState = _uiState.value
+        val candidateStatus = statusTracker.resolveForFrameOutput(
+            activePass = currentState.effectPass,
+            currentStatus = currentState.segmentationStatus,
+            reportedStatus = output.segmentationStatus,
+        )
+        if (currentState.segmentationStatus != candidateStatus) {
+            _uiState.update { state ->
+                val targetStatus = if (!state.effectPass.requiresSegmentation) {
+                    SegmentationStatus.INACTIVE
+                } else if (candidateStatus == SegmentationStatus.INACTIVE) {
+                    state.segmentationStatus
+                } else {
+                    candidateStatus
+                }
+                if (state.segmentationStatus == targetStatus) state else state.copy(segmentationStatus = targetStatus)
+            }
+        }
     }
 
     /** The reused preview Bitmap. Call on the presentation thread. */
@@ -804,5 +834,8 @@ class GlitchViewModel : ViewModel() {
     companion object {
         /** Status message shown once [runSyntheticFrames] has presented its last frame. */
         const val SYNTHETIC_RUN_DONE = "Synthetic frames done"
+
+        /** Status message shown while finishing and saving a recorded MP4 video. */
+        const val FINALIZING_RECORDING_MESSAGE = "Finalizing MP4..."
     }
 }

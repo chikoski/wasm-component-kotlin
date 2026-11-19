@@ -56,6 +56,7 @@ data class GlitchFrameOutput(
     val width: Int,
     val height: Int,
     val processingTimeMs: Double,
+    val segmentationStatus: SegmentationStatus = SegmentationStatus.INACTIVE,
 )
 
 class GlitchEngine : AutoCloseable {
@@ -177,7 +178,7 @@ class GlitchEngine : AutoCloseable {
             }
             val mask = maskDeferred?.await()
             val glitchOutput = glitchResult.getOrThrow()
-            if (mask != null) {
+            val segmentationStatus = if (mask != null) {
                 FrameTrace.section(FrameTrace.BLEND) {
                     FrameMaskCompositor.blendInPlace(
                         originalRgba = rgba,
@@ -188,9 +189,19 @@ class GlitchEngine : AutoCloseable {
                         pass = pass,
                     )
                 }
+                if (mask.hasForegroundSubject) {
+                    SegmentationStatus.DETECTED
+                } else {
+                    SegmentationStatus.NO_SUBJECT
+                }
+            } else {
+                SegmentationStatus.UNAVAILABLE
             }
             val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000.0
-            val finalOutput = glitchOutput.copy(processingTimeMs = elapsedMs)
+            val finalOutput = glitchOutput.copy(
+                processingTimeMs = elapsedMs,
+                segmentationStatus = segmentationStatus,
+            )
             latestCompositeOutput = finalOutput
             Result.success(finalOutput)
         }

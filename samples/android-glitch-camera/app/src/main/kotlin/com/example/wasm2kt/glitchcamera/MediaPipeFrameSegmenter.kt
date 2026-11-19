@@ -1,12 +1,10 @@
 package com.example.wasm2kt.glitchcamera
 
 import android.content.Context
+import android.util.Log
 import com.google.mediapipe.framework.image.ByteBufferImageBuilder
-import com.google.mediapipe.framework.image.ByteBufferExtractor
 import com.google.mediapipe.framework.image.MPImage
-import com.google.mediapipe.tasks.core.BaseOptions
-import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
+import com.google.mediapipe.tasks.core.CpuSelfieSegmenterGraph
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,14 +17,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 
 /**
- * [FrameSegmenter] backed by MediaPipe Tasks Vision [ImageSegmenter] and `selfie_segmenter.tflite`.
- * Lazily loads the model on the first inference call and reuses a direct [ByteBuffer] across
- * frames to avoid per-frame native bitmap allocation and recycling overhead.
+ * [FrameSegmenter] backed by MediaPipe Tasks `selfie_segmenter.tflite` running strictly on CPU via
+ * [CpuSelfieSegmenterGraph]. Lazily initializes the graph on the first segmentation call and
+ * reuses direct input and quantized output buffers across frames.
  */
 class MediaPipeFrameSegmenter(
     context: Context,
     private val modelAssetPath: String = DEFAULT_MODEL_ASSET_PATH,
-    private val onUnavailable: ((String) -> Unit)? = null,
 ) : FrameSegmenter {
     private val appContext = context.applicationContext
     private val lock = ReentrantLock()
@@ -38,10 +35,12 @@ class MediaPipeFrameSegmenter(
     @Volatile
     private var closeCleanupJob: Job? = null
 
-    private var imageSegmenter: ImageSegmenter? = null
+    private var cpuGraph: CpuSelfieSegmenterGraph? = null
     private var initializationFailed = false
-    private var unavailableNotified = false
+    private var consecutiveInferenceFailures = 0
+    private var failureLogged = false
     private var directInputBuffer: ByteBuffer? = null
+    private var maskWeightsBuffer: ByteArray? = null
 
     override fun segment(width: Int, height: Int, rgbaBytes: ByteArray): ForegroundMask? {
         if (closed || width <= 0 || height <= 0) {
@@ -54,7 +53,7 @@ class MediaPipeFrameSegmenter(
         lock.lock()
         try {
             if (closed) return null
-            val segmenter = ensureSegmenterLocked() ?: return null
+            val graph = ensureSegmenterLocked() ?: return null
             val inputBuffer = acquireInputBufferLocked(rgbaBytes.size)
             inputBuffer.clear()
             inputBuffer.put(rgbaBytes)
@@ -66,75 +65,76 @@ class MediaPipeFrameSegmenter(
                 MPImage.IMAGE_FORMAT_RGBA,
             ).build()
             try {
-                val result = FrameTrace.section(FrameTrace.SEGMENT) {
-                    segmenter.segment(inputImage)
-                }
-                val masksOptional = result.confidenceMasks()
-                val masks = if (masksOptional.isPresent) masksOptional.get() else emptyList()
-                try {
-                    if (masks.isEmpty()) return null
-                    val fgIndex = selectForegroundMaskIndex(segmenter.labels, masks.size)
-                    val fgMaskImage = masks[fgIndex]
-                    val floatBuffer = ByteBufferExtractor.extract(fgMaskImage)
-                        .duplicate()
-                        .order(ByteOrder.nativeOrder())
-                        .asFloatBuffer()
-                    return FrameMaskCompositor.quantizeConfidenceFloats(
-                        floats = floatBuffer,
-                        maskWidth = fgMaskImage.width,
-                        maskHeight = fgMaskImage.height,
-                    )
-                } finally {
-                    for (maskImage in masks) {
-                        runCatching { maskImage.close() }
+                val floats = FrameTrace.section(FrameTrace.SEGMENT) {
+                    graph.segment(inputImage)
+                } ?: return null
+                if (floats.size != MASK_PIXEL_COUNT) {
+                    if (!failureLogged) {
+                        failureLogged = true
+                        Log.w(
+                            TAG,
+                            "Unexpected selfie segmenter output size ${floats.size} (expected $MASK_PIXEL_COUNT)",
+                        )
                     }
-                    result.categoryMask().ifPresent { category ->
-                        runCatching { category.close() }
-                    }
+                    return null
                 }
+                consecutiveInferenceFailures = 0
+                failureLogged = false
+                val reuse = maskWeightsBuffer ?: ByteArray(MASK_PIXEL_COUNT).also { maskWeightsBuffer = it }
+                return FrameMaskCompositor.quantizeConfidenceFloatArray(
+                    floats = floats,
+                    maskWidth = MASK_DIMENSION,
+                    maskHeight = MASK_DIMENSION,
+                    reuseBuffer = reuse,
+                    applySigmoid = graph.requiresSigmoid,
+                )
             } finally {
                 runCatching { inputImage.close() }
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            handleInferenceFailureLocked(e)
             return null
         } finally {
             lock.unlock()
         }
     }
 
-    private fun ensureSegmenterLocked(): ImageSegmenter? {
-        imageSegmenter?.let { return it }
-        if (initializationFailed) return null
-        return try {
-            val baseOptions = BaseOptions.builder()
-                .setModelAssetPath(modelAssetPath)
-                .build()
-            val options = ImageSegmenter.ImageSegmenterOptions.builder()
-                .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.IMAGE)
-                .setOutputConfidenceMasks(true)
-                .setOutputCategoryMask(false)
-                .build()
-            ImageSegmenter.createFromOptions(appContext, options).also {
-                imageSegmenter = it
-            }
-        } catch (e: LinkageError) {
+    private fun handleInferenceFailureLocked(e: Exception) {
+        val failedGraph = cpuGraph
+        cpuGraph = null
+        if (failedGraph != null) {
+            runCatching { failedGraph.close() }
+        }
+        consecutiveInferenceFailures++
+        if (!failureLogged) {
+            failureLogged = true
+            val detail = e.message ?: e.cause?.message ?: e.javaClass.simpleName
+            Log.w(TAG, "Segmentation inference failed: $detail")
+        }
+        if (consecutiveInferenceFailures > MAX_RECOVERY_ATTEMPTS) {
             initializationFailed = true
-            notifyUnavailableOnce(e.message ?: "MediaPipe native library unavailable on this ABI")
-            null
-        } catch (e: Exception) {
-            initializationFailed = true
-            notifyUnavailableOnce(e.message ?: "Segmentation initialization failed")
-            null
         }
     }
 
-    private fun notifyUnavailableOnce(detail: String) {
-        if (!unavailableNotified) {
-            unavailableNotified = true
-            onUnavailable?.invoke("セグメンテーションを利用できないため全体表示になります: $detail")
+    private fun ensureSegmenterLocked(): CpuSelfieSegmenterGraph? {
+        cpuGraph?.let { return it }
+        if (initializationFailed) return null
+        return try {
+            CpuSelfieSegmenterGraph.create(appContext, modelAssetPath).also {
+                cpuGraph = it
+            }
+        } catch (e: LinkageError) {
+            initializationFailed = true
+            val detail = e.message ?: e.cause?.message ?: e.javaClass.simpleName
+            Log.w(TAG, "MediaPipe native library unavailable on this ABI: $detail", e)
+            null
+        } catch (e: Exception) {
+            initializationFailed = true
+            val detail = e.message ?: e.cause?.message ?: e.javaClass.simpleName
+            Log.w(TAG, "Segmentation initialization failed: $detail", e)
+            null
         }
     }
 
@@ -172,15 +172,20 @@ class MediaPipeFrameSegmenter(
 
     private fun closeResourcesLocked() {
         try {
-            imageSegmenter?.let { runCatching { it.close() } }
+            cpuGraph?.let { runCatching { it.close() } }
         } finally {
-            imageSegmenter = null
+            cpuGraph = null
             directInputBuffer = null
+            maskWeightsBuffer = null
         }
     }
 
     companion object {
+        private const val TAG = "MediaPipeFrameSegmenter"
         const val DEFAULT_MODEL_ASSET_PATH = "selfie_segmenter.tflite"
+        private const val MASK_DIMENSION = 256
+        private const val MASK_PIXEL_COUNT = MASK_DIMENSION * MASK_DIMENSION
+        private const val MAX_RECOVERY_ATTEMPTS = 1
 
         internal fun selectForegroundMaskIndex(labels: List<String>, maskCount: Int): Int {
             if (maskCount <= 1) return 0

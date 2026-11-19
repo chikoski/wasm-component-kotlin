@@ -404,6 +404,7 @@ class GlitchEngineTest {
 
             // 1. NONE pass before any liveSession initialization
             val noneOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.NONE, fakeSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.INACTIVE, noneOut.segmentationStatus)
             assertEquals(0, segmentCalls)
             for (i in frame.indices step 4) {
                 assertEquals(frame[i], noneOut.rgbaBytes[i])
@@ -416,6 +417,7 @@ class GlitchEngineTest {
 
             // 2. FOREGROUND pass (verifying R, G, and B channels)
             val fgOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, fakeSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.DETECTED, fgOut.segmentationStatus)
             assertEquals(1, segmentCalls)
             assertAllPixelsOpaque(fgOut.rgbaBytes)
             for (y in 0 until height) {
@@ -436,6 +438,7 @@ class GlitchEngineTest {
 
             // 3. BACKGROUND pass (verifying R, G, and B channels)
             val bgOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.BACKGROUND, fakeSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.DETECTED, bgOut.segmentationStatus)
             assertEquals(2, segmentCalls)
             assertAllPixelsOpaque(bgOut.rgbaBytes)
             for (y in 0 until height) {
@@ -456,6 +459,7 @@ class GlitchEngineTest {
 
             // 4. ALL pass skips segmentation and switches snapshot back to liveSession
             val allOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.ALL, fakeSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.INACTIVE, allOut.segmentationStatus)
             assertEquals(2, segmentCalls)
             assertAllPixelsOpaque(allOut.rgbaBytes)
             for (i in frame.indices step 4) {
@@ -466,16 +470,26 @@ class GlitchEngineTest {
             val allPng = engine.captureSnapshotPng().getOrThrow()
             assertArrayEquals(allOut.rgbaBytes, decodePngToRgba(allPng))
 
-            // 5. Fallback when segmenter is null, returns null, or throws
+            // 5. No-subject mask reports NO_SUBJECT
+            val emptyMaskSegmenter = FrameSegmenter { w, h, _ ->
+                ForegroundMask(w, h, ByteArray(w * h))
+            }
+            val noSubjectOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, emptyMaskSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.NO_SUBJECT, noSubjectOut.segmentationStatus)
+
+            // 6. Fallback when segmenter is null, returns null, or throws
             val nullSegOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, null).getOrThrow()
+            assertEquals(SegmentationStatus.UNAVAILABLE, nullSegOut.segmentationStatus)
             assertArrayEquals(allOut.rgbaBytes, nullSegOut.rgbaBytes)
 
             val nullResultSegmenter = FrameSegmenter { _, _, _ -> null }
             val nullResultOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.BACKGROUND, nullResultSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.UNAVAILABLE, nullResultOut.segmentationStatus)
             assertArrayEquals(allOut.rgbaBytes, nullResultOut.rgbaBytes)
 
             val failingSegmenter = FrameSegmenter { _, _, _ -> error("Simulated segmentation error") }
             val fallbackOut = engine.processFrameWithPass(width, height, frame, EffectTargetPass.FOREGROUND, failingSegmenter).getOrThrow()
+            assertEquals(SegmentationStatus.UNAVAILABLE, fallbackOut.segmentationStatus)
             assertArrayEquals(allOut.rgbaBytes, fallbackOut.rgbaBytes)
         }
     }
