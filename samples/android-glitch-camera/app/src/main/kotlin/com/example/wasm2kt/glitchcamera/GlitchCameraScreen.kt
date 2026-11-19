@@ -66,6 +66,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -88,6 +90,7 @@ import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.gl
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.glitch.ParamKind
 import com.example.wasm2kt.glitchcamera.pngglitch.exports.chikoski.png_glitch.live.SeedMode
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -149,6 +152,18 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
     LaunchedEffect(state.isBenchmarkWarmup) {
         if (!hasCameraPermission && !state.isBenchmarkWarmup) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    LaunchedEffect(state.statusMessage, state.isRecording) {
+        val msg = state.statusMessage ?: return@LaunchedEffect
+        if (
+            msg != GlitchViewModel.SYNTHETIC_RUN_DONE &&
+            msg != GlitchViewModel.FINALIZING_RECORDING_MESSAGE &&
+            !state.isRecording
+        ) {
+            delay(3_000L)
+            viewModel.clearStatusMessage(msg)
         }
     }
 
@@ -235,6 +250,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                     LiveCameraSection(
                         resolution = state.resolution,
                         effectPass = state.effectPass,
+                        segmentationStatus = state.segmentationStatus,
                         zoomOption = state.zoomOption,
                         isRecording = state.isRecording,
                         statusMessage = state.statusMessage,
@@ -273,6 +289,7 @@ fun GlitchCameraScreen(viewModel: GlitchViewModel) {
                 LiveCameraSection(
                     resolution = state.resolution,
                     effectPass = state.effectPass,
+                    segmentationStatus = state.segmentationStatus,
                     zoomOption = state.zoomOption,
                     isRecording = state.isRecording,
                     statusMessage = state.statusMessage,
@@ -373,6 +390,7 @@ private fun PixelfrayAppBar(
 private fun LiveCameraSection(
     resolution: CameraResolutionOption,
     effectPass: EffectTargetPass,
+    segmentationStatus: SegmentationStatus,
     zoomOption: CameraZoomOption,
     isRecording: Boolean,
     statusMessage: String?,
@@ -448,6 +466,7 @@ private fun LiveCameraSection(
 
                 EffectPassSelectorPill(
                     selected = effectPass,
+                    segmentationStatus = segmentationStatus,
                     onSelect = onSelectEffectPass,
                 )
             }
@@ -603,6 +622,7 @@ private fun ResolutionSelectorPill(
 @Composable
 private fun EffectPassSelectorPill(
     selected: EffectTargetPass,
+    segmentationStatus: SegmentationStatus,
     onSelect: (EffectTargetPass) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -611,17 +631,12 @@ private fun EffectPassSelectorPill(
             .height(44.dp)
             .clip(RoundedCornerShape(22.dp))
             .background(ColorOverlayPill)
-            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = "対象",
-            color = ColorTextResolutionLabel,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.padding(end = 8.dp),
+        SegmentationStatusIcon(
+            status = segmentationStatus,
+            modifier = Modifier.padding(end = 6.dp),
         )
         EffectTargetPass.entries.forEach { option ->
             val isSelected = option == selected
@@ -644,6 +659,81 @@ private fun EffectPassSelectorPill(
                     softWrap = false,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SegmentationStatusIcon(
+    status: SegmentationStatus,
+    modifier: Modifier = Modifier,
+) {
+    val description = when (status) {
+        SegmentationStatus.DETECTED -> "人物検出中"
+        SegmentationStatus.NO_SUBJECT -> "人物未検出"
+        SegmentationStatus.INACTIVE -> "セグメンテーション無効"
+        SegmentationStatus.UNAVAILABLE -> "セグメンテーション利用不可"
+    }
+    val silhouetteColor = when (status) {
+        SegmentationStatus.DETECTED -> ColorAccentLime
+        SegmentationStatus.NO_SUBJECT -> ColorTextResolutionLabel.copy(alpha = 0.78f)
+        SegmentationStatus.INACTIVE -> ColorTextResolutionLabel.copy(alpha = 0.42f)
+        SegmentationStatus.UNAVAILABLE -> ColorRecordAccent.copy(alpha = 0.85f)
+    }
+    val shouldersPath = remember { Path() }
+    Canvas(
+        modifier = modifier
+            .size(22.dp)
+            .semantics { contentDescription = description },
+    ) {
+        val w = size.width
+        val h = size.height
+        // Head silhouette
+        drawCircle(
+            color = silhouetteColor,
+            radius = w * 0.17f,
+            center = Offset(w * 0.46f, h * 0.31f),
+        )
+        // Upper torso and shoulders dome
+        shouldersPath.reset()
+        shouldersPath.moveTo(w * 0.14f, h * 0.84f)
+        shouldersPath.cubicTo(
+            w * 0.14f, h * 0.57f,
+            w * 0.78f, h * 0.57f,
+            w * 0.78f, h * 0.84f,
+        )
+        shouldersPath.close()
+        drawPath(path = shouldersPath, color = silhouetteColor)
+
+        when (status) {
+            SegmentationStatus.DETECTED -> {
+                drawCircle(
+                    color = ColorAccentLime,
+                    radius = w * 0.10f,
+                    center = Offset(w * 0.83f, h * 0.22f),
+                )
+            }
+            SegmentationStatus.UNAVAILABLE -> {
+                val start = Offset(w * 0.14f, h * 0.18f)
+                val end = Offset(w * 0.84f, h * 0.86f)
+                drawLine(
+                    color = ColorOverlayPill,
+                    start = start,
+                    end = end,
+                    strokeWidth = 3.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = ColorRecordAccent,
+                    start = start,
+                    end = end,
+                    strokeWidth = 1.6.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
+            SegmentationStatus.NO_SUBJECT,
+            SegmentationStatus.INACTIVE,
+            -> Unit
         }
     }
 }

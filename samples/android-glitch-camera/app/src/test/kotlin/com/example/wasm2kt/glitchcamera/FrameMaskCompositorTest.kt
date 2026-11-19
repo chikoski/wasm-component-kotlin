@@ -1,5 +1,7 @@
 package com.example.wasm2kt.glitchcamera
 
+import com.google.mediapipe.proto.CalculatorProto
+import com.google.mediapipe.tasks.core.CpuSelfieSegmenterGraph
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -269,5 +271,183 @@ class FrameMaskCompositorTest {
         assertEquals(1, MediaPipeFrameSegmenter.selectForegroundMaskIndex(listOf("background", "selfie"), 2))
         assertEquals(0, MediaPipeFrameSegmenter.selectForegroundMaskIndex(listOf("foreground", "background"), 2))
         assertEquals(1, MediaPipeFrameSegmenter.selectForegroundMaskIndex(emptyList(), 2))
+    }
+
+    @Test
+    fun `quantizeConfidenceFloatArray handles boundary values, buffer reuse, and subject threshold`() {
+        val raw = floatArrayOf(0.0f, 0.5f, 1.0f, -0.25f, 1.5f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)
+        val reusable = ByteArray(8)
+        val mask = FrameMaskCompositor.quantizeConfidenceFloatArray(
+            floats = raw,
+            maskWidth = 4,
+            maskHeight = 2,
+            reuseBuffer = reusable,
+        )
+        assertSame(reusable, mask.weights)
+        assertEquals(0, mask.weights[0].toInt() and 0xFF)
+        assertEquals(128, mask.weights[1].toInt() and 0xFF)
+        assertEquals(255, mask.weights[2].toInt() and 0xFF)
+        assertEquals(0, mask.weights[3].toInt() and 0xFF)
+        assertEquals(255, mask.weights[4].toInt() and 0xFF)
+        assertEquals(0, mask.weights[5].toInt() and 0xFF)
+        assertEquals(255, mask.weights[6].toInt() and 0xFF)
+        assertEquals(0, mask.weights[7].toInt() and 0xFF)
+        assertTrue(mask.hasForegroundSubject)
+
+        // 100 pixels -> 1.5% threshold is max(1, 100*15/1000) = 1 pixel.
+        // 200 pixels -> 200*15/1000 = 3 pixels.
+        val sparse = FloatArray(200) { idx ->
+            when {
+                idx < 2 -> 0.8f // 2 pixels >= 0.5f (below 3-pixel threshold)
+                idx < 10 -> 0.49f // quantized to 125 (< 128)
+                else -> 0.0f
+            }
+        }
+        val sparseMask = FrameMaskCompositor.quantizeConfidenceFloatArray(sparse, 20, 10)
+        assertFalse(sparseMask.hasForegroundSubject)
+
+        val enough = sparse.copyOf().apply { this[2] = 0.5f }
+        val subjectMask = FrameMaskCompositor.quantizeConfidenceFloatArray(enough, 20, 10)
+        assertTrue(subjectMask.hasForegroundSubject)
+
+        val logits = floatArrayOf(-10f, 0f, 10f, Float.NaN)
+        val sigmoidMask = FrameMaskCompositor.quantizeConfidenceFloatArray(
+            floats = logits,
+            maskWidth = 2,
+            maskHeight = 2,
+            applySigmoid = true,
+        )
+        assertEquals(0, sigmoidMask.weights[0].toInt() and 0xFF)
+        assertEquals(128, sigmoidMask.weights[1].toInt() and 0xFF)
+        assertEquals(255, sigmoidMask.weights[2].toInt() and 0xFF)
+        assertEquals(0, sigmoidMask.weights[3].toInt() and 0xFF)
+    }
+
+    @Test
+    fun `rewriteExpandedConfigForCpu replaces TensorsToSegmentationCalculator and drops transitive dependents`() {
+        fun nodeBuilder() = CalculatorProto.CalculatorGraphConfig.Node.newBuilder()
+        val expanded = CalculatorProto.CalculatorGraphConfig.newBuilder()
+            .addInputStream("IMAGE:image_in")
+            .addInputStream("NORM_RECT:norm_rect_in")
+            .addInputStream("OUTPUT_SIZE:output_size_in")
+            .addOutputStream("CONFIDENCE_MASKS:confidence_masks")
+            .addOutputStream("IMAGE:image_out")
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("ImagePropertiesCalculator")
+                    .addInputStream("IMAGE:image_in")
+                    .addOutputStream("SIZE:image_size"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("ImageToTensorCalculator")
+                    .addInputStream("IMAGE:image_in")
+                    .addInputStream("NORM_RECT:norm_rect_in")
+                    .addOutputStream("TENSORS:input_tensors"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("InferenceCalculatorCpu")
+                    .addInputStream("TENSORS:input_tensors")
+                    .addOutputStream("TENSORS:output_tensors"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setName("mediapipe_tasks_vision_image_segmenter_imagesegmentergraph__mediapipe.tasks.TensorsToSegmentationCalculator")
+                    .setCalculator("mediapipe.tasks.TensorsToSegmentationCalculator")
+                    .addInputStream("TENSORS:output_tensors")
+                    .addInputStream("OUTPUT_SIZE:output_size_in")
+                    .addOutputStream("CONFIDENCE_MASK:raw_mask"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("PassThroughCalculator")
+                    .addInputStream("image_in")
+                    .addOutputStream("image_out"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("MergeImagesToVectorCalculator")
+                    .addInputStream("raw_mask")
+                    .addOutputStream("CONFIDENCE_MASKS:merged_masks"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("PassThroughCalculator")
+                    .addInputStream("CONFIDENCE_MASKS:merged_masks")
+                    .addOutputStream("CONFIDENCE_MASKS:confidence_masks"),
+            )
+            .addNode(
+                nodeBuilder()
+                    .setCalculator("PassThroughCalculator")
+                    .addInputStream("SIZE:image_size")
+                    .addOutputStream("SIZE:derived_size"),
+            )
+            .build()
+
+        val spec = CpuSelfieSegmenterGraph.rewriteExpandedConfigForCpuSpec(expanded)
+        val rewritten = spec.config
+
+        assertEquals(
+            listOf("ImageToTensorCalculator", "InferenceCalculatorCpu", "TensorsToFloatsCalculator"),
+            rewritten.nodeList.map { it.calculator },
+        )
+        assertEquals(listOf("IMAGE:image_in", "NORM_RECT:norm_rect_in"), rewritten.inputStreamList)
+        assertEquals(listOf("FLOATS:confidence_floats"), rewritten.outputStreamList)
+        assertFalse(spec.requiresSigmoid)
+
+        val floatsNode = rewritten.nodeList.last()
+        assertEquals(listOf("TENSORS:output_tensors"), floatsNode.inputStreamList)
+        assertEquals(listOf("FLOATS:confidence_floats"), floatsNode.outputStreamList)
+    }
+
+    @Test
+    fun `segmentationStatusTracker handles pass transitions, late frames, hysteresis, and expected message clear`() {
+        val tracker = SegmentationStatusTracker(hysteresisFrames = 3)
+
+        // Switching ALL -> FOREGROUND enters NO_SUBJECT and applies the very first sample immediately.
+        var status = tracker.resolveForPassSelection(SegmentationStatus.INACTIVE, EffectTargetPass.FOREGROUND)
+        assertEquals(SegmentationStatus.NO_SUBJECT, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.FOREGROUND, status, SegmentationStatus.DETECTED)
+        assertEquals(SegmentationStatus.DETECTED, status)
+
+        // Switching FOREGROUND -> BACKGROUND keeps current status without resetting to NO_SUBJECT.
+        status = tracker.resolveForPassSelection(status, EffectTargetPass.BACKGROUND)
+        assertEquals(SegmentationStatus.DETECTED, status)
+
+        // Flipping DETECTED -> NO_SUBJECT requires 3 consecutive NO_SUBJECT frames (1 or 2 frames do not flip).
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.NO_SUBJECT)
+        assertEquals(SegmentationStatus.DETECTED, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.NO_SUBJECT)
+        assertEquals(SegmentationStatus.DETECTED, status)
+        // A single DETECTED frame resets the streak cleanly.
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.DETECTED)
+        assertEquals(SegmentationStatus.DETECTED, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.NO_SUBJECT)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.NO_SUBJECT)
+        assertEquals(SegmentationStatus.DETECTED, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.NO_SUBJECT)
+        assertEquals(SegmentationStatus.NO_SUBJECT, status)
+
+        // UNAVAILABLE takes effect immediately without hysteresis delay.
+        status = tracker.resolveForFrameOutput(EffectTargetPass.BACKGROUND, status, SegmentationStatus.UNAVAILABLE)
+        assertEquals(SegmentationStatus.UNAVAILABLE, status)
+
+        // Switching back to ALL transitions to INACTIVE and ignores late segmented frame outputs.
+        status = tracker.resolveForPassSelection(status, EffectTargetPass.ALL)
+        assertEquals(SegmentationStatus.INACTIVE, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.ALL, status, SegmentationStatus.DETECTED)
+        assertEquals(SegmentationStatus.INACTIVE, status)
+
+        // Late frame reporting INACTIVE while FOREGROUND is now selected does not clobber NO_SUBJECT.
+        status = tracker.resolveForPassSelection(status, EffectTargetPass.FOREGROUND)
+        assertEquals(SegmentationStatus.NO_SUBJECT, status)
+        status = tracker.resolveForFrameOutput(EffectTargetPass.FOREGROUND, status, SegmentationStatus.INACTIVE)
+        assertEquals(SegmentationStatus.NO_SUBJECT, status)
+
+        // Expected-message guard prevents stale auto-dismiss timers from wiping newer messages.
+        assertFalse(SegmentationStatusTracker.shouldClearStatusMessage("Saved MP4", "Finalizing MP4..."))
+        assertTrue(SegmentationStatusTracker.shouldClearStatusMessage("Saved MP4", "Saved MP4"))
+        assertTrue(SegmentationStatusTracker.shouldClearStatusMessage("Anything", null))
     }
 }
