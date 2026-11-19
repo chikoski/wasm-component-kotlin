@@ -11,8 +11,8 @@ macro_rules! export_bridge {
         const _: () = {
             use std::os::raw::c_char;
             use $crate::jni::objects::{JByteArray, JClass, JObject, JString};
-            use $crate::jni::sys::{jboolean, jbyteArray, jint, jlong};
-            use $crate::jni::JNIEnv;
+            use $crate::jni::sys::{jboolean, jint, jlong};
+            use $crate::jni::EnvUnowned;
             use $crate::{BridgeSession, HostCallbackFn};
 
             const REGISTRY: $crate::Registry = $registry;
@@ -112,7 +112,7 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpen<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 component_id: JString<'local>,
                 wasm_path: JString<'local>,
@@ -124,7 +124,7 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionOpenBytes<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 component_id: JString<'local>,
                 wasm_bytes: JByteArray<'local>,
@@ -136,7 +136,7 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionResolve<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 session_ptr: jlong,
                 name: JString<'local>,
@@ -146,19 +146,19 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionInvoke<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 session_ptr: jlong,
                 index: jint,
                 args: JByteArray<'local>,
                 args_len: jint,
-            ) -> jbyteArray {
+            ) -> JByteArray<'local> {
                 $crate::jni_session_invoke(env, class, session_ptr, index, args, args_len)
             }
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionDropResource<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 session_ptr: jlong,
                 handle: jint,
@@ -168,7 +168,7 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativeSessionClose<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 session_ptr: jlong,
             ) {
@@ -177,10 +177,10 @@ macro_rules! export_bridge {
 
             #[no_mangle]
             pub extern "system" fn Java_wasm2kt_runtime_JniWasmtimeBridge_nativePrecompileComponent<'local>(
-                env: JNIEnv<'local>,
+                env: EnvUnowned<'local>,
                 class: JClass<'local>,
                 wasm_bytes: JByteArray<'local>,
-            ) -> jbyteArray {
+            ) -> JByteArray<'local> {
                 $crate::jni_precompile_component(env, class, wasm_bytes)
             }
         };

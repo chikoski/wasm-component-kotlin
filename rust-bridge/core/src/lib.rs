@@ -4,9 +4,11 @@
 
 use wasmtime::error::Context;
 use wasmtime::{bail, format_err as anyhow, Result};
-use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jbyteArray, jint, jlong};
-use jni::{JNIEnv, JavaVM};
+use jni::errors::ErrorPolicy;
+use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
+use jni::strings::{JNIStr, JNIString};
+use jni::sys::{jboolean, jint, jlong};
+use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -72,7 +74,7 @@ pub type HostCallbackFn = extern "C" fn(
 
 pub struct StoreData {
     pub host_callback: Option<HostCallbackFn>,
-    pub jni_callback: Option<(JavaVM, GlobalRef)>,
+    pub jni_callback: Option<(JavaVM, Global<JObject<'static>>)>,
     pub resources: HashMap<i32, ResourceAny>,
     pub next_handle: i32,
     /// Resource types the component imports, as they appear in import signatures (uninstantiated).
@@ -262,23 +264,28 @@ fn host_resource_dtor(
     move |mut ctx, rep| invoke_host_callback(&mut ctx, &key, &[Val::U32(rep)], &[Type::U32], &mut [], &[])
 }
 
-fn extract_and_clear_jni_exception(env: &mut JNIEnv<'_>) -> String {
-    if let Ok(throwable) = env.exception_occurred() {
-        let _ = env.exception_clear();
-        if !throwable.is_null() {
-            if let Ok(msg_val) = env.call_method(&throwable, "toString", "()Ljava/lang/String;", &[]) {
-                if let Ok(msg_obj) = msg_val.l() {
-                    if !msg_obj.is_null() {
-                        let j_str = JString::from(msg_obj);
-                        if let Ok(rust_str) = env.get_string(&j_str) {
-                            return rust_str.into();
-                        };
+fn extract_and_clear_jni_exception(env: &mut Env<'_>) -> String {
+    if let Some(throwable) = env.exception_occurred() {
+        env.exception_clear();
+        if let Ok(msg_val) = env.call_method(
+            &throwable,
+            jni_str!("toString"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        ) {
+            if let Ok(msg_obj) = msg_val.l() {
+                if !msg_obj.is_null() {
+                    if let Ok(j_str) = env.cast_local::<JString>(msg_obj) {
+                        if let Ok(rust_str) = j_str.mutf8_chars(env) {
+                            return rust_str.to_str().into_owned();
+                        }
                     }
                 }
             }
         }
+        env.exception_clear();
     } else {
-        let _ = env.exception_clear();
+        env.exception_clear();
     }
     "Unknown JVM exception".to_string()
 }
@@ -321,20 +328,16 @@ pub fn call_host(ctx: &mut StoreContextMut<'_, StoreData>, import: &ImportKey, a
         }
         response
     } else if let Some((ref vm, ref callback_ref)) = ctx.data().jni_callback {
-        let mut env = vm
-            .get_env()
-            .or_else(|_| vm.attach_current_thread_permanently())
-            .context("Failed to acquire JNIEnv for host callback")?;
-        env.with_local_frame(16, |env| -> Result<Vec<u8>> {
+        vm.attach_current_thread(|env| -> Result<Vec<u8>> {
             let j_key: JObject = env.new_string(import.name())?.into();
             let j_args: JObject = env.byte_array_from_slice(args)?.into();
             let call_res = env.call_method(
                 callback_ref,
-                "onHostCall",
-                "(ILjava/lang/String;[B)[B",
+                jni_str!("onHostCall"),
+                jni_sig!("(ILjava/lang/String;[B)[B"),
                 &[JValue::Int(import.index as i32), JValue::Object(&j_key), JValue::Object(&j_args)],
             );
-            if env.exception_check().unwrap_or(false) {
+            if env.exception_check() {
                 let exc_msg = extract_and_clear_jni_exception(env);
                 bail!("Host import '{}' threw an exception in JVM/Android host: {}", import.name(), exc_msg);
             }
@@ -344,7 +347,8 @@ pub fn call_host(ctx: &mut StoreContextMut<'_, StoreData>, import: &ImportKey, a
             if ret_obj.is_null() {
                 return Ok(Vec::new());
             }
-            Ok(env.convert_byte_array(JByteArray::from(ret_obj))?)
+            let ret_arr = env.cast_local::<JByteArray>(ret_obj)?;
+            Ok(env.convert_byte_array(ret_arr)?)
         })?
     } else {
         bail!("Component imports '{}' but no host imports were provided", import.name())
@@ -497,7 +501,7 @@ fn create_session_from_component(
     component: Component,
     typed: Option<&'static dyn TypedComponent>,
     host_callback: Option<HostCallbackFn>,
-    jni_callback: Option<(JavaVM, GlobalRef)>,
+    jni_callback: Option<(JavaVM, Global<JObject<'static>>)>,
 ) -> Result<BridgeSession> {
     let mut linker = Linker::new(&engine);
     let (imported_resource_types, host_payloads) = register_host_imports(&mut linker, &component, typed)?;
@@ -910,24 +914,49 @@ pub fn ffi_session_close(session_ptr: *mut BridgeSession) {
 
 // JNI entry points for `JniWasmtimeBridge` (Android ART and the JVM); exported by `export_bridge!`.
 
-/// Throws `exception` with the error's message into the JVM and returns `fallback`, or returns the value.
-fn or_throw<'local, T>(env: &mut JNIEnv<'local>, res: Result<T>, exception: &str, fallback: T) -> T {
-    match res {
-        Ok(v) => v,
-        Err(e) => {
-            if !env.exception_check().unwrap_or(false) {
-                let _ = env.throw_new(exception, format!("{:#}", e));
-            }
-            fallback
+/// Throws the captured exception class with the error/panic message and returns the fallback.
+struct ThrowClassAndDefault;
+
+impl<T: Default> ErrorPolicy<T, wasmtime::Error> for ThrowClassAndDefault {
+    type Captures<'unowned_env_local: 'native_method, 'native_method> = (&'native_method JNIStr, T);
+
+    fn on_error<'unowned_env_local: 'native_method, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        cap: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        err: wasmtime::Error,
+    ) -> jni::errors::Result<T> {
+        if !env.exception_check() {
+            let msg = JNIString::from(format!("{:#}", err));
+            let _ = env.throw_new(cap.0, &msg);
         }
+        Ok(std::mem::take(&mut cap.1))
+    }
+
+    fn on_panic<'unowned_env_local: 'native_method, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        cap: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        payload: Box<dyn std::any::Any + Send + 'static>,
+    ) -> jni::errors::Result<T> {
+        if !env.exception_check() {
+            let msg = JNIString::from(format!(
+                "Rust panic across FFI boundary: {}",
+                panic_payload_to_string(payload)
+            ));
+            let _ = env.throw_new(cap.0, &msg);
+        }
+        Ok(std::mem::take(&mut cap.1))
     }
 }
 
-fn jni_string_opt<'local>(env: &mut JNIEnv<'local>, s: &JString<'local>) -> Result<Option<String>> {
+fn jni_string_req<'local>(env: &Env<'local>, s: &JString<'local>) -> Result<String> {
+    Ok(s.mutf8_chars(env)?.to_str().into_owned())
+}
+
+fn jni_string_opt<'local>(env: &Env<'local>, s: &JString<'local>) -> Result<Option<String>> {
     if s.is_null() {
         return Ok(None);
     }
-    Ok(Some(env.get_string(s)?.into()))
+    Ok(Some(jni_string_req(env, s)?))
 }
 
 fn c_str_opt<'a>(p: *const c_char) -> Result<Option<&'a str>> {
@@ -937,7 +966,10 @@ fn c_str_opt<'a>(p: *const c_char) -> Result<Option<&'a str>> {
     Ok(Some(unsafe { CStr::from_ptr(p) }.to_str().context("Invalid UTF-8 in component id")?))
 }
 
-fn jni_callback<'local>(env: &mut JNIEnv<'local>, host_callback: &JObject<'local>) -> Result<Option<(JavaVM, GlobalRef)>> {
+fn jni_callback<'local>(
+    env: &Env<'local>,
+    host_callback: &JObject<'local>,
+) -> Result<Option<(JavaVM, Global<JObject<'static>>)>> {
     if host_callback.is_null() {
         return Ok(None);
     }
@@ -947,101 +979,111 @@ fn jni_callback<'local>(env: &mut JNIEnv<'local>, host_callback: &JObject<'local
 #[doc(hidden)]
 pub fn jni_session_open<'local>(
     registry: Registry,
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     component_id: JString<'local>,
     wasm_path: JString<'local>,
     host_callback: JObject<'local>,
     precompiled: jboolean,
 ) -> jlong {
-    let res = run_catching(|| -> Result<BridgeSession> {
-        let wasm_path_str: String = env.get_string(&wasm_path)?.into();
-        let id = jni_string_opt(&mut env, &component_id)?;
-        let typed = typed_component(registry, id.as_deref())?;
-        let jni_cb = jni_callback(&mut env, &host_callback)?;
-        let engine = get_shared_engine()?;
-        let component = load_component_from_path(&engine, &wasm_path_str, precompiled != 0)?;
-        create_session_from_component(engine, component, typed, None, jni_cb)
+    env.with_env(|env| -> Result<jlong> {
+        (|| -> Result<BridgeSession> {
+            let wasm_path_str = jni_string_req(env, &wasm_path)?;
+            let id = jni_string_opt(env, &component_id)?;
+            let typed = typed_component(registry, id.as_deref())?;
+            let jni_cb = jni_callback(env, &host_callback)?;
+            let engine = get_shared_engine()?;
+            let component = load_component_from_path(&engine, &wasm_path_str, precompiled)?;
+            create_session_from_component(engine, component, typed, None, jni_cb)
+        })()
+        .map(|session| register_session(session) as jlong)
+        .context("Failed to open Wasmtime session")
     })
-    .map(|session| register_session(session) as jlong)
-    .context("Failed to open Wasmtime session");
-    or_throw(&mut env, res, "java/lang/IllegalStateException", 0)
+    .resolve_with::<ThrowClassAndDefault, _>(|| (jni_str!("java/lang/IllegalStateException"), 0))
 }
 
 #[doc(hidden)]
 pub fn jni_session_open_bytes<'local>(
     registry: Registry,
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     component_id: JString<'local>,
     wasm_bytes: JByteArray<'local>,
     host_callback: JObject<'local>,
     precompiled: jboolean,
 ) -> jlong {
-    let res = run_catching(|| -> Result<BridgeSession> {
-        let bytes = env.convert_byte_array(&wasm_bytes)?;
-        let id = jni_string_opt(&mut env, &component_id)?;
-        let typed = typed_component(registry, id.as_deref())?;
-        let jni_cb = jni_callback(&mut env, &host_callback)?;
-        let engine = get_shared_engine()?;
-        let component = load_component_from_bytes(&engine, &bytes, precompiled != 0)?;
-        create_session_from_component(engine, component, typed, None, jni_cb)
+    env.with_env(|env| -> Result<jlong> {
+        (|| -> Result<BridgeSession> {
+            let bytes = env.convert_byte_array(&wasm_bytes)?;
+            let id = jni_string_opt(env, &component_id)?;
+            let typed = typed_component(registry, id.as_deref())?;
+            let jni_cb = jni_callback(env, &host_callback)?;
+            let engine = get_shared_engine()?;
+            let component = load_component_from_bytes(&engine, &bytes, precompiled)?;
+            create_session_from_component(engine, component, typed, None, jni_cb)
+        })()
+        .map(|session| register_session(session) as jlong)
+        .context("Failed to open Wasmtime session from bytes")
     })
-    .map(|session| register_session(session) as jlong)
-    .context("Failed to open Wasmtime session from bytes");
-    or_throw(&mut env, res, "java/lang/IllegalStateException", 0)
+    .resolve_with::<ThrowClassAndDefault, _>(|| (jni_str!("java/lang/IllegalStateException"), 0))
 }
 
 #[doc(hidden)]
 pub fn jni_session_resolve<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
     name: JString<'local>,
 ) -> jint {
-    let res = run_catching(|| -> Result<jint> {
-        let name: String = env.get_string(&name)?.into();
+    env.with_env(|env| -> Result<jint> {
+        let name = jni_string_req(env, &name)?;
         Ok(with_session_mut(session_ptr as usize, |session| session_resolve_internal(session, &name))? as jint)
-    });
-    or_throw(&mut env, res, "java/lang/IllegalArgumentException", -1)
+    })
+    .resolve_with::<ThrowClassAndDefault, _>(|| (jni_str!("java/lang/IllegalArgumentException"), -1))
 }
 
 #[doc(hidden)]
 pub fn jni_session_invoke<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
     index: jint,
     args: JByteArray<'local>,
     args_len: jint,
-) -> jbyteArray {
-    let res = run_catching(|| -> Result<Vec<u8>> {
+) -> JByteArray<'local> {
+    env.with_env(|env| -> Result<JByteArray<'local>> {
         let mut buf = vec![0i8; args_len.max(0) as usize];
-        env.get_byte_array_region(&args, 0, &mut buf)?;
+        args.get_region(env, 0, &mut buf)?;
         let bytes: Vec<u8> = buf.into_iter().map(|b| b as u8).collect();
-        with_session_mut(session_ptr as usize, |session| session_invoke_internal(session, index as u32, &bytes))
+        let out = with_session_mut(session_ptr as usize, |session| {
+            session_invoke_internal(session, index as u32, &bytes)
+        })?;
+        Ok(env.byte_array_from_slice(&out)?)
     })
-    .and_then(|out| Ok(env.byte_array_from_slice(&out)?.into_raw()));
-    or_throw(&mut env, res, "java/lang/IllegalStateException", ptr::null_mut())
+    .resolve_with::<ThrowClassAndDefault, _>(|| {
+        (jni_str!("java/lang/IllegalStateException"), JByteArray::default())
+    })
 }
 
 #[doc(hidden)]
 pub fn jni_session_drop_resource<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
     handle: jint,
 ) {
-    let res = run_catching(|| -> Result<()> {
-        with_session_mut(session_ptr as usize, |session| session_drop_resource_internal(session, handle))?;
+    env.with_env(|_env| -> Result<()> {
+        with_session_mut(session_ptr as usize, |session| {
+            session_drop_resource_internal(session, handle)
+        })?;
         Ok(())
-    });
-    or_throw(&mut env, res, "java/lang/IllegalStateException", ())
+    })
+    .resolve_with::<ThrowClassAndDefault, _>(|| (jni_str!("java/lang/IllegalStateException"), ()))
 }
 
 #[doc(hidden)]
 pub fn jni_session_close<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
 ) {
@@ -1052,31 +1094,24 @@ pub fn jni_session_close<'local>(
 
 #[doc(hidden)]
 pub fn jni_precompile_component<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     wasm_bytes: JByteArray<'local>,
-) -> jbyteArray {
-    let res = run_catching(|| -> Result<Vec<u8>> {
-        let bytes = env.convert_byte_array(&wasm_bytes)?;
-        let engine = get_shared_engine()?;
-        engine
-            .precompile_component(&bytes)
-            .context("Failed to precompile Wasm component into .cwasm")
-    });
-
-    match res {
-        Ok(cwasm_vec) => env
-            .byte_array_from_slice(&cwasm_vec)
-            .map(|arr| arr.into_raw())
-            .unwrap_or(ptr::null_mut()),
-        Err(e) => {
-            let _ = env.throw_new(
-                "java/lang/IllegalStateException",
-                format!("Failed to precompile Wasm component: {:#}", e),
-            );
-            ptr::null_mut()
-        }
-    }
+) -> JByteArray<'local> {
+    env.with_env(|env| -> Result<JByteArray<'local>> {
+        let cwasm_vec = (|| -> Result<Vec<u8>> {
+            let bytes = env.convert_byte_array(&wasm_bytes)?;
+            let engine = get_shared_engine()?;
+            engine
+                .precompile_component(&bytes)
+                .context("Failed to precompile Wasm component into .cwasm")
+        })()
+        .context("Failed to precompile Wasm component")?;
+        Ok(env.byte_array_from_slice(&cwasm_vec)?)
+    })
+    .resolve_with::<ThrowClassAndDefault, _>(|| {
+        (jni_str!("java/lang/IllegalStateException"), JByteArray::default())
+    })
 }
 
 fn resolve_exported_func(
