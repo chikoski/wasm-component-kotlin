@@ -3,7 +3,7 @@
 このガイドでは、Gradle プラグイン `io.github.wasm2kt` を使って `.wasm` コンポーネントをビルド時に JVM バイトコードへコンパイルし、Android アプリから呼び出す手順を説明します。
 実行には純 JVM の WebAssembly ランタイムである [Chicory](https://github.com/dylibso/chicory) を使うため、JNI やネイティブライブラリ（`.so`）は不要です。
 
-動くサンプル一式は [`samples/android`](../../samples/android/README.md) にあります。
+動くサンプル一式は [`samples/android`](../../samples/android/README.md) にあります。`png-glitch-component.wasm` を使ったカメラアプリの実例は、独立リポジトリ [chikoski/pixelfray](https://github.com/chikoski/pixelfray) で公開しています。
 
 ## 前提条件
 
