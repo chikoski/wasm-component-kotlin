@@ -67,10 +67,10 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decom
 * **Wasmtime の LTS 固定**: `decomposer` の `wasmtime-environ` と `rust-bridge` の `wasmtime` は、同じ LTS の同じパッチ版（現在は `=48.0.8`）に揃えます（[ADR-0010](docs/adr/0010-wasmtime-lts.md)）
 * **Gradle プラグインのクラスローダー分離**: `gradle-plugin` では設定時（configuration time）に `tooling` のクラスや Kotlin Gradle Plugin の型を直接参照しないでください（[ADR-0004](docs/adr/0004-isolated-tooling-classloader.md)）
 * **両バックエンドの整合性**:
-  * 値のバイナリ形式（`WitWriter` / `WitReader`）、関数名の解決、ホスト import のキーは両バックエンドで揃えます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)、[ADR-0015](docs/adr/0015-binary-value-boundary.md)）。Chicory 側の挙動を変えたら `ChicoryDifferentialTest` と `ConformanceTest` を通してください
+  * 値のバイナリ形式（`WitWriter` / `WitReader`）、関数名の解決、ホスト import のキーは両バックエンドで揃えます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)、[ADR-0015](docs/adr/0015-binary-value-boundary.md)）。Chicory 側の挙動を変えたら `ChicoryDifferentialTest` と `ConformanceTest` を通してください。なお、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づくオプトイン AOT バックエンドの Phase 2 完了時に、AOT 選択時の例外条件を本更新する予定です
   * 汎用ブリッジと型付きブリッジは `rust-bridge/core` の `export_bridge!` で同じ C ABI / JNI を公開します。`core` または `TypedBridge.kt` を変更したら `typedBridgeTest` を通してください（[ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md)）
   * Canonical ABI の検査は仕様の `trap_if` に従います。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホスト側の引数エラーは `IllegalArgumentException` / `IllegalStateException`（poison しない）とし、ゲストのコードを動かす箇所は `guest { }` で囲みます（[ADR-0007](docs/adr/0007-canonical-abi-validation.md)）
-  * async と WASI 0.3 は Chicory バックエンドのみで実装し、Wasmtime バックエンドは同期機能の参照実装として維持します（[ADR-0005](docs/adr/0005-async-and-wasi03-chicory-only.md)）
+  * async と WASI 0.3 は Chicory バックエンドのみで実装し、Wasmtime バックエンドは同期機能の参照実装として維持します（[ADR-0005](docs/adr/0005-async-and-wasi03-chicory-only.md)）。なお、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 3 完了時に、オプトイン AOT バックエンドも対象へ加える予定です
 
 ## 4. コミット・PR・ドキュメントの更新
 

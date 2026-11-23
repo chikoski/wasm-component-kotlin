@@ -1,7 +1,7 @@
 # 0023. R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 Kotlin 配線バックエンドの設計
 
-* ステータス: 提案
-* 日付: 2026-11-22
+* ステータス: 承認
+* 日付: 2026-11-22 提案、2026-11-23 承認
 * 関連: [ADR-0001](0001-chicory-backend-for-android.md)、[ADR-0002](0002-wasmtime-environ-decomposer.md)、[ADR-0004](0004-isolated-tooling-classloader.md)、[ADR-0005](0005-async-and-wasi03-chicory-only.md)、[ADR-0007](0007-canonical-abi-validation.md)、[ADR-0008](0008-host-defined-resources.md)、[ADR-0010](0010-wasmtime-lts.md)、[ADR-0011](0011-qualified-interface-keys.md)、[ADR-0013](0013-multi-memory-adapters.md)、[ADR-0014](0014-interface-mappings.md)、[ADR-0015](0015-binary-value-boundary.md)、[ADR-0017](0017-component-model-conformance-suite.md)、[ADR-0018](0018-async-abi-on-chicory.md)、[ADR-0019](0019-suspending-async-boundary.md)、[ADR-0021](0021-split-large-chicory-methods.md)、Issue #180、Issue #181
 
 ## 背景

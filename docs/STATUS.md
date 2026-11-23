@@ -109,6 +109,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
+| [#180](https://github.com/chikoski/wasm-component-kotlin/issues/180) | — | R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 JVM バックエンドの段階導入。[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) 承認済み、`#182`〜`#188` で追跡 |
 | [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |

@@ -12,7 +12,7 @@
 | [0002](0002-wasmtime-environ-decomposer.md) | コンポーネントの分解に wasmtime-environ を使い、分解ツールを wasm で同梱する | 承認 |
 | [0003](0003-json-value-boundary.md) | バックエンド間の値の受け渡しに JSON 境界を共有する（フェーズ A） | 置き換え済み（→ ADR-0015） |
 | [0004](0004-isolated-tooling-classloader.md) | ビルド時ツールを Gradle ワーカーの独立クラスローダーで実行する | 承認 |
-| [0005](0005-async-and-wasi03-chicory-only.md) | async と WASI 0.3 は Chicory バックエンドだけで進める | 承認 |
+| [0005](0005-async-and-wasi03-chicory-only.md) | async と WASI 0.3 は Chicory バックエンドだけで進める | 承認、Phase 3 以降の AOT 展開は → ADR-0023 |
 | [0006](0006-type-mapping.md) | WIT → Kotlin の型マッピングを見直す | 承認（world の形は → ADR-0012） |
 | [0007](0007-canonical-abi-validation.md) | Canonical ABI の検証は仕様に従い、トラップとホストのエラーを分ける | 承認 |
 | [0008](0008-host-defined-resources.md) | ホスト定義 resource を interface + Imports で表し、rep の表で受け渡す | 承認 |
@@ -22,7 +22,7 @@
 | [0012](0012-world-at-package-top-level.md) | world を package のトップレベルに生成し、export した interface はマーカーを context に取る | 承認 |
 | [0013](0013-multi-memory-adapters.md) | 合成コンポーネントのアダプターを multi-memory で検証し、async の組み込み関数を使わない形で生成する | 承認 |
 | [0014](0014-interface-mappings.md) | 既存の package の interface を対応表（with）で使い、ライブラリはマニフェストで提供する interface を示す | 承認 |
-| [0015](0015-binary-value-boundary.md) | 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える | 承認（型付きブリッジの作り方は → ADR-0016） |
+| [0015](0015-binary-value-boundary.md) | 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える | 承認、型付きブリッジの作り方は → ADR-0016、Phase 2 の AOT 選択時例外は → ADR-0023 |
 | [0016](0016-typed-bridge-from-wit-json.md) | 型付きブリッジの Rust の型を wit.json から生成し、bindgen! を使わない | 承認 |
 | [0017](0017-component-model-conformance-suite.md) | Component Model の公式テストスイートを写して取り込み、既知の失敗をスキップリストで管理する | 承認 |
 | [0018](0018-async-abi-on-chicory.md) | Chicory の async ABI は仕様の定義を移植し、スレッドで継続を表す | 承認（ホストとの境界は → ADR-0019） |
@@ -30,4 +30,4 @@
 | [0020](0020-wasi03-filesystem-sandboxing-and-mounts.md) | WASI 0.3 ファイルシステムのサンドボックス方針と宣言的マウント設定 | 承認 |
 | [0021](0021-split-large-chicory-methods.md) | Chicory が生成する大きなメソッドをバイトコード単位で分割する | 承認 |
 | [0022](0022-wasi03-scope-and-host-configuration.md) | WASI 0.3 の対応範囲とホスト側設定 API の設計 | 承認 |
-| [0023](0023-custom-wasm-compiler-and-static-jvm-backend.md) | R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 Kotlin 配線バックエンドの設計 | 提案 |
+| [0023](0023-custom-wasm-compiler-and-static-jvm-backend.md) | R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 Kotlin 配線バックエンドの設計 | 承認 |
