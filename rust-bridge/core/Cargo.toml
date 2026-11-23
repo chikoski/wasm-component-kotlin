@@ -8,7 +8,7 @@ description = "Sessions, value format and C ABI / JNI entry points shared by the
 name = "wasm2kt_bridge_core"
 
 [dependencies]
-wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
+wasmtime = { version = "=48.0.10", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
 jni = "0.22"
 
 [lints]
