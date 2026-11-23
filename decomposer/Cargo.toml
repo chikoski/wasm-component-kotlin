@@ -18,7 +18,7 @@ wit-parser = { version = "=0.254.2", features = ["serde"] }
 # Pinned: we read wasmtime-environ's internal component representation (the same
 # approach jco's js-component-bindgen takes), which is not a stable public API.
 # Kept on the same Wasmtime LTS as rust-bridge (see docs/adr/0010-wasmtime-lts.md).
-wasmtime-environ = { version = "=48.0.8", features = ["component-model", "compile", "anyhow"] }
+wasmtime-environ = { version = "=48.0.10", features = ["component-model", "compile", "anyhow"] }
 
 [profile.release]
 # The wasm build ships inside the Gradle plugin; keep it small.
