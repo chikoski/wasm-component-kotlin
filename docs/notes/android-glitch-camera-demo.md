@@ -1,5 +1,7 @@
 # Android カメラグリッチデモの作成計画と機能改善設計
 
+> 移行のお知らせ: `samples/android-glitch-camera` は独立リポジトリ [chikoski/pixelfray](https://github.com/chikoski/pixelfray) へ移行しました。このドキュメントは、`WitWriter` と `Lifter` のランタイム改善を含む当時の設計記録として残しています。
+
 このドキュメントでは、`samples/android-glitch-camera` に作成するデモアプリの実装計画をまとめます。最初の段階では MediaPipe によるセグメンテーションを行わず、カメラ入力全体に `png-glitch` でリアルタイムのグリッチエフェクトをかけ、静止画保存と動画録画を行うアプリを構築します。あわせて、最新の `png-glitch` リポジトリの実装状況と、`wasm-component-kotlin` 側で行うランタイム改善を整理します。
 
 ## 1. `png-glitch` の最新実装状況の調査結果

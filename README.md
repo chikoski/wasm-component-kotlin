@@ -16,7 +16,7 @@ WebAssembly コンポーネント（`.wasm` / `.wit`）から、Kotlin のホス
 
 ## クイックスタート
 
-* **Android アプリから使う**: [Android クイックスタート](docs/tutorials/android-quickstart.md)（実例: [`samples/android`](samples/android/README.md)）
+* **Android アプリから使う**: [Android クイックスタート](docs/tutorials/android-quickstart.md)（実例: [`samples/android`](samples/android/README.md)、カメラアプリ例: [chikoski/pixelfray](https://github.com/chikoski/pixelfray)）
 * **Kotlin/JVM から Gradle プラグインで使う（純 JVM）**: [Kotlin/JVM クイックスタート](docs/tutorials/jvm-quickstart.md)
 * **Wasmtime と CLI で使う（ネイティブ実行）**: [Wasmtime クイックスタート](docs/tutorials/wasmtime-quickstart.md)（実例: [`examples/`](examples/)）
 
