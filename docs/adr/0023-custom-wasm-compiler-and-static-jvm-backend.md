@@ -106,7 +106,11 @@ Core Wasm から内部型付き IR を構築して ASM で `.class` を直接出
 * extended-const
 * mutable-globals のインポートとエクスポート
 
-[ADR-0013](0013-multi-memory-adapters.md) のアダプターモジュールが複数メモリを扱うため、multi-memory を対象に含めます。一方、SIMD128、exception-handling、tail-call、および Wasm GC は対象外とし、`-Cpanic=unwind` や拡張機能を有効にしたコンポーネント等で未対応の命令やセクションを検出した場合は、実行時へ先送りせずビルド時にモジュール番号、関数インデックス、命令名を明示したエラーで停止します。
+[ADR-0013](0013-multi-memory-adapters.md) のアダプターモジュールが複数メモリを扱うため、multi-memory を対象に含めます。一方、SIMD128、exception-handling、tail-call、および Wasm GC は Phase 1 では対象外とし、`-Cpanic=unwind` や拡張機能を有効にしたコンポーネント等で未対応の命令やセクションを検出した場合は、実行時へ先送りせずビルド時にモジュール番号、関数インデックス、命令名を明示したエラーで停止します。
+
+`exception-handling` を Phase 1 の対象外とする理由は、Wasm 境界におけるエラー表現の役割と `Decomposer` の制約によるものです。Wasm 内の業務エラーを Kotlin 側へ伝える正規の経路は WIT の `result` 型であり、Wasm の `exception-handling` 提案である `tag`、`try_table`、および `throw` はコア Wasm 内部のスタック巻き戻しに使われます。コンポーネント境界まで捕捉されずに到達した Wasm 例外は、仕様上トラップと poison として扱われます。加えて、現行の `Decomposer` は Chicory バックエンドの合成アダプターで `try_table` バリアが出力されないよう `WasmFeatures::EXCEPTIONS` を明示的に無効化しています。したがって Phase 1 は現行 `Decomposer` の仕様に合わせて対象外を維持し、将来必要になった場合はバックエンド別の `Decomposer` フラグ分離と CFG 事前分割における例外テーブル跨ぎ制約を整理した上で別フェーズの拡張として扱います。
+
+`SIMD128` を Phase 1 の対象外とする理由は、実アプリのバイナリ構成と Android API 26 上での実行特性によるものです。`png-glitch` の Rust ソースには SIMD 経路が存在しますが、現在の `png-glitch-component.wasm` は `+simd128` を有効化せずにスカラー版としてビルドされており、SIMD128 命令を含みません。また、Android API 26 の JVM バイトコードには SIMD 命令も Vector API も存在しないため、`v128` を構成する約 240 命令をスカラー演算でエミュレーションしても ART 上での高速化は見込みにくく、コードサイズの増大と Phase 1 工数の増加を招きます。よって Phase 1 では対象外を維持し、手元で再ビルドできない外部の `+simd128` バイナリを動かす互換性要件が生じた際の将来拡張として位置づけます。なお、内部型付き IR の型定義には後から `v128` を追加できる拡張余地を残します。
 
 ### JVM バイトコード生成と事前分割および意味論検査
 
