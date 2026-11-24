@@ -356,4 +356,110 @@ class RuntimeAotTest {
         assertThrows<ClassNotFoundException> { Class.forName("com.dylibso.chicory.runtime.Memory", false, loader) }
         assertThrows<ClassNotFoundException> { Class.forName("kotlinx.serialization.json.Json", false, loader) }
     }
+
+    @Test
+    fun `DataSegmentStore, WasmGlobals, AotSpillFrame, AotDispatchSupport, and AotOps work without reflection`() {
+        val seg0 = "alpha".encodeToByteArray()
+        val seg1 = "beta".encodeToByteArray()
+        val packed = packSegments(seg0, seg1)
+        val resourceLoader = object : ClassLoader(javaClass.classLoader) {
+            override fun getResourceAsStream(name: String): java.io.InputStream? =
+                if (name == "wasm2kt/aot/test-store.data") packed.inputStream() else null
+        }
+        val store = DataSegmentStore.load(resourceLoader, "wasm2kt/aot/test-store.data")
+        val mem0 = LinearMemory(1, 2)
+        val mem1 = LinearMemory(1, 1)
+        store.initActive(mem0, 0, 16)
+        assertEquals("alpha", mem0.readBytes(16, 5).decodeToString())
+        assertThrows<ComponentTrapException> { store.init(mem0, 0, 0, 0, 1) }
+
+        AotOps.memoryInit(32, 1, 3, store, 1, mem1) // "eta"
+        assertEquals("eta", mem1.readBytes(32, 3).decodeToString())
+        store.drop(1)
+        assertThrows<ComponentTrapException> { AotOps.memoryInit(0, 0, 1, store, 1, mem1) }
+
+        // Cross-memory copy via AotOps sees grown array without stale caching
+        assertEquals(1, AotOps.memoryGrow(1, mem0))
+        AotOps.storeI32(LinearMemory.PAGE_SIZE, 0xCAFE_1234.toInt(), mem0, 4)
+        assertEquals(0xCAFE_1234.toInt(), AotOps.loadI32(LinearMemory.PAGE_SIZE, mem0, 4))
+        AotOps.memoryCopy(64, LinearMemory.PAGE_SIZE + 4, 4, mem1, mem0)
+        assertEquals(0xCAFE_1234.toInt(), AotOps.loadI32(64, mem1))
+        AotOps.memoryFill(80, 0x5A, 4, mem1)
+        assertArrayEquals(ByteArray(4) { 0x5A }, mem1.readBytes(80, 4))
+
+        // Table ops in Wasm operand stack order
+        val ftab = FuncTable(1, 4)
+        val hostRef = FuncRef.host("(IFJD)FD", HostTrampoline { args ->
+            val i = args[0].toInt()
+            val f = java.lang.Float.intBitsToFloat(args[1].toInt())
+            val j = args[2]
+            val d = java.lang.Double.longBitsToDouble(args[3])
+            longArrayOf(
+                java.lang.Float.floatToRawIntBits(f + i).toLong(),
+                java.lang.Double.doubleToRawLongBits(d + j),
+            )
+        })
+        assertEquals(1, AotOps.tableGrow(hostRef, 2, ftab))
+        assertSame(hostRef, AotOps.tableGetFuncRef(1, ftab))
+        val called = AotDispatchSupport.invokeExternal(
+            AotOps.callIndirectLookup(1, "(IFJD)FD", ftab),
+            arrayOf(3, 1.5f, 10L, 2.25),
+        )!!
+        assertEquals(4.5f, called[0])
+        assertEquals(12.25, called[1])
+
+        val coreInstance = object : CoreModuleInstance {
+            override fun invokeIndirect(funcIndex: Int, args: Array<Any?>): Array<Any?>? =
+                if (funcIndex == 7) arrayOf((args[0] as Int) * 2) else null
+        }
+        val coreRef = FuncRef.core(coreInstance, 7, "(I)I")
+        val extRes = AotDispatchSupport.invokeExternal(coreRef, arrayOf(21))!!
+        assertEquals(42, extRes[0])
+
+        // Globals & SpillFrame
+        val ig = I32Global(1)
+        val jg = I64Global(2L)
+        val fg = F32Global(3.0f)
+        val dg = F64Global(4.0)
+        val rg = FuncRefGlobal(null)
+        val eg = ExternRefGlobal(null)
+        AotOps.setI32Global(10, ig)
+        AotOps.setI64Global(20L, jg)
+        AotOps.setF32Global(30.0f, fg)
+        AotOps.setF64Global(40.0, dg)
+        AotOps.setFuncRefGlobal(coreRef, rg)
+        AotOps.setExternRefGlobal("ok", eg)
+        assertEquals(10, ig.value)
+        assertEquals(20L, jg.value)
+        assertEquals(30.0f, fg.value)
+        assertEquals(40.0, dg.value)
+        assertSame(coreRef, rg.value)
+        assertEquals("ok", eg.value)
+
+        val spill = AotSpillFrame(2, 1, 0, 0, 1)
+        assertEquals(2, spill.i32.size)
+        assertEquals(1, spill.i64.size)
+        assertEquals(0, spill.f32.size)
+        assertEquals(0, spill.f64.size)
+        assertEquals(1, spill.refs.size)
+
+        // Bit-exact float abs/neg/copysign/trunc/ceil/floor/sqrt with sNaN and -0.0 preservation
+        val snan32 = java.lang.Float.intBitsToFloat(0x7F80_0123)
+        val negSnan32 = WasmNumerics.f32Neg(snan32)
+        assertEquals(0xFF80_0123.toInt(), java.lang.Float.floatToRawIntBits(negSnan32))
+        assertEquals(0x7F80_0123, java.lang.Float.floatToRawIntBits(WasmNumerics.f32Abs(negSnan32)))
+        assertEquals(0xFF80_0123.toInt(), java.lang.Float.floatToRawIntBits(WasmNumerics.f32Copysign(snan32, -1.0f)))
+        assertEquals(java.lang.Float.floatToRawIntBits(-0.0f), java.lang.Float.floatToRawIntBits(WasmNumerics.f32Trunc(-0.5f)))
+        assertEquals(java.lang.Float.floatToRawIntBits(-0.0f), java.lang.Float.floatToRawIntBits(WasmNumerics.f32Ceil(-0.5f)))
+        assertEquals(-1.0f, WasmNumerics.f32Floor(-0.5f))
+        assertEquals(java.lang.Float.floatToRawIntBits(-0.0f), java.lang.Float.floatToRawIntBits(WasmNumerics.f32Sqrt(-0.0f)))
+
+        val snan64 = java.lang.Double.longBitsToDouble(0x7FF0_0000_0000_0456L)
+        val negSnan64 = WasmNumerics.f64Neg(snan64)
+        assertEquals(0xFFF0_0000_0000_0456uL.toLong(), java.lang.Double.doubleToRawLongBits(negSnan64))
+        assertEquals(0x7FF0_0000_0000_0456L, java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Abs(negSnan64)))
+        assertEquals(0xFFF0_0000_0000_0456uL.toLong(), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Copysign(snan64, -1.0)))
+        assertEquals(java.lang.Double.doubleToRawLongBits(-0.0), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Trunc(-0.5)))
+        assertEquals(java.lang.Double.doubleToRawLongBits(-0.0), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Sqrt(-0.0)))
+    }
 }

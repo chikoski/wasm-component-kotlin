@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* Core Wasm の JVM バイトコード直接生成と適合テストの追加
 * Core Wasm の型付き IR と Chicory パーサーアダプタの実装
 * 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
 * AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
@@ -59,6 +60,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#184](https://github.com/chikoski/wasm-component-kotlin/issues/184) に対応し、`:tooling` に型付き IR から ASM ベースで JVM バイトコードを直接生成する `AotCoreCompiler`、`WasmBytecodeEmitter`、`AotModuleClassEmitter`、および `IrMethodSplitter` を実装しました。出力されるメソッドのコードサイズ上限を守るため、構造化 CFG 上で事前分割を行い、ローカル変数が 64 個を超える関数では型別のフレーム配列に切り替えます。`:runtime-aot` では `AotSpillFrame` や数値変換補助などを整備し、JVM 17 と `animalsnifferMain` による Android API 26 互換検査を維持しました。あわせて Core Wasm 2.0 公式テストスイート 90 ファイルから `simd/` を除いて取り込み、`CoreWasmConformanceTest` で全 28,018 コマンドを検証しました。テキスト形式の `assert_malformed` 581 件はバイナリコンパイラの対象外としてスキップし、`multi-memory` 対応方針と競合する `skip.txt` の 13 件を除いた 27,424 件のバイナリおよび実行時テストが通過しています。
 
 [#183](https://github.com/chikoski/wasm-component-kotlin/issues/183) に対応し、`:tooling` の `wasm2kt.tooling.ir` にパーサー非依存の Core Wasm 型付き IR と `ChicoryWasmAdapter`、および構造化テキストダンプ `WasmIrDump` を追加しました。対応範囲は MVP、sign-extension、non-trapping float-to-int、bulk-memory、reference-types、multi-value、multi-memory、extended-const、および mutable-globals です。SIMD128、exception-handling、tail-call、Wasm GC、threads、memory64 などの非対応機能はビルド時に `UnsupportedWasmFeatureException` で診断します。すべての型と制御ブロックおよび分岐ターゲットを解決済み IR として出力し、`com.dylibso.chicory` への依存をアダプタ層に隔離しました。`heavy.wasm` を含む全フィクスチャ、`runtime-chicory` のコアモジュール群、および各仕様と異常系テストを通過しています。
 

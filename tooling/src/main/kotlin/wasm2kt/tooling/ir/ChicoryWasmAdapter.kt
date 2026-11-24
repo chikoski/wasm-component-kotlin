@@ -342,15 +342,13 @@ private class ModuleConverter(
 
     private fun convertGlobals(): List<IrGlobal> {
         val sec = raw.globalSection()
-        val visibleGlobals = importedGlobalTypes.toMutableList()
         return (0 until sec.globalCount()).map { i ->
             val g = sec.getGlobal(i)
             val globalIdx = importedGlobalTypes.size + i
             val valType = mapValType(g.valueType(), null, "global[$globalIdx]")
             val mut = mapMutability(g.mutabilityType())
-            val initExpr = convertConstExpr(g.initInstructions(), valType, "global[$globalIdx].init", visibleGlobals)
+            val initExpr = convertConstExpr(g.initInstructions(), valType, "global[$globalIdx].init", importedGlobalTypes)
             val globalType = IrGlobalType(valType, mut)
-            visibleGlobals += globalType
             IrGlobal(
                 index = globalIdx,
                 type = globalType,
@@ -415,7 +413,7 @@ private class ModuleConverter(
             val el = sec.getElement(i)
             val elemType = mapElementType(el.type(), "elem[$i]")
             val items = el.initializers().mapIndexed { itemIdx, initInsns ->
-                convertConstExpr(initInsns, elemType, "elem[$i].item[$itemIdx]", allGlobalTypes)
+                convertConstExpr(initInsns, elemType, "elem[$i].item[$itemIdx]", importedGlobalTypes)
             }
             when (el) {
                 is ActiveElement -> {
@@ -432,7 +430,7 @@ private class ModuleConverter(
                     IrElementSegment.Active(
                         index = i,
                         tableIndex = tableIndex,
-                        offset = convertConstExpr(el.offset(), IrValType.I32, "elem[$i].offset", allGlobalTypes),
+                        offset = convertConstExpr(el.offset(), IrValType.I32, "elem[$i].offset", importedGlobalTypes),
                         elementType = elemType,
                         items = items,
                     )
@@ -467,7 +465,7 @@ private class ModuleConverter(
                     IrDataSegment.Active(
                         index = i,
                         memoryIndex = memIndex,
-                        offset = convertConstExpr(ds.offsetInstructions(), IrValType.I32, "data[$i].offset", allGlobalTypes),
+                        offset = convertConstExpr(ds.offsetInstructions(), IrValType.I32, "data[$i].offset", importedGlobalTypes),
                         bytes = ds.data(),
                     )
                 }

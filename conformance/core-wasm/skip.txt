@@ -1,0 +1,19 @@
+# Core Wasm 2.0 conformance test skip list.
+# Format:
+#   <file.wast>            skip all commands in this file
+#   <file.wast>:<line>     skip only the command on this line
+
+# Pre-multi-memory assertions contradicted by ADR-0013 and ADR-0023 multi-memory support.
+binary.wast:146   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:166   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:185   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:204   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:243   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:262   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:280   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+binary.wast:298   # ADR-0013 / ADR-0023: multi-memory uses LEB128 memidx for memory.grow and memory.size
+imports.wast:488  # ADR-0013 / ADR-0023: multi-memory allows multiple memories per module
+imports.wast:492  # ADR-0013 / ADR-0023: multi-memory allows multiple memories per module
+imports.wast:496  # ADR-0013 / ADR-0023: multi-memory allows multiple memories per module
+memory.wast:10    # ADR-0013 / ADR-0023: multi-memory allows multiple memories per module
+memory.wast:11    # ADR-0013 / ADR-0023: multi-memory allows multiple memories per module

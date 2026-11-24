@@ -15,8 +15,10 @@ import wasm2kt.runtime.canonical.trap as canonicalTrap
  */
 @InternalWasm2KtApi
 object AotTrapSupport {
+    @JvmStatic
     fun trap(message: String): Nothing = canonicalTrap(message)
 
+    @JvmStatic
     fun unreachable(): Nothing = canonicalTrap("wasm trap: unreachable")
 
     /** Enters a top-level guest call: checks usability, enforces `may_enter`, and maps traps. */

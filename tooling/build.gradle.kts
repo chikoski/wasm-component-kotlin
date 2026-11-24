@@ -10,6 +10,7 @@ plugins {
 dependencies {
     api(project(":generator"))
     implementation(project(":runtime-canonical"))
+    implementation(project(":runtime-aot"))
     implementation(libs.kotlinpoet)
     implementation(libs.chicory.wasm)
     implementation(libs.chicory.wasi)

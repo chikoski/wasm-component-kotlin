@@ -256,16 +256,20 @@ class LinearMemory(
 
     /** Wasm `memory.init`: copies [len] bytes from segment [segmentIndex] at [src] into memory at [dst]. */
     fun init(segmentIndex: Int, dst: Int, src: Int, len: Int) {
-        val seg = segmentAt(segmentIndex)
+        initFrom(segmentAt(segmentIndex), dst, src, len, segmentIndex)
+    }
+
+    /** Copies [len] bytes from an external [segment] byte array at [src] into memory at [dst]. */
+    fun initFrom(segment: ByteArray, dst: Int, src: Int, len: Int, segmentIndex: Int = 0) {
         val d = dst.toLong() and 0xFFFF_FFFFL
         val s = src.toLong() and 0xFFFF_FFFFL
         val n = len.toLong() and 0xFFFF_FFFFL
-        if (s + n > seg.size.toLong()) {
-            trap("out of bounds memory access: segment $segmentIndex [$s, ${s + n}) exceeds segment size ${seg.size}")
+        if (s + n > segment.size.toLong()) {
+            trap("out of bounds memory access: segment $segmentIndex [$s, ${s + n}) exceeds segment size ${segment.size}")
         }
         val b = data
         if (d + n > b.size.toLong()) trapOutOfBounds(d, n, b.size)
-        if (n > 0L) System.arraycopy(seg, s.toInt(), b, d.toInt(), n.toInt())
+        if (n > 0L) System.arraycopy(segment, s.toInt(), b, d.toInt(), n.toInt())
     }
 
     /** Wasm `data.drop`: clears segment [segmentIndex] to empty bytes (idempotent). */
@@ -408,6 +412,54 @@ class LinearMemory(
             val b3 = input.read()
             if ((b0 or b1 or b2 or b3) < 0) throw EOFException("Unexpected end of data segment header")
             return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+        }
+    }
+}
+
+/**
+ * Module-scoped store of passive and active data segments for `memory.init`, `data.drop`, and
+ * active instantiation across single or multiple/imported memories.
+ */
+@InternalWasm2KtApi
+class DataSegmentStore(segments: Array<ByteArray>) {
+    private val store: Array<ByteArray> = segments.copyOf()
+
+    fun init(memory: LinearMemory, segmentIndex: Int, dst: Int, src: Int, len: Int) {
+        memory.initFrom(segmentAt(segmentIndex), dst, src, len, segmentIndex)
+    }
+
+    fun initActive(memory: LinearMemory, segmentIndex: Int, dstOffset: Int) {
+        val seg = segmentAt(segmentIndex)
+        memory.initBytes(dstOffset, seg)
+        store[segmentIndex] = EMPTY_BYTES
+    }
+
+    fun drop(segmentIndex: Int) {
+        if (segmentIndex !in store.indices) {
+            trap("Invalid data segment index $segmentIndex")
+        }
+        store[segmentIndex] = EMPTY_BYTES
+    }
+
+    private fun segmentAt(index: Int): ByteArray {
+        if (index !in store.indices) trap("Invalid data segment index $index")
+        return store[index]
+    }
+
+    companion object {
+        private val EMPTY_BYTES = ByteArray(0)
+        val EMPTY = DataSegmentStore(emptyArray())
+
+        @JvmStatic
+        fun fromBytes(bytes: ByteArray): DataSegmentStore =
+            DataSegmentStore(LinearMemory.decodeDataSegments(bytes))
+
+        @JvmStatic
+        fun load(loader: ClassLoader?, resourcePath: String): DataSegmentStore {
+            val effective = loader
+                ?: Thread.currentThread().contextClassLoader
+                ?: LinearMemory::class.java.classLoader
+            return DataSegmentStore(LinearMemory.loadDataSegments(effective, resourcePath))
         }
     }
 }
