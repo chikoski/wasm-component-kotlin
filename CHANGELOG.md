@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* Core Wasm の型付き IR と Chicory パーサーアダプタの実装
 * 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
 * AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
@@ -58,6 +59,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#183](https://github.com/chikoski/wasm-component-kotlin/issues/183) に対応し、`:tooling` の `wasm2kt.tooling.ir` にパーサー非依存の Core Wasm 型付き IR と `ChicoryWasmAdapter`、および構造化テキストダンプ `WasmIrDump` を追加しました。対応範囲は MVP、sign-extension、non-trapping float-to-int、bulk-memory、reference-types、multi-value、multi-memory、extended-const、および mutable-globals です。SIMD128、exception-handling、tail-call、Wasm GC、threads、memory64 などの非対応機能はビルド時に `UnsupportedWasmFeatureException` で診断します。すべての型と制御ブロックおよび分岐ターゲットを解決済み IR として出力し、`com.dylibso.chicory` への依存をアダプタ層に隔離しました。`heavy.wasm` を含む全フィクスチャ、`runtime-chicory` のコアモジュール群、および各仕様と異常系テストを通過しています。
 
 [#182](https://github.com/chikoski/wasm-component-kotlin/issues/182) に対応し、Chicory に依存しない `:runtime-canonical` と `:runtime-aot` モジュールを新設しました。`CanonicalAbi`、`Transcoder`、`WitType`、`HandleTable`、`BorrowScope`、および `ComponentGuard` は `:runtime-canonical` へ移し、`@InternalWasm2KtApi` で境界を区切っています。`SYNC_ADAPTER_KINDS` と `usesAsync` の分類規則も `:runtime-canonical` へ単一定義化しました。`:runtime-aot` には `LinearMemory`、`FuncRef` と共有 `WasmTable`、`WasmNumerics`、および `AotTrapSupport` を実装し、JVM 17 と Android API 26 互換検査を通過させています。
 
