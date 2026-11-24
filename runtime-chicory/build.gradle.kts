@@ -9,6 +9,7 @@ plugins {
 
 dependencies {
     api(project(":runtime-api"))
+    implementation(project(":runtime-canonical"))
     api(libs.chicory.runtime)
     api(libs.chicory.wasm)
     // plan.json

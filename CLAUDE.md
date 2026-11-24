@@ -17,6 +17,8 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 * `cli`: `wasm2kt` コマンド（`wasm2kt.cli`）。サブコマンドは `generate`（サブコマンドなしも同じ）と `bridge`（型付きブリッジ）。`./gradlew run --args=...` はリポジトリルート基準
 * `runtime-wasmtime`: Wasmtime ブリッジの Kotlin 側（FFM / JNI、`wasm2kt.runtime`）。JVM 21 + preview
 * `runtime-api`: `ComponentBackend`、`WitHostImportDispatcher`、値のバイナリ形式（`WitWriter` / `WitReader`、ADR-0015）。JVM 17 を維持（Android で使うため）
+* `runtime-canonical`: Chicory 非依存の共通 Canonical ABI 層。JVM 17 と Android API 26 互換を維持
+* `runtime-aot`: 自作 Core Wasm コンパイラ向けの純 JVM と Android 実行時基盤。JVM 17 と Android API 26 互換を維持
 * `runtime-chicory`: Chicory バックエンド。JVM 17 を維持
 * `tooling`: 分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`）、生成（`ComponentCodegen`）、一括実行（`ComponentBuild`）、型付きブリッジのクレートの生成と `cargo build`（`TypedBridge`、ADR-0016）
 * `gradle-plugin`: `io.github.wasm2kt`
@@ -59,7 +61,7 @@ JDK 21 がインストールされていれば、Gradle が自動で見つけま
 
 ## 守ること
 
-* `runtime-api` と `runtime-chicory` に JVM 17 を超える API や `java.lang.foreign` を持ち込まない。Android の API 26 にない API も使わない（`check` の `animalsnifferMain` が検査する。#80）
+* `runtime-api`、`runtime-canonical`、`runtime-aot`、および `runtime-chicory` に JVM 17 を超える API や `java.lang.foreign` を持ち込まない。Android の API 26 にない API も使わない（`check` の `animalsnifferMain` が検査する。#80）
 * `plan.json` の形式を変えるときは、`decomposer/src/main.rs` の `PLAN_VERSION` と `ComponentPlan.SUPPORTED_VERSION` を同時に上げる。
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない

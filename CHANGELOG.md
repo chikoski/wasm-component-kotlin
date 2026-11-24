@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
 * AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
 * ツール群と仕様適合テストの境界検査および Android サンプルの録画後始末の修正
 * コード生成の名前解決と Rust ブリッジの資源所有権修正
@@ -57,6 +58,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#182](https://github.com/chikoski/wasm-component-kotlin/issues/182) に対応し、Chicory に依存しない `:runtime-canonical` と `:runtime-aot` モジュールを新設しました。`CanonicalAbi`、`Transcoder`、`WitType`、`HandleTable`、`BorrowScope`、および `ComponentGuard` は `:runtime-canonical` へ移し、`@InternalWasm2KtApi` で境界を区切っています。`SYNC_ADAPTER_KINDS` と `usesAsync` の分類規則も `:runtime-canonical` へ単一定義化しました。`:runtime-aot` には `LinearMemory`、`FuncRef` と共有 `WasmTable`、`WasmNumerics`、および `AotTrapSupport` を実装し、JVM 17 と Android API 26 互換検査を通過させています。
 
 [#20](https://github.com/chikoski/wasm-component-kotlin/issues/20) と [#150](https://github.com/chikoski/wasm-component-kotlin/pull/150) に対応し、Gradle 9.9.1 と Kotlin 2.4.21 および AGP 9.5.1 の検証と機能テストの整備を完了しました。テスト環境向けに `gradle-plugin` をローカルのテストリポジトリへ公開する構成へ改めています。さらに `Wasm2KtPluginFunctionalTest` へ Android ライブラリプロジェクトの検証ケースを追加しました。これにより `com.android.library` 構成でのコンポーネント生成、ホスト JVM 単体テストの実行、設定キャッシュの再利用、および `runtime-wasi` インタフェースの再利用を検証します。
 

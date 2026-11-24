@@ -83,6 +83,8 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
         ":ast:publishAllPublicationsToTestRepository",
         ":generator:publishAllPublicationsToTestRepository",
         ":runtime-api:publishAllPublicationsToTestRepository",
+        ":runtime-canonical:publishAllPublicationsToTestRepository",
+        ":runtime-aot:publishAllPublicationsToTestRepository",
         ":runtime-chicory:publishAllPublicationsToTestRepository",
         ":runtime-wasi:publishAllPublicationsToTestRepository",
         ":tooling:publishAllPublicationsToTestRepository",

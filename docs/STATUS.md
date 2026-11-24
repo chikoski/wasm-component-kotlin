@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-21。対象ブランチは `chore/extract-android-glitch-camera-to-pixelfray`。主な変更点は `samples/android-glitch-camera` の独立リポジトリへの切り出しです。
+> 最終更新: 2026-11-24。対象ブランチは `feat/182-runtime-canonical-and-aot`。主な変更点は #182 による Chicory 非依存の `:runtime-canonical` と `:runtime-aot` 基盤モジュールの追加です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -37,6 +37,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `rust-bridge/` | Wasmtime ブリッジ（Rust のワークスペース。共通部 `core/` と汎用ブリッジの cdylib） | — | 稼働 |
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
 | `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 17 | 稼働 |
+| `runtime-canonical` | Chicory 非依存の共通 Canonical ABI 層 | 17 | 稼働 |
+| `runtime-aot` | 自作 Core Wasm コンパイラ向けの実行時基盤 | 17 | 基盤実装済み |
 | `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 17 | 稼働 |
 | `runtime-wasi` | WASI 0.3 コアインターフェースのホスト実装 | 17 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
@@ -124,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
 * `samples/android-glitch-camera` の独立リポジトリへの切り出し
 * Android カメラグリッチデモの前景と背景の4パス動的切り替え追加
 * AGP 9 と Gradle 9 の動作確認と Android 向け機能テストの追加
@@ -136,6 +139,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#182](https://github.com/chikoski/wasm-component-kotlin/issues/182) では、Chicory に依存しない `:runtime-canonical` と `:runtime-aot` モジュールを新設しました。`CanonicalAbi`、`Transcoder`、`WitType`、検証・poison 補助、`HandleTable`、および `BorrowScope` は `:runtime-canonical` へ抽出しています。生成コード向けの公開境界には `@InternalWasm2KtApi` を付与しました。また、`SYNC_ADAPTER_KINDS` と `usesAsync` の判定規則を `:runtime-canonical` に集約し、`:runtime-chicory` と `:tooling` の双方が単一の定義を参照する構成にしました。`:runtime-aot` には `ByteArray` 直接保持の `LinearMemory`、共有関数テーブルと `FuncRef`、数値演算補助、およびトラップと poison の境界補助を実装しています。両モジュールは JVM 17 ターゲットと `animalsnifferMain` の Android API 26 検査を通過し、`:runtime-chicory` の回帰テストと差分テストの全件通過も確認しました。
 
 Android カメラグリッチデモアプリであった `samples/android-glitch-camera` は、独立した [chikoski/pixelfray](https://github.com/chikoski/pixelfray) リポジトリへ履歴付きで切り出しました。切り出し先ではパッケージ ID を `info.chikoski.pixelfray` へ変更し、`wasm-component-kotlin` と `png-glitch` を Git サブモジュールとして参照しています。
 

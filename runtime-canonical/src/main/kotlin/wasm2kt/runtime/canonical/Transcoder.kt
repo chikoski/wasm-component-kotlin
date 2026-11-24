@@ -1,6 +1,30 @@
-package wasm2kt.runtime.chicory
+@file:OptIn(InternalWasm2KtApi::class)
 
-import com.dylibso.chicory.runtime.Memory
+package wasm2kt.runtime.canonical
+
+import java.io.ByteArrayOutputStream
+
+/** A string transcode a fused adapter performs, named as in wasmtime-environ (`Transcode::desc`). */
+@InternalWasm2KtApi
+enum class TranscodeOp(val desc: String) {
+    UTF8_TO_UTF8("utf8-to-utf8"),
+    UTF16_TO_UTF16("utf16-to-utf16"),
+    LATIN1_TO_LATIN1("latin1-to-latin1"),
+    LATIN1_TO_UTF16("latin1-to-utf16"),
+    LATIN1_TO_UTF8("latin1-to-utf8"),
+    UTF16_TO_COMPACT_PROBABLY_UTF16("utf16-to-compact-probably-utf16"),
+    UTF16_TO_COMPACT_UTF16("utf16-to-compact-utf16"),
+    UTF16_TO_LATIN1("utf16-to-latin1"),
+    UTF16_TO_UTF8("utf16-to-utf8"),
+    UTF8_TO_COMPACT_UTF16("utf8-to-compact-utf16"),
+    UTF8_TO_LATIN1("utf8-to-latin1"),
+    UTF8_TO_UTF16("utf8-to-utf16"),
+    ;
+
+    companion object {
+        fun fromPlan(desc: String): TranscodeOp? = values().firstOrNull { it.desc == desc }
+    }
+}
 
 /**
  * The string transcoders that wasmtime-environ's fused adapters call to copy a string from one
@@ -11,7 +35,8 @@ import com.dylibso.chicory.runtime.Memory
  * Pointers and lengths are unsigned 32-bit values. The adapter has already checked that each
  * buffer is aligned and inside its memory; an access outside it still traps here.
  */
-internal class Transcoder(private val op: TranscodeOp, private val from: Memory, private val to: Memory) {
+@InternalWasm2KtApi
+class Transcoder(private val op: TranscodeOp, private val from: CanonicalMemory, private val to: CanonicalMemory) {
     /** Runs the transcode on the core arguments and returns its core results. */
     fun apply(a: LongArray): LongArray? = when (op) {
         TranscodeOp.UTF8_TO_UTF8 -> {
@@ -106,7 +131,7 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
     /** Partial transcode: stops before a character that does not fit, or (first pass) at the first non-ASCII one. */
     private fun utf16ToUtf8(src: Long, srcLen: Long, dst: Long, dstLen: Long, firstPass: Boolean): LongArray {
         val units = readUtf16(src, srcLen)
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         var read = 0
         var i = 0
         while (i < units.size) {
@@ -157,7 +182,7 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
     private fun latin1ToUtf8(src: Long, srcLen: Long, dst: Long, dstLen: Long, firstPass: Boolean): LongArray {
         val bytes = read(from, src, srcLen)
         val stop = if (firstPass) bytes.indexOfFirst { (it.toInt() and 0xFF) >= 0x80 }.let { if (it < 0) bytes.size else it } else bytes.size
-        val out = java.io.ByteArrayOutputStream()
+        val out = ByteArrayOutputStream()
         var read = 0
         while (read < stop) {
             val b = bytes[read].toInt() and 0xFF
@@ -187,18 +212,18 @@ internal class Transcoder(private val op: TranscodeOp, private val from: Memory,
         write(to, ptr, bytes)
     }
 
-    private fun read(memory: Memory, ptr: Long, len: Long): ByteArray {
+    private fun read(memory: CanonicalMemory, ptr: Long, len: Long): ByteArray {
         checkBounds(memory, ptr, len)
         return if (len == 0L) ByteArray(0) else memory.readBytes(ptr.toInt(), len.toInt())
     }
 
-    private fun write(memory: Memory, ptr: Long, bytes: ByteArray) {
+    private fun write(memory: CanonicalMemory, ptr: Long, bytes: ByteArray) {
         checkBounds(memory, ptr, bytes.size.toLong())
-        if (bytes.isNotEmpty()) memory.write(ptr.toInt(), bytes)
+        if (bytes.isNotEmpty()) memory.writeBytes(ptr.toInt(), bytes)
     }
 
-    private fun checkBounds(memory: Memory, ptr: Long, len: Long) {
-        val size = memory.pages().toLong() * Memory.PAGE_SIZE
+    private fun checkBounds(memory: CanonicalMemory, ptr: Long, len: Long) {
+        val size = memory.byteSize
         if (ptr + len > size) trap("${op.desc}: [$ptr, ${ptr + len}) is outside linear memory of $size bytes")
     }
 

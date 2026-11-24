@@ -1,15 +1,21 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.tooling
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.PlanAsyncRules
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -62,6 +68,34 @@ object PlanCheck {
         }
         intrinsics.distinct().forEach { problems += "component intrinsic not supported by the Chicory backend: $it" }
         return problems.distinct()
+    }
+
+    /** Returns whether the decomposed component in [decomposedDir] uses the async ABI. */
+    fun usesAsync(decomposedDir: Path): Boolean =
+        usesAsync(Json.parseToJsonElement(Files.readString(decomposedDir.resolve("plan.json"))).jsonObject)
+
+    /** Returns whether [plan] uses the async ABI using the single canonical rule in [PlanAsyncRules]. */
+    fun usesAsync(plan: JsonObject): Boolean {
+        val trampolineKinds = plan.array("trampolines").mapNotNull { it.jsonObject.str("kind") }
+        val hasAsyncOptionOrCallback = plan.array("options").any { elem ->
+            val o = elem.jsonObject
+            val isAsync = (o["async"] as? JsonPrimitive)?.booleanOrNull == true
+            val hasCallback = o["callback"]?.let { it !is JsonNull } == true
+            isAsync || hasCallback
+        }
+        val hasAsyncExport = plan.array("exports").any { elem ->
+            val type = elem.jsonObject["type"] as? JsonObject
+            (type?.get("async") as? JsonPrimitive)?.content == "true"
+        }
+        val hasExtractCallback = plan.array("initializers").any { elem ->
+            elem.jsonObject.str("op") == "extract-callback"
+        }
+        return PlanAsyncRules.usesAsync(
+            trampolineKinds = trampolineKinds,
+            hasAsyncOptionOrCallback = hasAsyncOptionOrCallback,
+            hasAsyncExport = hasAsyncExport,
+            hasExtractCallback = hasExtractCallback,
+        )
     }
 
     /** Details of every `{"k": "unsupported"}` inside a plan type. */

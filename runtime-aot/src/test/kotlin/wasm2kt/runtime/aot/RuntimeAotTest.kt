@@ -1,0 +1,359 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
+package wasm2kt.runtime.aot
+
+import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.CanonicalMemory
+import wasm2kt.runtime.canonical.ComponentGuard
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.Lifter
+import wasm2kt.runtime.canonical.Lowerer
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.WitType
+import java.io.ByteArrayOutputStream
+import java.lang.reflect.Modifier
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+class RuntimeAotTest {
+    private fun packSegments(vararg segments: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        fun writeIntLE(v: Int) {
+            out.write(v and 0xFF)
+            out.write((v ushr 8) and 0xFF)
+            out.write((v ushr 16) and 0xFF)
+            out.write((v ushr 24) and 0xFF)
+        }
+        writeIntLE(segments.size)
+        for (s in segments) {
+            writeIntLE(s.size)
+            out.write(s)
+        }
+        return out.toByteArray()
+    }
+
+    @Test
+    fun `LinearMemory is final, performs little-endian loads and stores with sign extension and NaN preservation`() {
+        assertTrue(Modifier.isFinal(LinearMemory::class.java.modifiers))
+        val mem = LinearMemory(1, 2)
+
+        mem.storeI32(0, 4, 0x1234_5678)
+        assertEquals(0x1234_5678, mem.loadI32(0, 4))
+        assertEquals(0x78.toByte(), mem.readByte(4))
+        assertEquals(0x56.toByte(), mem.readByte(5))
+        assertEquals(0x34.toByte(), mem.readByte(6))
+        assertEquals(0x12.toByte(), mem.readByte(7))
+
+        mem.storeI32_8(16, 0, 0x80)
+        assertEquals(-128, mem.loadI32_8s(16))
+        assertEquals(0x80, mem.loadI32_8u(16))
+        assertEquals(-128L, mem.loadI64_8s(16))
+        assertEquals(0x80L, mem.loadI64_8u(16))
+
+        mem.storeI32_16(20, 0, 0x8001)
+        assertEquals(-32767, mem.loadI32_16s(20))
+        assertEquals(0x8001, mem.loadI32_16u(20))
+        assertEquals(-32767L, mem.loadI64_16s(20))
+        assertEquals(0x8001L, mem.loadI64_16u(20))
+
+        mem.storeI64(32, 0, 0x8000_0000_0000_0001uL.toLong())
+        assertEquals(0x8000_0000_0000_0001uL.toLong(), mem.loadI64(32))
+        assertEquals(1, mem.loadI32(32))
+        assertEquals(1L, mem.loadI64_32s(32))
+        mem.storeI32(40, 0, -1)
+        assertEquals(-1L, mem.loadI64_32s(40))
+        assertEquals(0xFFFF_FFFFL, mem.loadI64_32u(40))
+
+        // NaN payload preservation
+        val f32NaNBits = 0x7fc0_1234
+        val f32NaN = java.lang.Float.intBitsToFloat(f32NaNBits)
+        mem.storeF32(48, 0, f32NaN)
+        assertEquals(f32NaNBits, mem.loadI32(48))
+        assertEquals(f32NaNBits, java.lang.Float.floatToRawIntBits(mem.loadF32(48)))
+
+        val f64NaNBits = 0x7ff8_1234_5678_9ABCL
+        val f64NaN = java.lang.Double.longBitsToDouble(f64NaNBits)
+        mem.storeF64(56, 0, f64NaN)
+        assertEquals(f64NaNBits, mem.loadI64(56))
+        assertEquals(f64NaNBits, java.lang.Double.doubleToRawLongBits(mem.loadF64(56)))
+    }
+
+    @Test
+    fun `LinearMemory enforces unsigned 64-bit effective address bounds and non-trapping grow`() {
+        val mem = LinearMemory(1, 2)
+        // Unsigned addr + offset must NOT wrap around 32-bit int!
+        assertThrows<ComponentTrapException> { mem.loadI32(0xFFFF_FFF0.toInt(), 0x20) }
+        assertThrows<ComponentTrapException> { mem.loadI32(0x8000_0000.toInt(), 0) }
+        assertThrows<ComponentTrapException> { mem.loadI32(LinearMemory.PAGE_SIZE - 3, 0) }
+        assertThrows<ComponentTrapException> { mem.storeI64(LinearMemory.PAGE_SIZE - 7, 0, 1L) }
+
+        // Boundary access succeeds
+        mem.storeI32(LinearMemory.PAGE_SIZE - 4, 0, 0xCAFE_BABE.toInt())
+        assertEquals(0xCAFE_BABE.toInt(), mem.loadI32(LinearMemory.PAGE_SIZE - 4, 0))
+
+        // grow within maxPages succeeds and preserves existing data
+        assertEquals(1, mem.grow(0))
+        assertEquals(1, mem.grow(1))
+        assertEquals(2, mem.pages())
+        assertEquals(0xCAFE_BABE.toInt(), mem.loadI32(LinearMemory.PAGE_SIZE - 4, 0))
+        assertEquals(0, mem.loadI32(LinearMemory.PAGE_SIZE, 0))
+
+        // grow beyond maxPages or MAX_PAGES returns -1 without trapping
+        assertEquals(-1, mem.grow(1))
+        assertEquals(-1, mem.grow(-1)) // unsigned 0xFFFF_FFFFL
+        assertEquals(2, mem.pages())
+
+        // Unbounded memory is capped at MAX_PAGES (32767)
+        val capped = LinearMemory(0, 65536)
+        assertEquals(LinearMemory.MAX_PAGES, capped.maxPages)
+        assertEquals(-1, capped.grow(LinearMemory.MAX_PAGES + 1))
+    }
+
+    @Test
+    fun `LinearMemory supports copy, fill, init, dataDrop, and packed resource initialization`() {
+        val seg0 = byteArrayOf(1, 2, 3, 4, 5)
+        val seg1 = "hello-aot".encodeToByteArray()
+        val packed = packSegments(seg0, seg1)
+        val decoded = LinearMemory.decodeDataSegments(packed)
+        val mem = LinearMemory(1, 1, decoded)
+
+        mem.initActiveSegment(0, 100)
+        assertArrayEquals(seg0, mem.readBytes(100, 5))
+        // Dropped active segment allows 0-len init and traps on >0-len init
+        mem.init(0, 0, 0, 0)
+        assertThrows<ComponentTrapException> { mem.init(0, 0, 0, 1) }
+
+        mem.init(1, 200, 6, 3) // "aot"
+        assertEquals("aot", mem.readBytes(200, 3).decodeToString())
+        mem.dataDrop(1)
+        mem.dataDrop(1) // idempotent
+        assertThrows<ComponentTrapException> { mem.init(1, 0, 0, 1) }
+
+        // Overlapping memory.copy and fill
+        mem.fill(300, 0xAA, 6)
+        assertArrayEquals(ByteArray(6) { 0xAA.toByte() }, mem.readBytes(300, 6))
+        mem.initBytes(10, byteArrayOf(10, 20, 30, 40, 50))
+        mem.copy(12, 10, 4)
+        assertArrayEquals(byteArrayOf(10, 20, 10, 20, 30, 40), mem.readBytes(10, 6))
+
+        // Zero-length copy/fill at out-of-bounds offset still traps per Wasm spec
+        mem.copy(LinearMemory.PAGE_SIZE, LinearMemory.PAGE_SIZE, 0)
+        assertThrows<ComponentTrapException> { mem.copy(LinearMemory.PAGE_SIZE + 1, 0, 0) }
+        assertThrows<ComponentTrapException> { mem.fill(LinearMemory.PAGE_SIZE + 1, 0, 0) }
+
+        // Resource loading from fixed classpath path without reflection
+        val resourceBytes = packSegments("WASM".encodeToByteArray())
+        val customLoader = object : ClassLoader(javaClass.classLoader) {
+            override fun getResourceAsStream(name: String): java.io.InputStream? =
+                if (name == "wasm2kt/aot/test-segments.bin") resourceBytes.inputStream() else null
+        }
+        assertArrayEquals(resourceBytes, LinearMemory.loadResource(customLoader, "/wasm2kt/aot/test-segments.bin"))
+        val loaded = LinearMemory.fromResource(1, 1, customLoader, "wasm2kt/aot/test-segments.bin")
+        loaded.init(0, 0, 0, 4)
+        assertEquals("WASM", loaded.readBytes(0, 4).decodeToString())
+        assertThrows<IllegalStateException> { LinearMemory.fromResource(1, 1, customLoader, "wasm2kt/aot/missing.bin") }
+
+        // Interoperates directly as CanonicalMemory
+        val cx = object : AbiContext {
+            private var bump = 4096
+            override val memory: CanonicalMemory = mem
+            override val encoding: StringEncoding = StringEncoding.UTF8
+            override fun realloc(align: Int, size: Int): Int {
+                val aligned = (bump + align - 1) / align * align
+                bump = aligned + size
+                return aligned
+            }
+            override fun lowerOwn(table: Int, id: Int): Int = id
+            override fun lowerBorrow(table: Int, id: Int): Int = id
+            override fun liftOwn(table: Int, handle: Int): Int = handle
+            override fun liftBorrow(table: Int, handle: Int): Int = handle
+        }
+        val ptr = Lowerer(cx, WitWriter().apply { string("canonical-aot") }.toReader())
+            .storeTuple(WitType.Tuple(listOf(WitType.Str)))
+        val out = WitWriter()
+        Lifter(cx, out).loadTuple(ptr, WitType.Tuple(listOf(WitType.Str)))
+        assertEquals("canonical-aot", out.toReader().string())
+    }
+
+    @Test
+    fun `FuncRef and shared FuncTable check identity, host trampolines, structural types, and grow limits`() {
+        val sigAdd = WasmTypeSignatures.canonical(listOf(WasmValKind.I32, WasmValKind.I32), listOf(WasmValKind.I32))
+        val sigVoid = WasmTypeSignatures.canonical(emptyList(), emptyList())
+        assertEquals("(II)I", sigAdd)
+        assertEquals("()V", sigVoid)
+        assertTrue(WasmTypeSignatures.areEquivalent(sigAdd, "(II)I"))
+        assertFalse(WasmTypeSignatures.areEquivalent(sigAdd, "(IJ)I"))
+
+        val ownerA = Any()
+        val ownerB = Any()
+        val refA0 = FuncRef.core(ownerA, 0, sigAdd)
+        val refA0Dup = FuncRef.core(ownerA, 0, sigAdd)
+        val refB0 = FuncRef.core(ownerB, 0, sigAdd)
+        assertEquals(refA0, refA0Dup)
+        assertEquals(refA0.hashCode(), refA0Dup.hashCode())
+        assertNotEquals(refA0, refB0)
+
+        // Shared table between module A and module B with delayed elem patching and host trampoline
+        val table = FuncTable(initialSize = 4, maxSize = 6)
+        assertNull(table.get(0))
+        table.patch(1, arrayOf(refA0, refB0))
+        val hostRef = table.registerHostTrampoline(3, sigAdd, HostTrampoline { args -> longArrayOf(args[0] + args[1]) })
+
+        assertSame(refA0, table.getChecked(1, "(II)I"))
+        assertSame(refB0, table.getChecked(2, "(II)I"))
+        val lookedUpHost = table.getChecked(3, "(II)I") as FuncRef.Host
+        assertSame(hostRef, lookedUpHost)
+        assertEquals(42L, lookedUpHost.trampoline.call(longArrayOf(19, 23))!![0])
+
+        // Type mismatch, null entry, and OOB trap
+        assertThrows<ComponentTrapException> { table.getChecked(0, sigAdd) }
+        assertThrows<ComponentTrapException> { table.getChecked(1, sigVoid) }
+        assertThrows<ComponentTrapException> { table.getChecked(4, sigAdd) }
+
+        // table.grow returns previous size on success, -1 on limit exceeded
+        assertEquals(4, table.grow(2, refA0))
+        assertEquals(6, table.size())
+        assertSame(refA0, table.get(5))
+        assertEquals(-1, table.grow(1, null))
+        assertEquals(-1, table.grow(-1, null))
+        assertEquals(6, table.size())
+
+        // table.init and elem.drop
+        val segs = ElemSegmentStore(arrayOf(arrayOf<FuncRef?>(refA0, refB0)))
+        segs.init(table, 0, 0, 1, 1)
+        assertSame(refB0, table.get(0))
+        segs.drop(0)
+        segs.init(table, 0, 0, 0, 0)
+        assertThrows<ComponentTrapException> { segs.init(table, 0, 0, 0, 1) }
+
+        // ExternTable
+        val ext = ExternTable(2)
+        ext.set(0, "hello")
+        assertEquals("hello", ext.get(0))
+        assertNull(ext.get(1))
+    }
+
+    @Test
+    fun `WasmNumerics implements division traps, trunc bounds, saturating trunc, and NaN reinterpret`() {
+        // Division and remainder
+        assertThrows<ComponentTrapException> { WasmNumerics.i32DivS(1, 0) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i32DivS(Int.MIN_VALUE, -1) }
+        assertEquals(0, WasmNumerics.i32RemS(Int.MIN_VALUE, -1))
+        assertThrows<ComponentTrapException> { WasmNumerics.i32DivU(1, 0) }
+        assertEquals(0x4000_0000, WasmNumerics.i32DivU(Int.MIN_VALUE, 2))
+        assertEquals(1, WasmNumerics.i32RemU(-1, 2))
+
+        assertThrows<ComponentTrapException> { WasmNumerics.i64DivS(1L, 0L) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i64DivS(Long.MIN_VALUE, -1L) }
+        assertEquals(0L, WasmNumerics.i64RemS(Long.MIN_VALUE, -1L))
+        assertThrows<ComponentTrapException> { WasmNumerics.i64DivU(1L, 0L) }
+        assertEquals(0x4000_0000_0000_0000L, WasmNumerics.i64DivU(Long.MIN_VALUE, 2L))
+
+        // Trapping truncations and exact boundary checks
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF32S(Float.NaN) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF32S(2147483648.0f) }
+        assertEquals(Int.MIN_VALUE, WasmNumerics.i32TruncF32S(-2147483648.0f))
+
+        assertEquals(0, WasmNumerics.i32TruncF32U(-0.9f))
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF32U(-1.0f) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF32U(4294967296.0f) }
+
+        assertEquals(Int.MIN_VALUE, WasmNumerics.i32TruncF64S(-2147483648.5))
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF64S(-2147483649.0) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF64S(2147483648.0) }
+        assertEquals(Int.MAX_VALUE, WasmNumerics.i32TruncF64S(2147483647.9))
+
+        assertEquals(0, WasmNumerics.i32TruncF64U(-0.999999))
+        assertEquals(-1, WasmNumerics.i32TruncF64U(4294967295.9))
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF64U(-1.0) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i32TruncF64U(4294967296.0) }
+
+        assertEquals(Long.MIN_VALUE, WasmNumerics.i64TruncF64S(-9223372036854775808.0))
+        assertThrows<ComponentTrapException> { WasmNumerics.i64TruncF64S(9223372036854775808.0) }
+        assertEquals(-1L shl 11, WasmNumerics.i64TruncF64U(18446744073709551616.0 - 2048.0))
+        assertThrows<ComponentTrapException> { WasmNumerics.i64TruncF64U(18446744073709551616.0) }
+        assertThrows<ComponentTrapException> { WasmNumerics.i64TruncF32U(18446744073709551616.0f) }
+
+        // Saturating truncations never trap
+        assertEquals(0, WasmNumerics.i32TruncSatF32S(Float.NaN))
+        assertEquals(0, WasmNumerics.i32TruncSatF64U(-100.0))
+        assertEquals(-1, WasmNumerics.i32TruncSatF64U(1e20))
+        assertEquals(0L, WasmNumerics.i64TruncSatF64U(Double.NaN))
+        assertEquals(-1L, WasmNumerics.i64TruncSatF64U(1e30))
+
+        // Reinterpret NaN preservation & unsigned conversions & min/max/nearest
+        val snan32 = 0x7f80_0001
+        assertEquals(snan32, WasmNumerics.i32ReinterpretF32(WasmNumerics.f32ReinterpretI32(snan32)))
+        val snan64 = 0x7ff0_0000_0000_0001L
+        assertEquals(snan64, WasmNumerics.i64ReinterpretF64(WasmNumerics.f64ReinterpretI64(snan64)))
+
+        assertEquals(java.lang.Float.floatToRawIntBits(-0.0f), java.lang.Float.floatToRawIntBits(WasmNumerics.f32Min(-0.0f, +0.0f)))
+        assertEquals(java.lang.Double.doubleToRawLongBits(+0.0), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Max(-0.0, +0.0)))
+        assertTrue(WasmNumerics.f32Min(Float.NaN, 1.0f).isNaN())
+        assertEquals(2.0, WasmNumerics.f64Nearest(2.5))
+        assertEquals(18446744073709551616.0, WasmNumerics.f64ConvertI64U(-1L))
+    }
+
+    @Test
+    fun `AotTrapSupport checks usability, enforces may_enter, maps Wasm traps, and preserves host import exceptions`() {
+        val g1 = ComponentGuard()
+        assertThrows<ComponentTrapException> {
+            AotTrapSupport.enterGuestCall(g1, "trapFn") { AotTrapSupport.unreachable() }
+        }
+        assertFalse(g1.entered)
+        assertThrows<ComponentTrapException> { AotTrapSupport.enterGuestCall(g1, "after") { error("unreachable") } }
+
+        val g2 = ComponentGuard()
+        class AppHostError(msg: String) : IllegalStateException(msg)
+        val err = assertThrows<AppHostError> {
+            AotTrapSupport.enterGuestCall(g2, "hostErr") {
+                AotTrapSupport.hostImportCall(g2) { throw AppHostError("host failed") }
+            }
+        }
+        assertEquals("host failed", err.message)
+        assertFalse(g2.entered)
+        assertThrows<ComponentTrapException> { AotTrapSupport.enterGuestCall(g2, "after") { error("unreachable") } }
+
+        // StackOverflowError inside host import maps to ComponentTrapException and poisons.
+        val g3 = ComponentGuard()
+        assertThrows<ComponentTrapException> {
+            AotTrapSupport.enterGuestCall(g3, "stackErr") {
+                AotTrapSupport.hostImportCall(g3) { throw StackOverflowError("deep") }
+            }
+        }
+        assertThrows<ComponentTrapException> { g3.checkUsable() }
+
+        // Reentry via enterGuestCall inside hostImportCall traps with may_enter and poisons.
+        val g4 = ComponentGuard()
+        var innerError: Throwable? = null
+        AotTrapSupport.enterGuestCall(g4, "outer") {
+            AotTrapSupport.hostImportCall(g4) {
+                innerError = runCatching { AotTrapSupport.enterGuestCall(g4, "inner") { 42 } }.exceptionOrNull()
+            }
+        }
+        val trapped = assertIs<ComponentTrapException>(innerError)
+        assertTrue("reenter" in trapped.message!!)
+        assertFalse(g4.entered)
+        assertThrows<ComponentTrapException> { AotTrapSupport.enterGuestCall(g4, "after") { error("unreachable") } }
+
+        // Closed instance rejects entry with IllegalStateException.
+        val g5 = ComponentGuard()
+        g5.closed = true
+        assertThrows<IllegalStateException> { AotTrapSupport.enterGuestCall(g5, "closed") { error("unreachable") } }
+
+        // runtime-aot classpath has no Chicory or kotlinx.serialization.
+        val loader = LinearMemory::class.java.classLoader
+        assertThrows<ClassNotFoundException> { Class.forName("com.dylibso.chicory.runtime.Memory", false, loader) }
+        assertThrows<ClassNotFoundException> { Class.forName("kotlinx.serialization.json.Json", false, loader) }
+    }
+}

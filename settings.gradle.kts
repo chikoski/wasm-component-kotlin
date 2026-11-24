@@ -7,6 +7,8 @@ include(":cli")
 
 // Runtimes used by generated bindings
 include(":runtime-api")
+include(":runtime-canonical")
+include(":runtime-aot")
 include(":runtime-wasmtime")
 include(":runtime-chicory")
 include(":runtime-wasi")

@@ -1,3 +1,5 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import org.junit.jupiter.api.Assertions.assertSame
@@ -6,6 +8,11 @@ import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.HostFunction
 import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.CanonicalAbi
+import wasm2kt.runtime.canonical.FuncType
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.WitType
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.Future

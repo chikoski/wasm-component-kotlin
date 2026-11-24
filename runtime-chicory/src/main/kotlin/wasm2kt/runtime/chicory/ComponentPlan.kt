@@ -1,3 +1,5 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import kotlinx.serialization.json.Json
@@ -10,6 +12,12 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import wasm2kt.runtime.canonical.FuncType
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.PlanAsyncRules
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.TranscodeOp
+import wasm2kt.runtime.canonical.WitType
 
 /**
  * In-memory form of the `plan.json` written by `wasm2kt-decompose`: everything needed to
@@ -33,17 +41,16 @@ class ComponentPlan internal constructor(
      * on the scheduler ([AsyncStore]); otherwise calls run directly on the caller's thread.
      */
     val usesAsync: Boolean by lazy {
-        trampolines.values.any { it is Trampoline.Async && it.kind !in SYNC_ADAPTER_KINDS } ||
-            options.values.any { it.async || it.callback != null } ||
-            exports.any { it.type.async } ||
-            initializers.any { it is Initializer.ExtractCallback }
+        PlanAsyncRules.usesAsync(
+            trampolineKinds = trampolines.values.asSequence().filterIsInstance<Trampoline.Async>().map { it.kind }.asIterable(),
+            hasAsyncOptionOrCallback = options.values.any { it.async || it.callback != null },
+            hasAsyncExport = exports.any { it.type.async },
+            hasExtractCallback = initializers.any { it is Initializer.ExtractCallback },
+        )
     }
 
     companion object {
         const val SUPPORTED_VERSION = 5
-
-        /** Intrinsics fused adapters use for synchronous calls too (moving resources between child components). */
-        private val SYNC_ADAPTER_KINDS = setOf("resource-transfer-own", "resource-transfer-borrow", "enter-sync-call", "exit-sync-call")
 
         fun parse(json: String): ComponentPlan = fromJson(Json.parseToJsonElement(json).jsonObject)
 
@@ -110,7 +117,7 @@ class ComponentPlan internal constructor(
                         name = o.str("name"),
                         func = parseDef(o.getValue("func").jsonObject),
                         options = o.int("options"),
-                        type = FuncType.fromJson(o.getValue("type").jsonObject),
+                        type = funcTypeFromJson(o.getValue("type").jsonObject),
                     )
                 },
             )
@@ -122,7 +129,7 @@ class ComponentPlan internal constructor(
                 o.int("index") to TransmitTableInfo(
                     index = o.int("index"),
                     instance = o.int("instance"),
-                    element = o["element"]?.takeUnless { it is JsonNull }?.let { WitType.fromJson(it.jsonObject) },
+                    element = o["element"]?.takeUnless { it is JsonNull }?.let { witTypeFromJson(it.jsonObject) },
                 )
             }
 
@@ -151,7 +158,7 @@ class ComponentPlan internal constructor(
         private fun parseTrampoline(o: JsonObject): Trampoline = when (val kind = o.str("kind")) {
             "lower-import" -> Trampoline.LowerImport(
                 import = o.int("import"),
-                type = FuncType.fromJson(o.getValue("type").jsonObject),
+                type = funcTypeFromJson(o.getValue("type").jsonObject),
                 options = o.int("options"),
             )
             "resource-new" -> Trampoline.ResourceNew(o.int("table"))
@@ -171,7 +178,7 @@ class ComponentPlan internal constructor(
                 options = o.optInt("options"),
                 async = o["async"]?.jsonPrimitive?.boolean ?: false,
                 cancellable = o["cancellable"]?.jsonPrimitive?.boolean ?: false,
-                results = o["results"]?.jsonArray?.map { WitType.fromJson(it.jsonObject) },
+                results = o["results"]?.jsonArray?.map { witTypeFromJson(it.jsonObject) },
                 resultsIndex = o.optInt("resultsIndex"),
                 memory = o.optInt("memory"),
                 callback = o.optInt("callback"),
@@ -189,6 +196,54 @@ class ComponentPlan internal constructor(
             "intrinsic" -> CoreDef.Intrinsic(o.str("name"))
             else -> error("Unknown core definition kind '$kind'")
         }
+
+        private fun witTypeFromJson(o: JsonObject): WitType = when (val k = o.getValue("k").jsonPrimitive.content) {
+            "bool" -> WitType.Bool
+            "s8" -> WitType.S8
+            "u8" -> WitType.U8
+            "s16" -> WitType.S16
+            "u16" -> WitType.U16
+            "s32" -> WitType.S32
+            "u32" -> WitType.U32
+            "s64" -> WitType.S64
+            "u64" -> WitType.U64
+            "f32" -> WitType.F32
+            "f64" -> WitType.F64
+            "char" -> WitType.Char
+            "string" -> WitType.Str
+            "record" -> WitType.Record(o.getValue("fields").jsonArray.map {
+                val f = it.jsonObject
+                f.getValue("name").jsonPrimitive.content to witTypeFromJson(f.getValue("type").jsonObject)
+            })
+            "tuple" -> WitType.Tuple(o.getValue("types").jsonArray.map { witTypeFromJson(it.jsonObject) })
+            "list" -> WitType.ListOf(witTypeFromJson(o.getValue("element").jsonObject))
+            "flags" -> WitType.Flags(o.getValue("names").jsonArray.map { it.jsonPrimitive.content })
+            "enum" -> WitType.Variant(WitType.VariantKind.ENUM, o.getValue("names").jsonArray.map { it.jsonPrimitive.content to null })
+            "variant" -> WitType.Variant(WitType.VariantKind.VARIANT, o.getValue("cases").jsonArray.map {
+                val c = it.jsonObject
+                c.getValue("name").jsonPrimitive.content to c.optType("type")
+            })
+            "option" -> WitType.Variant(WitType.VariantKind.OPTION, listOf("none" to null, "some" to witTypeFromJson(o.getValue("type").jsonObject)))
+            "result" -> WitType.Variant(WitType.VariantKind.RESULT, listOf("ok" to o.optType("ok"), "err" to o.optType("err")))
+            "own" -> WitType.Own(o.getValue("table").jsonPrimitive.int)
+            "borrow" -> WitType.Borrow(o.getValue("table").jsonPrimitive.int)
+            "stream" -> WitType.Stream(o.getValue("table").jsonPrimitive.int)
+            "future" -> WitType.Future(o.getValue("table").jsonPrimitive.int)
+            "error-context" -> WitType.ErrorContext
+            else -> WitType.Unsupported(listOfNotNull(k, o["detail"]?.jsonPrimitive?.content).joinToString(": "))
+        }
+
+        private fun funcTypeFromJson(o: JsonObject): FuncType = FuncType(
+            params = o.getValue("params").jsonArray.map {
+                val p = it.jsonObject
+                p.getValue("name").jsonPrimitive.content to witTypeFromJson(p.getValue("type").jsonObject)
+            },
+            results = o.getValue("results").jsonArray.map { witTypeFromJson(it.jsonObject) },
+            async = (o["async"] as? JsonPrimitive)?.content == "true",
+        )
+
+        private fun JsonObject.optType(key: String): WitType? =
+            this[key]?.takeUnless { it is JsonNull }?.let { witTypeFromJson(it.jsonObject) }
     }
 }
 
@@ -313,47 +368,6 @@ internal sealed interface Trampoline {
         val postReturn: Int?,
     ) : Trampoline
 }
-
-/** A string transcode a fused adapter performs, named as in wasmtime-environ (`Transcode::desc`). */
-internal enum class TranscodeOp(val desc: String) {
-    UTF8_TO_UTF8("utf8-to-utf8"),
-    UTF16_TO_UTF16("utf16-to-utf16"),
-    LATIN1_TO_LATIN1("latin1-to-latin1"),
-    LATIN1_TO_UTF16("latin1-to-utf16"),
-    LATIN1_TO_UTF8("latin1-to-utf8"),
-    UTF16_TO_COMPACT_PROBABLY_UTF16("utf16-to-compact-probably-utf16"),
-    UTF16_TO_COMPACT_UTF16("utf16-to-compact-utf16"),
-    UTF16_TO_LATIN1("utf16-to-latin1"),
-    UTF16_TO_UTF8("utf16-to-utf8"),
-    UTF8_TO_COMPACT_UTF16("utf8-to-compact-utf16"),
-    UTF8_TO_LATIN1("utf8-to-latin1"),
-    UTF8_TO_UTF16("utf8-to-utf16"),
-    ;
-
-    companion object {
-        fun fromPlan(desc: String): TranscodeOp? = values().firstOrNull { it.desc == desc }
-    }
-}
-
-internal enum class StringEncoding {
-    UTF8, UTF16, LATIN1_UTF16;
-
-    companion object {
-        fun fromPlan(value: String): StringEncoding = when (value) {
-            "utf8" -> UTF8
-            "utf16" -> UTF16
-            "latin1+utf16" -> LATIN1_UTF16
-            else -> error("Unknown string encoding '$value'")
-        }
-    }
-}
-
-/** `pkg:ns/iface@1.0` -> `iface`; a bare name is returned as is. */
-internal fun shortInterfaceName(qualified: String): String =
-    qualified.substringAfter('/', qualified).substringBefore('@')
-
-/** `pkg:ns/iface@1.0` -> `pkg:ns/iface`. */
-internal fun unversionedInterfaceName(qualified: String): String = qualified.substringBefore('@')
 
 private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 private fun JsonObject.int(key: String): Int = getValue(key).jsonPrimitive.int

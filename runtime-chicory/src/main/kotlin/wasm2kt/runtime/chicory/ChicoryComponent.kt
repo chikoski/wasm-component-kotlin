@@ -1,3 +1,5 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import com.dylibso.chicory.runtime.CompiledModule
@@ -39,6 +41,22 @@ import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.WitHostImportDispatcher
+import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.CanonicalAbi
+import wasm2kt.runtime.canonical.CanonicalMemory
+import wasm2kt.runtime.canonical.ComponentGuard
+import wasm2kt.runtime.canonical.HostValueException
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.Lifter
+import wasm2kt.runtime.canonical.Lowerer
+import wasm2kt.runtime.canonical.ResourceHandle
+import wasm2kt.runtime.canonical.ResourceTable
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.Transcoder
+import wasm2kt.runtime.canonical.UnsupportedWitTypeException
+import wasm2kt.runtime.canonical.shortInterfaceName
+import wasm2kt.runtime.canonical.trap
+import wasm2kt.runtime.canonical.unversionedInterfaceName
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.IdentityHashMap
@@ -108,6 +126,7 @@ internal class ChicoryComponentInstance(
     private val canonicalInstances = IdentityHashMap<Instance, Instance>()
     private val hasSharedTables: Boolean = plan.modules.any { m -> m.imports.any { it.kind == "table" } }
     internal val memories = HashMap<Int, Memory>()
+    internal val canonicalMemories = HashMap<Int, CanonicalMemory>()
     internal val reallocs = HashMap<Int, ExportFunction>()
     internal val postReturns = HashMap<Int, ExportFunction>()
     internal val callbacks = HashMap<Int, ExportFunction>()
@@ -138,25 +157,19 @@ internal class ChicoryComponentInstance(
 
     private val hostHandles = HashMap<Int, HostHandle>()
     private var nextHostHandle = 1
-    private var closed = false
 
-    private class PoisonState(val message: String, val isExit: Boolean)
-
-    /** Why the instance can no longer be used, once a trap or exit happened. */
-    private var poisoned: PoisonState? = null
-
-    /** A host call into the instance is in progress (the spec's `may_enter` is false). */
-    private var entered = false
-
-    /** The guest may call imports (false during `cabi_realloc` and post-return). */
-    internal var mayLeave = true
+    internal val guard = ComponentGuard()
 
     init {
         bind {
             for (init in plan.initializers) {
                 when (init) {
                     is Initializer.Instantiate -> instantiateModule(init)
-                    is Initializer.ExtractMemory -> memories[init.index] = instance(init.export.instance).exports().memory(init.export.name)
+                    is Initializer.ExtractMemory -> {
+                        val memory = instance(init.export.instance).exports().memory(init.export.name)
+                        memories[init.index] = memory
+                        canonicalMemories[init.index] = ChicoryMemory(memory)
+                    }
                     is Initializer.ExtractRealloc -> reallocs[init.index] = coreFunction(init.def)
                     is Initializer.ExtractPostReturn -> postReturns[init.index] = coreFunction(init.def)
                     is Initializer.ExtractTable -> tables[init.index] = instance(init.export.instance).exports().table(init.export.name)
@@ -173,7 +186,7 @@ internal class ChicoryComponentInstance(
     private class SyncExport(
         val opts: CanonOptions,
         val func: ExportFunction,
-        val memory: Memory?,
+        val memory: CanonicalMemory?,
         val realloc: ExportFunction?,
         val postReturn: ExportFunction?,
     )
@@ -209,7 +222,7 @@ internal class ChicoryComponentInstance(
                 SyncExport(
                     opts = opts,
                     func = coreFunction(export.func),
-                    memory = opts.memory?.let { memories[it] },
+                    memory = opts.memory?.let { canonicalMemories[it] },
                     realloc = opts.realloc?.let { reallocs[it] },
                     postReturn = opts.postReturn?.let { postReturns.getValue(it) },
                 )
@@ -242,29 +255,31 @@ internal class ChicoryComponentInstance(
         val functionName = export.qualifiedName
         // Calls into a component that uses the async ABI are tasks on its scheduler (ADR-0019).
         if (plan.usesAsync) return async.invoke(export, functionName, args)
-        if (entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        if (guard.entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
         val sync = checkNotNull(entry.sync)
         val type = export.type
         val opts = sync.opts
         val cx = Context(opts, Direction.HOST_TO_GUEST, cachedMemory = sync.memory, cachedRealloc = sync.realloc)
         val syncDepth = async.syncCallDepth()
-        entered = true
+        guard.entered = true
         try {
             // Lowering the host's arguments: errors in the values are the host's (not traps), but
             // cabi_realloc runs guest code, so a misbehaving realloc does trap (see Context.realloc).
             val lowerer = Lowerer(cx, args)
             val paramTypes = type.paramTypes
-            val flatParamCount = type.flatParamCount
+            val flatParamCount = mapChicoryUnsupported { type.flatParamCount }
             val coreArgs = try {
-                if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
-                } else if (flatParamCount == 0) {
-                    CanonicalAbi.EMPTY_LONG_ARRAY
-                } else {
-                    val out = LongArray(flatParamCount)
-                    var pos = 0
-                    for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
-                    out
+                mapChicoryUnsupported {
+                    if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                        longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
+                    } else if (flatParamCount == 0) {
+                        CanonicalAbi.EMPTY_LONG_ARRAY
+                    } else {
+                        val out = LongArray(flatParamCount)
+                        var pos = 0
+                        for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                        out
+                    }
                 }.also {
                     if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
                 }
@@ -282,11 +297,13 @@ internal class ChicoryComponentInstance(
             if (type.results.isNotEmpty()) {
                 guest {
                     val lifter = Lifter(cx, results)
-                    if (type.flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
-                        lifter.loadTuple(coreResults[0].toInt(), type.resultTuple)
-                    } else {
-                        val reader = Lifter.FlatReader(coreResults)
-                        for (rt in type.results) lifter.liftFlat(rt, reader)
+                    mapChicoryUnsupported {
+                        if (type.flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
+                            lifter.loadTuple(coreResults[0].toInt(), type.resultTuple)
+                        } else {
+                            val reader = Lifter.FlatReader(coreResults)
+                            for (rt in type.results) lifter.liftFlat(rt, reader)
+                        }
                     }
                 }
             }
@@ -301,7 +318,7 @@ internal class ChicoryComponentInstance(
         } finally {
             async.cleanupSyncCalls(syncDepth)
             cx.releaseLends()
-            entered = false
+            guard.entered = false
         }
     }
 
@@ -314,7 +331,7 @@ internal class ChicoryComponentInstance(
         checkUsable()
         val h = hostHandles[handle] ?: throw IllegalStateException("Resource handle $handle not found or already consumed")
         check(h.lends == 0) { "Resource handle $handle is borrowed by a call in progress and cannot be dropped" }
-        if (entered && hasDestructor(h.table)) {
+        if (guard.entered && hasDestructor(h.table)) {
             poison("Cannot reenter component instance: dropping resource handle $handle runs its destructor during another call")
         }
         hostHandles.remove(handle)
@@ -353,74 +370,38 @@ internal class ChicoryComponentInstance(
     }
 
     override fun close() {
-        closed = true
+        guard.closed = true
         hostHandles.clear()
         async.close()
     }
 
     // ---------------------------------------------------------------- instance state
 
-    internal fun checkUsable() {
-        check(!closed) { "Component instance is already closed" }
-        poisoned?.let { state ->
-            if (state.isExit) {
-                throw ComponentTrapException("Component instance has already exited (${state.message}); open a new session")
-            } else {
-                throw ComponentTrapException("Component instance is unusable after an earlier trap (${state.message}); open a new session")
-            }
-        }
-    }
+    internal fun checkUsable() = guard.checkUsable()
 
     /** Traps and poisons the instance. */
-    internal fun poison(message: String): Nothing {
-        markPoisoned(message)
-        throw ComponentTrapException(message)
-    }
-
-    private fun markPoisoned(message: String, isExit: Boolean = false) {
-        if (poisoned == null) {
-            poisoned = PoisonState(message, isExit)
-            // Guest threads still blocked can never run again.
-            async.abandon()
-        }
-    }
+    internal fun poison(message: String): Nothing = guard.poison(message) { async.abandon() }
 
     /**
      * Runs guest code (or validates guest-produced values). Anything thrown poisons the instance,
      * since the guest may be left mid-execution; wasm traps surface as [ComponentTrapException].
      */
-    internal inline fun <T> guest(block: () -> T): T = try {
+    internal inline fun <T> guest(block: () -> T): T =
+        guard.guest(mapExternalTrap = ::mapChicoryTrap, onPoison = { async.abandon() }, block = block)
+
+    internal fun asTrap(e: Throwable): Throwable = guard.mapTrap(e, ::mapChicoryTrap)
+
+    internal fun mapChicoryTrap(e: Throwable): Throwable? =
+        if (e is ChicoryException) ComponentTrapException("wasm trap: ${e.message}", e) else null
+
+    internal inline fun <T> withoutLeaving(block: () -> T): T = guard.withoutLeaving(block)
+
+    internal fun checkMayLeave(what: String) = guard.checkMayLeave(what) { async.abandon() }
+
+    internal inline fun <T> mapChicoryUnsupported(block: () -> T): T = try {
         block()
-    } catch (e: HostValueException) {
-        // The host's own arguments were wrong (ADR-0007): not a trap.
-        throw e.cause!!
-    } catch (e: Throwable) {
-        val surfaced = asTrap(e)
-        markPoisoned(surfaced.message ?: surfaced.javaClass.name, surfaced is ComponentExitException)
-        throw surfaced
-    }
-
-    internal fun asTrap(e: Throwable): Throwable {
-        var c: Throwable? = e
-        while (c != null) {
-            if (c is ComponentTrapException) return c
-            c = c.cause
-        }
-        return if (e is ChicoryException) ComponentTrapException("wasm trap: ${e.message}", e) else e
-    }
-
-    internal inline fun <T> withoutLeaving(block: () -> T): T {
-        val previous = mayLeave
-        mayLeave = false
-        try {
-            return block()
-        } finally {
-            mayLeave = previous
-        }
-    }
-
-    internal fun checkMayLeave(what: String) {
-        if (!mayLeave) poison("Cannot leave component instance: $what was called during cabi_realloc or post-return")
+    } catch (e: UnsupportedWitTypeException) {
+        throw UnsupportedOperationException("WIT type is not supported by the Chicory backend yet: ${e.detail}", e)
     }
 
     // ---------------------------------------------------------------- instantiation
@@ -620,7 +601,7 @@ internal class ChicoryComponentInstance(
             }
             is Trampoline.Transcode -> {
                 // Memories are extracted while instantiating, so look them up on first use.
-                val transcoder by lazy { Transcoder(t.op, memories.getValue(t.from), memories.getValue(t.to)) }
+                val transcoder by lazy { Transcoder(t.op, canonicalMemories.getValue(t.from), canonicalMemories.getValue(t.to)) }
                 com.dylibso.chicory.runtime.WasmFunctionHandle { _, args -> transcoder.apply(args) }
             }
             is Trampoline.Unsupported -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, _ ->
@@ -655,32 +636,36 @@ internal class ChicoryComponentInstance(
         val lifter = Lifter(cx, args)
         val type = t.type
         val paramTypes = type.paramTypes
-        val flatParamCount = type.flatParamCount
-        val flatResultCount = type.flatResultCount
+        val flatParamCount = mapChicoryUnsupported { type.flatParamCount }
+        val flatResultCount = mapChicoryUnsupported { type.flatResultCount }
 
-        if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
-            lifter.loadTuple(coreArgs[0].toInt(), type.paramTuple)
-        } else if (paramTypes.isNotEmpty()) {
-            val reader = Lifter.FlatReader(coreArgs)
-            for (pt in paramTypes) lifter.liftFlat(pt, reader)
+        mapChicoryUnsupported {
+            if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                lifter.loadTuple(coreArgs[0].toInt(), type.paramTuple)
+            } else if (paramTypes.isNotEmpty()) {
+                val reader = Lifter.FlatReader(coreArgs)
+                for (pt in paramTypes) lifter.liftFlat(pt, reader)
+            }
         }
 
         val results = WitWriter()
-        bind { (fn ?: hostFunction(import.dispatchKey)).call(args.toReader(), results) }
+        bind { guard.hostImport { (fn ?: hostFunction(import.dispatchKey)).call(args.toReader(), results) } }
         val reader = results.toReader()
 
         val lowerer = Lowerer(cx, reader)
-        val lowered = if (flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
-            // The caller passed a return pointer as the last core argument.
-            val retPtr = coreArgs[coreArgs.size - 1].toInt()
-            lowerer.storeTupleAt(type.resultTuple, retPtr)
-            null
-        } else if (type.results.isEmpty()) {
-            null
-        } else {
-            val out = LongArray(flatResultCount)
-            lowerer.lowerFlat(type.results[0], out, 0)
-            out
+        val lowered = mapChicoryUnsupported {
+            if (flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
+                // The caller passed a return pointer as the last core argument.
+                val retPtr = coreArgs[coreArgs.size - 1].toInt()
+                lowerer.storeTupleAt(type.resultTuple, retPtr)
+                null
+            } else if (type.results.isEmpty()) {
+                null
+            } else {
+                val out = LongArray(flatResultCount)
+                lowerer.lowerFlat(type.results[0], out, 0)
+                out
+            }
         }
         if (reader.remaining != 0) throw IllegalStateException("${reader.remaining} unread bytes after the results of host import '${import.dispatchKey}'")
         return lowered
@@ -710,7 +695,7 @@ internal class ChicoryComponentInstance(
         if (info.imported) {
             // The host defined this resource: tell it the component dropped its owning handle.
             val import = info.import?.let { plan.imports[it] } ?: return
-            hostFunction(import.resourceDropKey).call(WitWriter(4).apply { int(rep) }.toReader(), WitWriter(0))
+            guard.hostImport { hostFunction(import.resourceDropKey).call(WitWriter(4).apply { int(rep) }.toReader(), WitWriter(0)) }
         } else {
             info.resource?.let { resourceDtors[it] }?.apply(rep.toLong())
         }
@@ -736,13 +721,16 @@ internal class ChicoryComponentInstance(
         private val opts: CanonOptions,
         private val direction: Direction,
         private val borrowScope: (() -> Task)? = null,
-        private var cachedMemory: Memory? = null,
+        private var cachedMemory: CanonicalMemory? = null,
         private var cachedRealloc: ExportFunction? = null,
     ) : AbiContext {
-        override val memory: Memory
-            get() = cachedMemory ?: opts.memory?.let { memories.getValue(it) }?.also { cachedMemory = it }
+        override val memory: CanonicalMemory
+            get() = cachedMemory ?: opts.memory?.let { canonicalMemories.getValue(it) }?.also { cachedMemory = it }
                 ?: throw IllegalStateException("This function needs linear memory but its canonical options declare none")
         override val encoding: StringEncoding get() = opts.stringEncoding
+
+        override fun unsupportedAsync(what: String): Nothing =
+            throw UnsupportedOperationException("Passing a $what here is not supported by the Chicory backend")
 
         // Call-local resource tracking collections stay null until a resource is actually lowered or lifted.
         /** Host handles passed as `own` in this call; removed only once every argument lowered. */
@@ -934,25 +922,6 @@ internal class ChicoryComponentInstance(
             "Function name '$spec' is ambiguous; use one of: " +
                 candidates.joinToString { "${it.instance}#${it.name}" },
         )
-    }
-}
-
-/**
- * A resource table of the plan, as a view of its component instance's [HandleTable], which also
- * holds that instance's waitables, waitable sets and error contexts (the spec's `inst.handles`).
- * A handle of another resource type, or one that is not a resource, is reported as unknown.
- */
-internal class ResourceTable(private val handles: HandleTable, private val table: Int) {
-    fun insert(rep: Int, own: Boolean = true, scope: Task? = null): Int = handles.add(ResourceHandle(table, rep, own, scope))
-
-    fun rep(handle: Int): Int = (slotOrNull(handle) ?: trap("Unknown resource handle $handle")).rep
-
-    fun slotOrNull(handle: Int): ResourceHandle? = (handles.getOrNull(handle) as? ResourceHandle)?.takeIf { it.table == table }
-
-    fun remove(handle: Int): ResourceHandle {
-        val slot = slotOrNull(handle) ?: trap("Unknown resource handle $handle")
-        handles.remove(handle)
-        return slot
     }
 }
 

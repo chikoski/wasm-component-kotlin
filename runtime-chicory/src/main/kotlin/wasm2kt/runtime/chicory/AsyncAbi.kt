@@ -1,8 +1,9 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import com.dylibso.chicory.runtime.ExportFunction
 import com.dylibso.chicory.runtime.Instance
-import com.dylibso.chicory.runtime.Memory
 import com.dylibso.chicory.runtime.WasmFunctionHandle
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
@@ -24,15 +25,27 @@ import wasm2kt.runtime.HostResourceTable
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.CanonicalAbi
+import wasm2kt.runtime.canonical.CanonicalMemory
+import wasm2kt.runtime.canonical.HandleTable
+import wasm2kt.runtime.canonical.HostValueException
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.Lifter
+import wasm2kt.runtime.canonical.Lowerer
+import wasm2kt.runtime.canonical.ResourceHandle
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.UnsupportedWitTypeException
+import wasm2kt.runtime.canonical.WitType
+import wasm2kt.runtime.canonical.checkRange
+import wasm2kt.runtime.canonical.trap
+import wasm2kt.runtime.canonical.unsigned
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resumeWithException
-
-/** Wraps an error in the host's own values found while running on a guest thread (ADR-0007). */
-internal class HostValueException(cause: Throwable, val handled: Boolean = false) : RuntimeException(cause)
 
 /**
  * The Component Model async ABI for one [ChicoryComponentInstance] (#16, ADR-0018): host calls into a
@@ -423,20 +436,22 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         lateinit var task: Task
         val cx = c.context(opts, ChicoryComponentInstance.Direction.HOST_TO_GUEST) { task }
         val paramTypes = type.paramTypes
-        val flatParamCount = type.flatParamCount
+        val flatParamCount = c.mapChicoryUnsupported { type.flatParamCount }
         val onStart = {
             // Lowering the host's arguments: errors in the values are the host's, not traps (ADR-0007).
             val coreArgs: LongArray
             try {
                 val lowerer = Lowerer(cx, args)
-                coreArgs = if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
-                    longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
-                } else if (flatParamCount == 0) {
-                    CanonicalAbi.EMPTY_LONG_ARRAY
-                } else {
-                    LongArray(flatParamCount).also { out ->
-                        var pos = 0
-                        for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                coreArgs = c.mapChicoryUnsupported {
+                    if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                        longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
+                    } else if (flatParamCount == 0) {
+                        CanonicalAbi.EMPTY_LONG_ARRAY
+                    } else {
+                        LongArray(flatParamCount).also { out ->
+                            var pos = 0
+                            for (pt in paramTypes) pos = lowerer.lowerFlat(pt, out, pos)
+                        }
                     }
                 }
                 if (args.remaining != 0) throw IllegalArgumentException("${args.remaining} unread bytes after the arguments of '$functionName'")
@@ -469,11 +484,13 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 val results = writerFor(type.results)
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
-                if (type.flatResultCount > limit) {
-                    lifter.loadTuple(flat[0].toInt(), type.resultTuple)
-                } else {
-                    val reader = Lifter.FlatReader(flat)
-                    type.results.forEach { lifter.liftFlat(it, reader) }
+                c.mapChicoryUnsupported {
+                    if (type.flatResultCount > limit) {
+                        lifter.loadTuple(flat[0].toInt(), type.resultTuple)
+                    } else {
+                        val reader = Lifter.FlatReader(flat)
+                        type.results.forEach { lifter.liftFlat(it, reader) }
+                    }
                 }
                 done(Result.success(results.toReader()))
             }
@@ -482,7 +499,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             inst, type.async, opts.async,
             callee = c.coreFunction(export.func).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } },
             callback = opts.callback?.let { cb -> c.callbacks.getValue(cb).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } } },
-            postReturn = opts.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r); Unit } },
+            postReturn = opts.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r) } },
             checkReturn = { tr, trOpts -> tr.results == type.results && sameLiftOptions(trOpts, opts) },
             onStart = onStart,
             onResolve = onResolve,
@@ -555,7 +572,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val fn = if (t.type.async) c.asyncHostImport(t.import) else null
         if (fn == null) {
             val results = writerFor(t.type.results)
-            c.bind { c.hostImport(t.import).call(args.toReader(), results) }
+            c.bind { c.guard.hostImport { c.hostImport(t.import).call(args.toReader(), results) } }
             val reader = results.toReader()
             if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
             checkImportResults(reader, key)
@@ -661,9 +678,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     private fun checkMayLeave(what: String) = c.checkMayLeave(what)
 
-    private fun memoryOf(options: Int?): Memory {
+    private fun memoryOf(options: Int?): CanonicalMemory {
         val opts = options?.let { plan.options.getValue(it) } ?: throw IllegalStateException("This built-in needs canonical options")
-        return opts.memory?.let { c.memories.getValue(it) } ?: throw IllegalStateException("This built-in needs a memory")
+        return opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This built-in needs a memory")
     }
 
     fun trampoline(t: Trampoline.Async): WasmFunctionHandle = when (t.kind) {
@@ -885,10 +902,10 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
     }
 
-    private fun unpackEvent(memory: Memory, ptr: Int, e: Event): LongArray {
+    private fun unpackEvent(memory: CanonicalMemory, ptr: Int, e: Event): LongArray {
         checkRange(memory, ptr, 8, 4, "event pointer")
-        memory.writeI32(ptr, e.p1)
-        memory.writeI32(ptr + 4, e.p2)
+        memory.writeInt(ptr, e.p1)
+        memory.writeInt(ptr + 4, e.p2)
         return longArrayOf(e.code.toLong())
     }
 
@@ -1677,7 +1694,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         init {
             if (unsigned(length) > HandleTable.MAX_LENGTH) trap("Stream buffer length exceeds the maximum")
             if (element != null) {
-                val memory = opts.memory?.let { c.memories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
+                val memory = opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
                 checkRange(memory, ptr, unsigned(length) * size, element.align, "stream buffer")
             }
         }
@@ -1716,7 +1733,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         private val lifted: MutableList<Any>?,
         private val lowered: List<Any>?,
     ) : AbiContext {
-        override val memory: Memory get() = opts.memory?.let { c.memories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
+        override val memory: CanonicalMemory get() = opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
         override val encoding: StringEncoding get() = opts.stringEncoding
 
         override fun realloc(align: Int, size: Int): Int {
