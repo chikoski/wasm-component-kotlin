@@ -11,6 +11,7 @@ dependencies {
     testImplementation(project(":generator"))
     testImplementation(project(":runtime-wasmtime"))
     testImplementation(project(":runtime-chicory"))
+    testImplementation(project(":runtime-aot"))
     testImplementation(project(":runtime-wasi"))
     testImplementation(project(":test-support"))
     testImplementation(project(":tooling"))

@@ -126,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* Core Wasm の JVM バイトコード直接生成と仕様適合テストの整備
 * Core Wasm の型付き IR とビルド時パーサーアダプタの実装
 * 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
 * `samples/android-glitch-camera` の独立リポジトリへの切り出し
@@ -140,6 +141,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#184](https://github.com/chikoski/wasm-component-kotlin/issues/184) では、型付き IR から JVM バイトコードを直接生成する `AotCoreCompiler`、`WasmBytecodeEmitter`、`AotModuleClassEmitter`、および事前分割器 `IrMethodSplitter` を `:tooling` に実装しました。各モジュールのインスタンス状態、`data` セグメント、共有グローバルセル、複数引数スピル用 `AotSpillFrame`、および他モジュールとの `call_indirect` 連携を備えます。事前分割は後行順と適応的サイズ再計算で JVM と ART のメソッド上限内に収め、リポジトリ内の全フィクスチャおよび `runtime-chicory` の全コアモジュールでフォールバックなしのコンパイルと `verifyAll` 検証を通過しました。`pixelfray` の `png-glitch-component.wasm` については `-Dwasm2kt.extraWasm` を用いたローカル検証で同条件の通過を確認しています。さらに `conformance/core-wasm/` に Core Wasm 2.0 公式テストスイート 90 ファイルを取り込み、`:integration-tests` の `CoreWasmConformanceTest` で全 28,018 コマンドを検証しました。テキスト形式の `assert_malformed` 581 件はバイナリ検証の対象外としてスキップし、[ADR-0013](adr/0013-multi-memory-adapters.md) と [ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の複数メモリ対応方針と競合する 13 件を `conformance/core-wasm/skip.txt` で管理したうえで、残る 27,424 件のバイナリおよび実行時テストがすべて通過しました。なおコンポーネント全体の統合生成、R8 縮小、および Android ART エミュレーター上での実行検証は、後続の `#185` から `#188` の課題で進めます。
 
 [#183](https://github.com/chikoski/wasm-component-kotlin/issues/183) では、パーサー実装に依存しない Core Wasm の型付き IR とビルド時パーサーアダプタを `:tooling` に追加しました。型付き IR は型、import、export、global、memory、table、data や elem セグメントを保持します。ブロックと分岐ターゲットの解決結果に加え、スタック型とローカル型を持つ命令列と構造化ダンプ `WasmIrDump` も備えます。対応する Core Wasm の範囲は MVP、sign-extension、non-trapping float-to-int、bulk-memory、reference-types、multi-value、multi-memory、extended-const、および mutable-globals です。`com.dylibso.chicory` への参照は `ChicoryWasmAdapter` のみに限定しました。サポート外の機能や命令を検出した場合は `UnsupportedWasmFeatureException` を送出し、対象のコアモジュール番号、関数番号、および機能名や命令名を報告します。なお課題本文に記載のある `samples/android-glitch-camera/png-glitch-component.wasm` は PR #179 で `chikoski/pixelfray` へ移行済みです。今回の変換検査は `heavy.wasm` を含む 18 件の全フィクスチャと `runtime-chicory` 内の 35 件のコアモジュール、および各仕様群と不正系を対象に実施しました。
 

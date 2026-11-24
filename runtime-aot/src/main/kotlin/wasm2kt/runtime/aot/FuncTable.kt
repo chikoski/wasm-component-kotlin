@@ -113,8 +113,10 @@ sealed class FuncRef {
     }
 
     companion object {
+        @JvmStatic
         fun core(owner: Any, funcIndex: Int, signature: String): Core = Core(owner, funcIndex, signature)
 
+        @JvmStatic
         fun host(
             signature: String,
             trampoline: HostTrampoline,

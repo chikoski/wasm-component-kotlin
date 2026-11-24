@@ -411,6 +411,34 @@ class WasmIrTest {
     }
 
     @Test
+    fun `rejects defined global in global elem and data constant initializers`() {
+        val globalInitMod = wasmModule(
+            6 to globalSection(
+                globalDef(I32, mutable = false, listOf(0x41, 0x00, 0x0B)),
+                globalDef(I32, mutable = false, listOf(0x23, 0x00, 0x0B)),
+            ),
+        )
+        assertThrows<IllegalArgumentException> { ChicoryWasmAdapter.convert(globalInitMod, moduleIndex = 0) }
+
+        val elemInitMod = wasmModule(
+            1 to typeSection(funcType(emptyList(), emptyList())),
+            3 to funcSection(0),
+            4 to tableSection(listOf(0x70, 0x00, 0x01)),
+            6 to globalSection(globalDef(I32, mutable = false, listOf(0x41, 0x00, 0x0B))),
+            9 to elementSection(listOf(0x00, 0x23, 0x00, 0x0B, 0x01, 0x00)),
+            10 to codeSection(codeBody(emptyList(), emptyList())),
+        )
+        assertThrows<IllegalArgumentException> { ChicoryWasmAdapter.convert(elemInitMod, moduleIndex = 1) }
+
+        val dataInitMod = wasmModule(
+            5 to memorySection(0x00 to 1),
+            6 to globalSection(globalDef(I32, mutable = false, listOf(0x41, 0x00, 0x0B))),
+            11 to dataSection(activeData(0, listOf(0x23, 0x00, 0x0B), byteArrayOf(0x41))),
+        )
+        assertThrows<IllegalArgumentException> { ChicoryWasmAdapter.convert(dataInitMod, moduleIndex = 2) }
+    }
+
+    @Test
     fun `reports structured UnsupportedWasmFeatureException for unsupported proposals`() {
         // 1. SIMD128 instruction inside imported=1 + body=0 => functionIndex = 1, moduleIndex = 3
         val simdMod = wasmModule(

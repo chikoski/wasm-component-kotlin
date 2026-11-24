@@ -1,7 +1,7 @@
 # Component Model の公式テストスイート
 
 `component-model/` は、[WebAssembly/component-model](https://github.com/WebAssembly/component-model) の `test/` を、決まったコミットで写したものです（コミットは `component-model/COMMIT`、ライセンスは同じディレクトリの `LICENSE` と `LICENSE-APACHE`。Apache 2.0）。
-Chicory バックエンドが仕様に適合しているかを、Wasmtime との差分ではなく、仕様の正解で確かめるために使います（#30、[ADR-0017](../docs/adr/0017-component-model-conformance-suite.md)）。
+Chicory バックエンドが仕様に適合しているかを、Wasmtime との差分ではなく、仕様の正解で確かめるために使います（#30、[ADR-0017](../docs/adr/0017-component-model-conformance-suite.md)）。Core Wasm 2.0 仕様の適合性テストは [Core Wasm 2.0 公式テストスイート](core-wasm/README.md) に独立して配置しています。
 
 ## 実行
 
