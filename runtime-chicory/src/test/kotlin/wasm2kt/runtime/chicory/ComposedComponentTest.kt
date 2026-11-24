@@ -1,3 +1,5 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import com.dylibso.chicory.runtime.ByteArrayMemory
@@ -13,6 +15,13 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.FuncType
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.ResourceHandle
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.TranscodeOp
+import wasm2kt.runtime.canonical.Transcoder
+import wasm2kt.runtime.canonical.WitType
 import wasm2kt.testing.JsonBackend
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -376,7 +385,7 @@ class ComposedComponentTest {
         assertEquals(19, expectedUtf8.size)
 
         writeUtf16Units(0, boundaryUnits)
-        val utf16ToUtf8 = Transcoder(TranscodeOp.UTF16_TO_UTF8, from, to)
+        val utf16ToUtf8 = Transcoder(TranscodeOp.UTF16_TO_UTF8, ChicoryMemory(from), ChicoryMemory(to))
         val full = utf16ToUtf8.apply(longArrayOf(0, boundaryUnits.size.toLong(), 0, expectedUtf8.size.toLong(), 0))!!
         assertEquals(9L, full[0])
         assertEquals(19L, full[1])
@@ -405,12 +414,12 @@ class ComposedComponentTest {
                 utf16ToUtf8.apply(longArrayOf(0, bad.size.toLong(), 0, 8, 0))
             }
             assertThrows<ComponentTrapException> {
-                Transcoder(TranscodeOp.UTF16_TO_UTF16, from, to).apply(longArrayOf(0, bad.size.toLong(), 0))
+                Transcoder(TranscodeOp.UTF16_TO_UTF16, ChicoryMemory(from), ChicoryMemory(to)).apply(longArrayOf(0, bad.size.toLong(), 0))
             }
         }
 
         from.write(0, expectedUtf8)
-        assertNull(Transcoder(TranscodeOp.UTF8_TO_UTF8, from, to).apply(longArrayOf(0, expectedUtf8.size.toLong(), 0)))
+        assertNull(Transcoder(TranscodeOp.UTF8_TO_UTF8, ChicoryMemory(from), ChicoryMemory(to)).apply(longArrayOf(0, expectedUtf8.size.toLong(), 0)))
         assertArrayEquals(expectedUtf8, to.readBytes(0, expectedUtf8.size))
 
         val badUtf8Sequences = listOf(
@@ -423,7 +432,7 @@ class ComposedComponentTest {
         for (badUtf8 in badUtf8Sequences) {
             from.write(0, badUtf8)
             val err = assertThrows<ComponentTrapException> {
-                Transcoder(TranscodeOp.UTF8_TO_UTF8, from, to).apply(longArrayOf(0, badUtf8.size.toLong(), 0))
+                Transcoder(TranscodeOp.UTF8_TO_UTF8, ChicoryMemory(from), ChicoryMemory(to)).apply(longArrayOf(0, badUtf8.size.toLong(), 0))
             }
             assertTrue("invalid utf8 encoding" in err.message!!, err.message)
         }

@@ -1,7 +1,8 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import com.dylibso.chicory.runtime.ByteArrayMemory
-import com.dylibso.chicory.runtime.Memory
 import com.dylibso.chicory.wasm.types.MemoryLimits
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -15,6 +16,12 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.CanonicalMemory
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.Lifter
+import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.WitType
 import wasm2kt.testing.JsonBackend
 import java.nio.file.Paths
 import kotlin.test.assertEquals
@@ -119,7 +126,7 @@ class CanonicalAbiStrictnessTest {
     fun `lifting u8 and u32 lists and utf8 strings matches payload across bulk copy boundaries`() {
         val mem = ByteArrayMemory(MemoryLimits(4, 4))
         val cx = object : AbiContext {
-            override val memory: Memory = mem
+            override val memory: CanonicalMemory = ChicoryMemory(mem)
             override val encoding: StringEncoding = StringEncoding.UTF8
             override fun realloc(align: Int, size: Int): Int = error("unused")
             override fun lowerOwn(table: Int, id: Int): Int = error("unused")

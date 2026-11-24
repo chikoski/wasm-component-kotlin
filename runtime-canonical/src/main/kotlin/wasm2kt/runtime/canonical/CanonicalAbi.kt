@@ -1,9 +1,29 @@
-package wasm2kt.runtime.chicory
+@file:OptIn(InternalWasm2KtApi::class)
 
-import com.dylibso.chicory.runtime.Memory
+package wasm2kt.runtime.canonical
+
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitWriter
+
+/** Thrown when a component uses a WIT type that the backend does not support yet. */
+@InternalWasm2KtApi
+class UnsupportedWitTypeException(val detail: String) :
+    UnsupportedOperationException("WIT type is not supported yet: $detail")
+
+@InternalWasm2KtApi
+enum class StringEncoding {
+    UTF8, UTF16, LATIN1_UTF16;
+
+    companion object {
+        fun fromPlan(value: String): StringEncoding = when (value) {
+            "utf8" -> UTF8
+            "utf16" -> UTF16
+            "latin1+utf16" -> LATIN1_UTF16
+            else -> error("Unknown string encoding '$value'")
+        }
+    }
+}
 
 /**
  * The Component Model canonical ABI (32-bit linear memory), between linear memory and the binary
@@ -14,7 +34,8 @@ import wasm2kt.runtime.WitWriter
  * break an ABI rule raise [ComponentTrapException]; values coming from the host that do not fit
  * the WIT type raise [IllegalArgumentException].
  */
-internal object CanonicalAbi {
+@InternalWasm2KtApi
+object CanonicalAbi {
     const val MAX_FLAT_PARAMS = 16
     const val MAX_FLAT_RESULTS = 1
 
@@ -25,6 +46,7 @@ internal object CanonicalAbi {
     const val CANONICAL_FLOAT32_NAN = 0x7fc00000
     const val CANONICAL_FLOAT64_NAN = 0x7ff8000000000000L
 
+    @InternalWasm2KtApi
     enum class CoreType { I32, I64, F32, F64 }
 
     val EMPTY_LONG_ARRAY = LongArray(0)
@@ -121,14 +143,13 @@ internal object CanonicalAbi {
         else -> 4 * ((n + 31) / 32)
     }
 
-
-    internal fun unsupported(t: WitType.Unsupported): Nothing =
-        throw UnsupportedOperationException("WIT type is not supported by the Chicory backend yet: ${t.detail}")
+    fun unsupported(t: WitType.Unsupported): Nothing = throw UnsupportedWitTypeException(t.detail)
 }
 
 /** Where lifted/lowered values live, and how resources map to handles, for one call direction. */
-internal interface AbiContext {
-    val memory: Memory
+@InternalWasm2KtApi
+interface AbiContext {
+    val memory: CanonicalMemory
     val encoding: StringEncoding
     fun realloc(align: Int, size: Int): Int
     fun lowerOwn(table: Int, id: Int): Int
@@ -147,16 +168,17 @@ internal interface AbiContext {
     fun lowerFuture(table: Int, id: Int): Int = unsupportedAsync("future")
     fun liftErrorContext(handle: Int): Int = unsupportedAsync("error-context")
     fun lowerErrorContext(id: Int): Int = unsupportedAsync("error-context")
-}
 
-private fun unsupportedAsync(what: String): Nothing =
-    throw UnsupportedOperationException("Passing a $what here is not supported by the Chicory backend")
+    fun unsupportedAsync(what: String): Nothing =
+        throw UnsupportedOperationException("Passing a $what here is not supported by this backend")
+}
 
 /**
  * Reads host values from [r] (the binary format) into core wasm values / linear memory. Values that
  * do not fit the WIT type are host errors ([IllegalArgumentException]).
  */
-internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
+@InternalWasm2KtApi
+class Lowerer(private val cx: AbiContext, private val r: WitReader) {
     fun lowerFlat(t: WitType, out: LongArray, pos: Int): Int {
         when (t) {
             WitType.Bool -> { out[pos] = bool().toLong(); return pos + 1 }
@@ -232,20 +254,20 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             WitType.Bool -> m.writeByte(ptr, bool().toByte())
             WitType.S8, WitType.U8 -> m.writeByte(ptr, r.byte())
             WitType.S16, WitType.U16 -> m.writeShort(ptr, r.short())
-            WitType.S32, WitType.U32 -> m.writeI32(ptr, r.int())
+            WitType.S32, WitType.U32 -> m.writeInt(ptr, r.int())
             WitType.S64, WitType.U64 -> m.writeLong(ptr, r.long())
-            WitType.F32 -> m.writeI32(ptr, f32Bits())
+            WitType.F32 -> m.writeInt(ptr, f32Bits())
             WitType.F64 -> m.writeLong(ptr, f64Bits())
-            WitType.Char -> m.writeI32(ptr, char())
+            WitType.Char -> m.writeInt(ptr, char())
             WitType.Str -> {
                 val packed = storeString()
-                m.writeI32(ptr, packed.toInt())
-                m.writeI32(ptr + 4, (packed ushr 32).toInt())
+                m.writeInt(ptr, packed.toInt())
+                m.writeInt(ptr + 4, (packed ushr 32).toInt())
             }
             is WitType.ListOf -> {
                 val packed = storeList(t.element)
-                m.writeI32(ptr, packed.toInt())
-                m.writeI32(ptr + 4, (packed ushr 32).toInt())
+                m.writeInt(ptr, packed.toInt())
+                m.writeInt(ptr + 4, (packed ushr 32).toInt())
             }
             is WitType.Record -> storeFields(t.fieldTypes, ptr)
             is WitType.Tuple -> storeFields(t.types, ptr)
@@ -255,7 +277,7 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
                     0 -> Unit
                     1 -> m.writeByte(ptr, words[0].toByte())
                     2 -> m.writeShort(ptr, words[0].toShort())
-                    else -> words.forEachIndexed { i, w -> m.writeI32(ptr + 4 * i, w) }
+                    else -> words.forEachIndexed { i, w -> m.writeInt(ptr + 4 * i, w) }
                 }
             }
             is WitType.Variant -> {
@@ -263,17 +285,17 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
                 when (t.discSize) {
                     1 -> m.writeByte(ptr, index.toByte())
                     2 -> m.writeShort(ptr, index.toShort())
-                    else -> m.writeI32(ptr, index)
+                    else -> m.writeInt(ptr, index)
                 }
                 t.cases[index].second?.let { caseType ->
                     store(caseType, ptr + t.payloadOffset)
                 }
             }
-            is WitType.Own -> m.writeI32(ptr, cx.lowerOwn(t.table, r.int()))
-            is WitType.Borrow -> m.writeI32(ptr, cx.lowerBorrow(t.table, r.int()))
-            is WitType.Stream -> m.writeI32(ptr, cx.lowerStream(t.table, r.int()))
-            is WitType.Future -> m.writeI32(ptr, cx.lowerFuture(t.table, r.int()))
-            WitType.ErrorContext -> m.writeI32(ptr, cx.lowerErrorContext(r.int()))
+            is WitType.Own -> m.writeInt(ptr, cx.lowerOwn(t.table, r.int()))
+            is WitType.Borrow -> m.writeInt(ptr, cx.lowerBorrow(t.table, r.int()))
+            is WitType.Stream -> m.writeInt(ptr, cx.lowerStream(t.table, r.int()))
+            is WitType.Future -> m.writeInt(ptr, cx.lowerFuture(t.table, r.int()))
+            WitType.ErrorContext -> m.writeInt(ptr, cx.lowerErrorContext(r.int()))
             is WitType.Unsupported -> CanonicalAbi.unsupported(t)
         }
     }
@@ -318,24 +340,24 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
             when (cx.encoding) {
                 StringEncoding.UTF8 -> {
                     val ptr = alloc(1, n.toLong())
-                    if (n > 0) cx.memory.write(ptr, a, off, n)
+                    if (n > 0) cx.memory.writeBytes(ptr, a, off, n)
                     packPtrLen(ptr, n)
                 }
                 StringEncoding.UTF16 -> {
                     val s = String(a, off, n, Charsets.UTF_8)
                     val ptr = alloc(2, 2L * s.length)
-                    cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
+                    cx.memory.writeBytes(ptr, s.toByteArray(Charsets.UTF_16LE))
                     packPtrLen(ptr, s.length)
                 }
                 StringEncoding.LATIN1_UTF16 -> {
                     val s = String(a, off, n, Charsets.UTF_8)
                     if (s.all { it.code <= 0xFF }) {
                         val ptr = alloc(2, s.length.toLong())
-                        cx.memory.write(ptr, s.toByteArray(Charsets.ISO_8859_1))
+                        cx.memory.writeBytes(ptr, s.toByteArray(Charsets.ISO_8859_1))
                         packPtrLen(ptr, s.length)
                     } else {
                         val ptr = alloc(2, 2L * s.length)
-                        cx.memory.write(ptr, s.toByteArray(Charsets.UTF_16LE))
+                        cx.memory.writeBytes(ptr, s.toByteArray(Charsets.UTF_16LE))
                         packPtrLen(ptr, s.length or UTF16_TAG)
                     }
                 }
@@ -351,7 +373,7 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
         require(byteLength <= CanonicalAbi.MAX_LIST_BYTE_LENGTH) { "List of $byteLength bytes exceeds the Canonical ABI limit" }
         val ptr = alloc(element.align, byteLength)
         if (element.isRawInteger) {
-            if (byteLength > 0) r.region(byteLength.toInt()) { a, off -> cx.memory.write(ptr, a, off, byteLength.toInt()) }
+            if (byteLength > 0) r.region(byteLength.toInt()) { a, off -> cx.memory.writeBytes(ptr, a, off, byteLength.toInt()) }
         } else {
             for (i in 0 until n) store(element, ptr + i * size)
         }
@@ -420,7 +442,9 @@ internal class Lowerer(private val cx: AbiContext, private val r: WitReader) {
  * Reads guest values from core wasm values / linear memory and writes them to [w] in the binary
  * format. Values that break an ABI rule trap ([ComponentTrapException]).
  */
-internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
+@InternalWasm2KtApi
+class Lifter(private val cx: AbiContext, private val w: WitWriter) {
+    @InternalWasm2KtApi
     class FlatReader(private val values: LongArray) {
         private var i = 0
         fun next(): Long = values[i++]
@@ -498,8 +522,8 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     fun load(t: WitType, ptr: Int) {
         val m = cx.memory
         when (t) {
-            WitType.Bool -> w.bool(m.read(ptr).toInt() != 0)
-            WitType.S8, WitType.U8 -> w.byte(m.read(ptr).toInt())
+            WitType.Bool -> w.bool(m.readByte(ptr).toInt() != 0)
+            WitType.S8, WitType.U8 -> w.byte(m.readByte(ptr).toInt())
             WitType.S16, WitType.U16 -> w.short(m.readShort(ptr).toInt())
             WitType.S32, WitType.U32 -> w.int(m.readInt(ptr))
             WitType.S64, WitType.U64 -> w.long(m.readLong(ptr))
@@ -513,7 +537,7 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             is WitType.Flags -> flags(
                 when (t.size) {
                     0 -> IntArray(0)
-                    1 -> intArrayOf(m.read(ptr).toInt() and 0xFF)
+                    1 -> intArrayOf(m.readByte(ptr).toInt() and 0xFF)
                     2 -> intArrayOf(m.readShort(ptr).toInt() and 0xFFFF)
                     else -> IntArray((t.names.size + 31) / 32) { i -> m.readInt(ptr + 4 * i) }
                 },
@@ -521,7 +545,7 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
             )
             is WitType.Variant -> {
                 val index = when (t.discSize) {
-                    1 -> m.read(ptr).toInt() and 0xFF
+                    1 -> m.readByte(ptr).toInt() and 0xFF
                     2 -> m.readShort(ptr).toInt() and 0xFFFF
                     else -> m.readInt(ptr)
                 }
@@ -624,53 +648,10 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
         }
     }
 
-    companion object {
-        private const val BULK_COPY_THRESHOLD = 256
-        private const val BULK_COPY_CHUNK = 65536
-    }
-
-    /**
-     * Copies [byteLength] already-bounds-checked bytes from [memory] at [ptr] directly into [w],
-     * returning the start offset in [w].
-     *
-     * `com.dylibso.chicory.runtime.Memory` only provides bulk reads via `readBytes(addr, len)`
-     * (there is no overload writing into an existing `ByteArray`), so payloads of at least
-     * [BULK_COPY_THRESHOLD] bytes are copied in [BULK_COPY_CHUNK]-byte chunks to bound temporary
-     * allocation while avoiding per-byte or per-long calls.
-     */
-    private fun copyFromMemory(memory: Memory, ptr: Int, byteLength: Int): Int {
+    /** Copies [byteLength] already-bounds-checked bytes from [memory] at [ptr] directly into [w]. */
+    private fun copyFromMemory(memory: CanonicalMemory, ptr: Int, byteLength: Int): Int {
         val start = w.reserve(byteLength)
-        val buf = w.buffer
-        if (byteLength >= BULK_COPY_THRESHOLD) {
-            var offset = 0
-            while (offset < byteLength) {
-                val chunkLen = minOf(byteLength - offset, BULK_COPY_CHUNK)
-                val chunk = memory.readBytes(ptr + offset, chunkLen)
-                System.arraycopy(chunk, 0, buf, start + offset, chunkLen)
-                offset += chunkLen
-            }
-            return start
-        }
-        var dst = start
-        var src = ptr
-        val end8 = ptr + (byteLength and -8)
-        while (src < end8) {
-            val v = memory.readLong(src)
-            buf[dst] = v.toByte()
-            buf[dst + 1] = (v ushr 8).toByte()
-            buf[dst + 2] = (v ushr 16).toByte()
-            buf[dst + 3] = (v ushr 24).toByte()
-            buf[dst + 4] = (v ushr 32).toByte()
-            buf[dst + 5] = (v ushr 40).toByte()
-            buf[dst + 6] = (v ushr 48).toByte()
-            buf[dst + 7] = (v ushr 56).toByte()
-            src += 8
-            dst += 8
-        }
-        val end = ptr + byteLength
-        while (src < end) {
-            buf[dst++] = memory.read(src++)
-        }
+        if (byteLength > 0) memory.readBytesInto(ptr, w.buffer, start, byteLength)
         return start
     }
 
@@ -717,22 +698,26 @@ internal class Lifter(private val cx: AbiContext, private val w: WitWriter) {
 
 private const val UTF16_TAG = 1 shl 31
 
-internal fun trap(message: String): Nothing = throw ComponentTrapException(message)
+@InternalWasm2KtApi
+fun trap(message: String): Nothing = throw ComponentTrapException(message)
 
-internal fun unsigned(i: Int): Long = i.toLong() and 0xFFFF_FFFFL
+@InternalWasm2KtApi
+fun unsigned(i: Int): Long = i.toLong() and 0xFFFF_FFFFL
 
 /** Traps unless `[ptr, ptr + byteLength)` lies inside [memory] and [ptr] is aligned to [align]. */
-internal fun checkRange(memory: Memory, ptr: Int, byteLength: Long, align: Int, what: String) {
+@InternalWasm2KtApi
+fun checkRange(memory: CanonicalMemory, ptr: Int, byteLength: Long, align: Int, what: String) {
     val p = unsigned(ptr)
     if (p % align != 0L) trap("Misaligned $what: $p is not a multiple of $align")
-    val size = memory.pages().toLong() * Memory.PAGE_SIZE
+    val size = memory.byteSize
     if (p + byteLength > size) trap("Out-of-bounds $what: [$p, ${p + byteLength}) exceeds linear memory of $size bytes")
 }
 
 /**
  * Encoding checks without `CharsetDecoder`, which is costly to create on Android (#58).
  */
-internal object Utf8 {
+@InternalWasm2KtApi
+object Utf8 {
     /** Well-formed UTF-8 (no overlong forms, surrogates or code points past U+10FFFF). */
     fun isValid(a: ByteArray, offset: Int, length: Int): Boolean {
         var i = offset

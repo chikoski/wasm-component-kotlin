@@ -237,4 +237,20 @@ class ComponentBuildTest {
             }
         }
     }
+
+    @Test
+    fun `PlanCheck usesAsync matches ComponentPlan usesAsync for all decomposed fixtures`() {
+        val componentsDir = fixtures.parent.resolve("runtime-chicory/src/test/resources/components")
+        val componentDirs = componentsDir.listDirectoryEntries().filter { Files.isDirectory(it) }.sortedBy { it.name }
+        assertTrue(componentDirs.isNotEmpty())
+        for (dir in componentDirs) {
+            val planJson = Files.readString(dir.resolve("plan.json"))
+            val planUsesAsync = wasm2kt.runtime.chicory.ComponentPlan.parse(planJson).usesAsync
+            assertEquals(
+                planUsesAsync,
+                PlanCheck.usesAsync(dir),
+                "usesAsync mismatch between ComponentPlan and PlanCheck for ${dir.name}",
+            )
+        }
+    }
 }

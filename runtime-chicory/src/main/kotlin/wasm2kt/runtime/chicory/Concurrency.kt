@@ -1,6 +1,14 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import wasm2kt.runtime.HostResourceTable
+import wasm2kt.runtime.canonical.BorrowScope
+import wasm2kt.runtime.canonical.HandleTable
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
+import wasm2kt.runtime.canonical.ResourceHandle
+import wasm2kt.runtime.canonical.trap
+import wasm2kt.runtime.canonical.unsigned
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.Semaphore
@@ -175,52 +183,6 @@ internal object StackSwitching {
 }
 
 // ------------------------------------------------------------------- tables
-
-/**
- * A component instance's table of handles (the reference's `Table`): index 0 is never used, and
- * freed indices are reused most recently freed first.
- */
-internal class HandleTable {
-    private val array = ArrayList<Any?>().apply { add(null) }
-    private val free = ArrayList<Int>()
-
-    fun getOrNull(i: Int): Any? = if (i <= 0 || i >= array.size) null else array[i]
-
-    fun get(i: Int): Any = getOrNull(i) ?: trap("Unknown handle index ${unsigned(i)}")
-
-    fun add(e: Any): Int {
-        if (free.isNotEmpty()) {
-            val i = free.removeAt(free.size - 1)
-            array[i] = e
-            return i
-        }
-        val i = array.size
-        if (i > MAX_LENGTH) trap("Handle table is full")
-        array += e
-        return i
-    }
-
-    fun remove(i: Int): Any {
-        val e = get(i)
-        array[i] = null
-        free += i
-        return e
-    }
-
-    fun values(): List<Any> = array.filterNotNull()
-
-    companion object {
-        const val MAX_LENGTH = (1 shl 28) - 1
-    }
-}
-
-/**
- * A resource handle in a component instance's table. [borrowScope] is the task a `borrow` handle
- * was lent to (null for an `own` handle, and for borrows lent by a synchronous host call).
- */
-internal class ResourceHandle(val table: Int, val rep: Int, val own: Boolean, val borrowScope: Task? = null) {
-    var numLends = 0
-}
 
 /** The reference's `ErrorContext`. Error contexts are shared, not moved, between instances. */
 internal class ErrorContext(val debugMessage: String)
@@ -409,11 +371,11 @@ internal class Task(
     val checkReturn: (Trampoline.Async, CanonOptions) -> Boolean,
     val onStart: () -> LongArray,
     val onResolve: (LongArray?) -> Unit,
-) {
+) : BorrowScope {
     enum class State { INITIAL, STARTED, PENDING_CANCEL, CANCEL_DELIVERED, RESOLVED }
 
     var state = State.INITIAL
-    var numBorrows = 0
+    override var numBorrows = 0
     val lenders = ArrayList<ResourceHandle>()
     var implicitThread: GuestThread? = null
     val threads = ArrayList<GuestThread>()
