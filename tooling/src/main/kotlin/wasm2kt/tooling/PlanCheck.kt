@@ -20,11 +20,16 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Finds what a decomposed component uses that the Chicory backend cannot run yet, so builds can
+ * Finds what a decomposed component uses that the runtime backends cannot run yet, so builds can
  * report it instead of the app failing on the device the first time the feature is used (#39).
  *
+ * Phase 1 of the AOT backend shares these rules because [wasm2kt.tooling.aot.AotComponentCodegen]
+ * lowers the same entries into `unsupportedTrampoline` calls at run time; async rejection for AOT
+ * is checked separately via [usesAsync].
+ *
  * The runtime fails on the same entries: an `unsupported` trampoline throws when called, an
- * `unsupported` type when a value of it is lifted or lowered. The async ABI is supported (#16).
+ * `unsupported` type when a value of it is lifted or lowered. The async ABI is supported (#16) on
+ * the Chicory backend.
  */
 object PlanCheck {
     /** One human-readable line per problem, in plan order; empty when everything is supported. */
@@ -35,7 +40,7 @@ object PlanCheck {
         for (e in plan.array("exports")) {
             val o = e.jsonObject
             val name = o.str("instance")?.let { "$it#${o.str("name")}" } ?: o.str("name")
-            unsupportedTypes(o["type"]).distinct().forEach { problems += "export '$name' uses a type the Chicory backend does not support: $it" }
+            unsupportedTypes(o["type"]).distinct().forEach { problems += "export '$name' uses a type not supported by this backend: $it" }
         }
 
         val imports = plan.array("imports").associate { i ->
@@ -49,24 +54,24 @@ object PlanCheck {
                 "unsupported" -> intrinsics += o.str("detail") ?: "unknown"
                 "lower-import" -> {
                     val name = imports[o["import"]?.jsonPrimitive?.intOrNull] ?: "import"
-                    unsupportedTypes(o["type"]).distinct().forEach { problems += "import '$name' uses a type the Chicory backend does not support: $it" }
+                    unsupportedTypes(o["type"]).distinct().forEach { problems += "import '$name' uses a type not supported by this backend: $it" }
                 }
                 "task-return" -> {
-                    unsupportedTypes(o["results"]).distinct().forEach { problems += "task.return uses a type the Chicory backend does not support: $it" }
+                    unsupportedTypes(o["results"]).distinct().forEach { problems += "task.return uses a type not supported by this backend: $it" }
                 }
             }
         }
         for (s in plan.array("streamTables")) {
             val o = s.jsonObject
             val idx = o["index"]?.jsonPrimitive?.intOrNull?.toString() ?: "?"
-            unsupportedTypes(o["element"]).distinct().forEach { problems += "stream table $idx uses a type the Chicory backend does not support: $it" }
+            unsupportedTypes(o["element"]).distinct().forEach { problems += "stream table $idx uses a type not supported by this backend: $it" }
         }
         for (f in plan.array("futureTables")) {
             val o = f.jsonObject
             val idx = o["index"]?.jsonPrimitive?.intOrNull?.toString() ?: "?"
-            unsupportedTypes(o["element"]).distinct().forEach { problems += "future table $idx uses a type the Chicory backend does not support: $it" }
+            unsupportedTypes(o["element"]).distinct().forEach { problems += "future table $idx uses a type not supported by this backend: $it" }
         }
-        intrinsics.distinct().forEach { problems += "component intrinsic not supported by the Chicory backend: $it" }
+        intrinsics.distinct().forEach { problems += "component intrinsic not supported by this backend: $it" }
         return problems.distinct()
     }
 

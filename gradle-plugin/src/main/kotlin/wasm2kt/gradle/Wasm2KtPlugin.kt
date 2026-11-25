@@ -12,6 +12,15 @@ import org.gradle.api.tasks.TaskProvider
 import java.util.Properties
 import javax.inject.Inject
 
+/** Code generation / execution backend used for a [Wasm2KtComponent] (ADR-0023). */
+enum class Wasm2KtBackend {
+    /** Compile core modules via Chicory and resolve component plans at runtime (default). */
+    CHICORY,
+
+    /** Directly compile core modules into JVM bytecode with static component wiring. */
+    AOT,
+}
+
 /**
  * ```
  * wasm2kt {
@@ -29,8 +38,15 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
         project.objects.domainObjectContainer(Wasm2KtComponent::class.java)
 
     /**
-     * Adds the matching `io.github.wasm2kt:runtime-chicory` dependency to `implementation`.
-     * Turn off to manage the runtime dependency yourself.
+     * Backend used by components that do not override [Wasm2KtComponent.backend]. Defaults to
+     * [Wasm2KtBackend.CHICORY].
+     */
+    abstract val backend: Property<Wasm2KtBackend>
+
+    /**
+     * Adds the matching runtime dependency (`runtime-chicory` and/or `runtime-aot`, matching the
+     * configured component backends) to `implementation`. Turn off to manage runtime dependencies
+     * yourself.
      */
     abstract val addRuntimeDependency: Property<Boolean>
 
@@ -41,9 +57,10 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
     abstract val addWasiDependency: Property<Boolean>
 
     /**
-     * Fail the build when a component uses features the Chicory backend does not support yet
-     * (component intrinsics, types or async). Off by default: the build only warns, and calls that
-     * reach those features throw at run time.
+     * Fail the build when a component uses features its backend does not support yet (component
+     * intrinsics, types, or async). Off by default for warnings: the build only warns and calls
+     * that reach unsupported features throw at run time. Note that [Wasm2KtBackend.AOT] always
+     * fails the build on async components regardless of this flag.
      */
     abstract val failOnUnsupportedFeatures: Property<Boolean>
 
@@ -72,6 +89,9 @@ abstract class Wasm2KtComponent @Inject constructor(private val name: String) : 
     /** Imported interfaces (`wasi:filesystem/types@0.3.0`) mapped to the Kotlin package of existing bindings (ADR-0014). */
     abstract val interfaceMappings: MapProperty<String, String>
 
+    /** Code generation backend for this component; inherits [Wasm2KtExtension.backend] when unset. */
+    abstract val backend: Property<Wasm2KtBackend>
+
     /**
      * Uses the bindings already generated into [packageName] for the imported interface [interfaceName]
      * (fully qualified, with its version) instead of generating it, like wit-bindgen's `with` (ADR-0014).
@@ -84,6 +104,7 @@ abstract class Wasm2KtComponent @Inject constructor(private val name: String) : 
 class Wasm2KtPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
+        extension.backend.convention(Wasm2KtBackend.CHICORY)
         extension.addRuntimeDependency.convention(true)
         extension.addWasiDependency.convention(false)
         extension.failOnUnsupportedFeatures.convention(false)
@@ -94,7 +115,7 @@ class Wasm2KtPlugin : Plugin<Project> {
             c.isCanBeConsumed = false
             c.isCanBeResolved = true
             c.isVisible = false
-            c.description = "wasm2kt build-time tooling (decomposer, Chicory compiler, code generator)."
+            c.description = "wasm2kt build-time tooling (decomposer, compilers, code generator)."
             c.defaultDependencies { it.add(project.dependencies.create("io.github.wasm2kt:tooling:${pluginVersion()}")) }
         }
         project.tasks.withType(Wasm2KtToolingTask::class.java).configureEach { it.toolingClasspath.from(tooling) }
@@ -107,10 +128,22 @@ class Wasm2KtPlugin : Plugin<Project> {
             // nothing to compile against, but the wasm2kt tasks still work on their own.
             val hasImplementation = extension.components.isNotEmpty() &&
                 project.configurations.findByName("implementation") != null
+            val backends = extension.components.map { it.backend.get() }.toSet()
             if (extension.addRuntimeDependency.get() && hasImplementation) {
-                project.dependencies.add("implementation", "io.github.wasm2kt:runtime-chicory:${pluginVersion()}")
+                if (Wasm2KtBackend.CHICORY in backends) {
+                    project.dependencies.add("implementation", "io.github.wasm2kt:runtime-chicory:${pluginVersion()}")
+                }
+                if (Wasm2KtBackend.AOT in backends) {
+                    project.dependencies.add("implementation", "io.github.wasm2kt:runtime-aot:${pluginVersion()}")
+                }
             }
             if (extension.addWasiDependency.get()) {
+                if (backends == setOf(Wasm2KtBackend.AOT)) {
+                    project.logger.warn(
+                        "wasm2kt: addWasiDependency is enabled while all components use the AOT backend; " +
+                            "WASI 0.3 uses async component features that the AOT backend does not support yet",
+                    )
+                }
                 if (!extension.useLibraryInterfaces.get()) {
                     project.logger.warn(
                         "wasm2kt: addWasiDependency is enabled while useLibraryInterfaces is false; " +
@@ -132,37 +165,49 @@ class Wasm2KtPlugin : Plugin<Project> {
     }
 
     private fun registerTasks(project: Project, extension: Wasm2KtExtension, component: Wasm2KtComponent): ComponentTasks {
+        component.backend.convention(extension.backend)
         val cap = component.name.split(Regex("[^A-Za-z0-9]+")).filter { it.isNotEmpty() }
             .joinToString("") { it.replaceFirstChar(Char::uppercaseChar) }
         val base = project.layout.buildDirectory.dir("wasm2kt/${component.name}")
         val internalPackage = component.packageName.map { internalPackage(it, component.name) }
+        val backendName = component.backend.map { it.name }
 
         val decompose = project.tasks.register("wasm2ktDecompose$cap", Wasm2KtDecomposeTask::class.java) { t ->
             t.group = GROUP
             t.description = "Decomposes the '${component.name}' WebAssembly component into core modules."
             t.component.set(component.source)
-            t.failOnUnsupportedFeatures.set(extension.failOnUnsupportedFeatures)
             t.outputDir.set(base.map { it.dir("decomposed") })
+        }
+        val check = project.tasks.register("wasm2ktCheck$cap", Wasm2KtCheckTask::class.java) { t ->
+            t.group = GROUP
+            t.description = "Validates the '${component.name}' component against the configured backend."
+            t.decomposedDir.set(decompose.flatMap { it.outputDir })
+            t.sourceName.set(component.source.map { it.asFile.name })
+            t.backend.set(backendName)
+            t.failOnUnsupportedFeatures.set(extension.failOnUnsupportedFeatures)
+            t.warnings.set(base.map { it.file("check-warnings.txt") })
         }
         val compile = project.tasks.register("wasm2ktCompile$cap", Wasm2KtCompileTask::class.java) { t ->
             t.group = GROUP
             t.description = "Compiles the '${component.name}' core modules to JVM bytecode."
             t.decomposedDir.set(decompose.flatMap { it.outputDir })
             t.internalPackage.set(internalPackage)
+            t.backend.set(backendName)
             t.jar.set(base.map { it.file("wasm2kt-${component.name}.jar") })
             t.warnings.set(base.map { it.file("compile-warnings.txt") })
+            t.dependsOn(check)
         }
         // Build-time warnings are printed by tasks without outputs, so they show on every build, also
-        // when decomposing or compiling is UP-TO-DATE or FROM-CACHE (#78).
-        val decomposeWarnings = project.tasks.register("wasm2ktDecomposeWarnings$cap", Wasm2KtWarningsTask::class.java) { t ->
-            t.description = "Prints the build-time warnings of decomposing the '${component.name}' component."
-            t.reports.from(decompose.flatMap { it.outputDir.file(WARNINGS_FILE) })
+        // when checking or compiling is UP-TO-DATE or FROM-CACHE (#78).
+        val checkWarnings = project.tasks.register("wasm2ktCheckWarnings$cap", Wasm2KtWarningsTask::class.java) { t ->
+            t.description = "Prints the build-time warnings of checking the '${component.name}' component."
+            t.reports.from(check.flatMap { it.warnings })
         }
         val compileWarnings = project.tasks.register("wasm2ktCompileWarnings$cap", Wasm2KtWarningsTask::class.java) { t ->
             t.description = "Prints the build-time warnings of compiling the '${component.name}' core modules."
             t.reports.from(compile.flatMap { it.warnings })
         }
-        decompose.configure { it.finalizedBy(decomposeWarnings) }
+        check.configure { it.finalizedBy(checkWarnings) }
         compile.configure { it.finalizedBy(compileWarnings) }
         val generate = project.tasks.register("wasm2ktGenerate$cap", Wasm2KtGenerateTask::class.java) { t ->
             t.group = GROUP
@@ -171,11 +216,13 @@ class Wasm2KtPlugin : Plugin<Project> {
             t.componentName.set(component.name)
             t.packageName.set(component.packageName)
             t.internalPackage.set(internalPackage)
+            t.backend.set(backendName)
             t.world.set(component.world)
             t.interfaceMappings.set(component.interfaceMappings)
             t.outputDir.set(base.map { it.dir("kotlin") })
+            t.dependsOn(check)
         }
-        return ComponentTasks(component, decompose, compile, generate)
+        return ComponentTasks(component, decompose, check, compile, generate)
     }
 
     /** Must match `wasm2kt.tooling.ComponentBuild.internalPackage` (the tooling isn't on this class path). */
@@ -197,6 +244,7 @@ class Wasm2KtPlugin : Plugin<Project> {
 class ComponentTasks(
     val component: Wasm2KtComponent,
     val decompose: TaskProvider<Wasm2KtDecomposeTask>,
+    val check: TaskProvider<Wasm2KtCheckTask>,
     val compile: TaskProvider<Wasm2KtCompileTask>,
     val generate: TaskProvider<Wasm2KtGenerateTask>,
 )

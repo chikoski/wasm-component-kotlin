@@ -66,7 +66,7 @@ class ComponentBuildTest {
         // A map<K, V> (#71) is not.
         Decomposer.decompose(fixtures.resolve("map-type.wasm"), dir.resolve("map"))
         assertEquals(
-            listOf("export 'size' uses a type the Chicory backend does not support: Map(TypeMapIndex(0))"),
+            listOf("export 'size' uses a type not supported by this backend: Map(TypeMapIndex(0))"),
             PlanCheck.unsupportedFeatures(dir.resolve("map")),
         )
     }
@@ -120,11 +120,11 @@ class ComponentBuildTest {
         )
         assertEquals(
             listOf(
-                "export 'my:pkg/api#stream' uses a type the Chicory backend does not support: Stream(0)",
-                "import 'my:pkg/io#read' uses a type the Chicory backend does not support: Future(0)",
-                "task.return uses a type the Chicory backend does not support: Map(1)",
-                "stream table 2 uses a type the Chicory backend does not support: Map(0)",
-                "future table 3 uses a type the Chicory backend does not support: FixedLengthList(1)",
+                "export 'my:pkg/api#stream' uses a type not supported by this backend: Stream(0)",
+                "import 'my:pkg/io#read' uses a type not supported by this backend: Future(0)",
+                "task.return uses a type not supported by this backend: Map(1)",
+                "stream table 2 uses a type not supported by this backend: Map(0)",
+                "future table 3 uses a type not supported by this backend: FixedLengthList(1)",
             ),
             PlanCheck.unsupportedFeatures(dir),
         )
@@ -252,5 +252,23 @@ class ComponentBuildTest {
                 "usesAsync mismatch between ComponentPlan and PlanCheck for ${dir.name}",
             )
         }
+    }
+
+    @Test
+    fun `ComponentBuild run with AOT backend emits class and data outputs without plan or meta`(@TempDir dir: Path) {
+        val output = ComponentBuild.run(
+            component = fixtures.resolve("counter.wasm"),
+            componentName = "counter-aot",
+            packageName = "com.example.aotbuild",
+            workDir = dir,
+            backend = BuildBackend.AOT,
+        )
+        assertTrue(Files.exists(output.kotlinDir.resolve("com/example/aotbuild/CounterAotComponent.kt")))
+        val classFiles = Files.walk(output.classesDir).use { s -> s.filter { it.toString().endsWith(".class") }.toList() }
+        assertTrue(classFiles.isNotEmpty())
+        val resourceFiles = if (Files.exists(output.resourcesDir)) {
+            Files.walk(output.resourcesDir).use { s -> s.filter { Files.isRegularFile(it) }.toList() }
+        } else emptyList()
+        assertTrue(resourceFiles.none { it.toString().endsWith("plan.json") || it.toString().endsWith(".meta") })
     }
 }

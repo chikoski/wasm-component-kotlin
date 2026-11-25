@@ -10,7 +10,9 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.zip.ZipFile
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class Wasm2KtPluginFunctionalTest {
@@ -136,23 +138,23 @@ class Wasm2KtPluginFunctionalTest {
 
         // Default: a warning naming what will fail at run time, and the build goes on.
         buildScript(fail = false)
-        val warned = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
-        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in warned.output, warned.output)
+        val warned = runner(dir, "wasm2ktCheckComposed", "--build-cache").build()
+        assertTrue("composed.wasm uses features this backend does not support yet" in warned.output, warned.output)
         assertTrue("Map(TypeMapIndex(0))" in warned.output, warned.output)
-        // The warning comes again when decomposing is UP-TO-DATE, and when it comes FROM-CACHE (#78).
-        val again = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
-        assertEquals(TaskOutcome.UP_TO_DATE, again.task(":wasm2ktDecomposeComposed")?.outcome)
-        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in again.output, again.output)
+        // The warning comes again when checking is UP-TO-DATE, and when it comes FROM-CACHE (#78).
+        val again = runner(dir, "wasm2ktCheckComposed", "--build-cache").build()
+        assertEquals(TaskOutcome.UP_TO_DATE, again.task(":wasm2ktCheckComposed")?.outcome)
+        assertTrue("composed.wasm uses features this backend does not support yet" in again.output, again.output)
         dir.resolve("build/wasm2kt").deleteRecursively() // this project has no `clean` task
-        val cached = runner(dir, "wasm2ktDecomposeComposed", "--build-cache").build()
-        assertEquals(TaskOutcome.FROM_CACHE, cached.task(":wasm2ktDecomposeComposed")?.outcome)
-        assertTrue("composed.wasm uses features the Chicory backend does not support yet" in cached.output, cached.output)
+        val cached = runner(dir, "wasm2ktCheckComposed", "--build-cache").build()
+        assertEquals(TaskOutcome.FROM_CACHE, cached.task(":wasm2ktCheckComposed")?.outcome)
+        assertTrue("composed.wasm uses features this backend does not support yet" in cached.output, cached.output)
 
         // Opted in: the same check fails the build.
         buildScript(fail = true)
-        val failed = runner(dir, "wasm2ktDecomposeComposed").buildAndFail()
+        val failed = runner(dir, "wasm2ktCheckComposed").buildAndFail()
         assertTrue("Map(TypeMapIndex(0))" in failed.output, failed.output)
-        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktDecomposeComposed")?.outcome)
+        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktCheckComposed")?.outcome)
     }
 
     @Test
@@ -730,6 +732,447 @@ class Wasm2KtPluginFunctionalTest {
             assertEquals(TaskOutcome.FROM_CACHE, third.task(task)?.outcome, "$task should come from build cache after clean")
         }
         assertEquals(TaskOutcome.FROM_CACHE, third.task(":testDebugUnitTest")?.outcome, ":testDebugUnitTest should come from build cache after clean")
+    }
+
+    @Test
+    fun `AOT backend opt-in runs components without runtime-chicory or plan resources`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "aot-consumer"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+                application
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.AOT)
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                    }
+                    register("counter") {
+                        source.set(file("counter.wasm"))
+                        packageName.set("com.example.ct")
+                    }
+                }
+            }
+            application { mainClass.set("MainKt") }
+            tasks.register("printClasspath") {
+                val cp = configurations.runtimeClasspath.map { files -> files.map { it.name }.sorted() }
+                doLast { println("CP=" + cp.get().joinToString(",")) }
+            }
+            """.trimIndent(),
+        )
+        val src = dir.resolve("src/main/kotlin").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            import com.example.rt.*
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.scale
+            import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
+
+            fun main() {
+                val imports = imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
+                val rt = withSession(RoundtripComponent, imports) {
+                    "scaled=${'$'}{scale(7)},tag=${'$'}{describeCode("ERR", 404u)}"
+                }
+                val ct = com.example.ct.withSession(CounterComponent) {
+                    Counter(41).use { c -> c.increment(); "counter=${'$'}{c.getValue()}" }
+                }
+                println("AOT_RESULT ${'$'}rt;${'$'}ct")
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "run", "printClasspath", "--configuration-cache", "--build-cache").build()
+        assertTrue("AOT_RESULT scaled=42,tag=ERR#404;counter=42" in result.output, result.output)
+        val cpLine = result.output.lines().first { it.startsWith("CP=") }
+        assertTrue("runtime-aot" in cpLine, "Expected runtime-aot on classpath: $cpLine")
+        assertFalse("runtime-chicory" in cpLine, "Unexpected runtime-chicory on AOT-only classpath: $cpLine")
+        assertFalse("chicory" in cpLine, "Unexpected Chicory artifact on AOT-only classpath: $cpLine")
+
+        val rtJar = dir.resolve("build/wasm2kt/roundtrip/wasm2kt-roundtrip.jar")
+        assertTrue(rtJar.isFile)
+        ZipFile(rtJar).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertTrue(names.any { it.endsWith(".class") }, "Expected AOT .class entries in jar: $names")
+            assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in AOT jar: $names")
+        }
+    }
+
+    @Test
+    fun `mixed components use separate backends and share decompose cache`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "mixed-consumer"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        fun writeBuild(roundtripBackend: String) = dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+                application
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                        backend.set(Wasm2KtBackend.$roundtripBackend)
+                    }
+                    register("counter") {
+                        source.set(file("counter.wasm"))
+                        packageName.set("com.example.ct")
+                        backend.set(Wasm2KtBackend.AOT)
+                    }
+                }
+            }
+            application { mainClass.set("MainKt") }
+            tasks.register("printClasspath") {
+                val cp = configurations.runtimeClasspath.map { files -> files.map { it.name }.sorted() }
+                doLast { println("CP=" + cp.get().joinToString(",")) }
+            }
+            """.trimIndent(),
+        )
+        writeBuild("CHICORY")
+        val src = dir.resolve("src/main/kotlin").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            import com.example.rt.*
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.scale
+            import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
+
+            fun main() {
+                val imports = imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
+                val rt = withSession(RoundtripComponent, imports) { scale(7) }
+                val ct = com.example.ct.withSession(CounterComponent) { Counter(41).use { c -> c.increment(); c.getValue() } }
+                println("MIXED ${'$'}rt:${'$'}ct")
+            }
+            """.trimIndent(),
+        )
+
+        val mixed = runner(dir, "run", "printClasspath", "--build-cache").build()
+        assertTrue("MIXED 42:42" in mixed.output, mixed.output)
+        val cpLine = mixed.output.lines().first { it.startsWith("CP=") }
+        assertTrue("runtime-chicory" in cpLine && "runtime-aot" in cpLine, "Expected both runtimes on mixed classpath: $cpLine")
+        ZipFile(dir.resolve("build/wasm2kt/roundtrip/wasm2kt-roundtrip.jar")).use { zip ->
+            assertTrue(zip.entries().asSequence().any { it.name.endsWith("plan.json") })
+        }
+
+        // Switching roundtrip to AOT keeps wasm2ktDecomposeRoundtrip UP_TO_DATE while re-running check/compile/generate.
+        writeBuild("AOT")
+        val switched = runner(dir, "run", "--build-cache").build()
+        assertTrue("MIXED 42:42" in switched.output, switched.output)
+        assertEquals(TaskOutcome.UP_TO_DATE, switched.task(":wasm2ktDecomposeRoundtrip")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, switched.task(":wasm2ktCheckRoundtrip")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, switched.task(":wasm2ktCompileRoundtrip")?.outcome)
+        assertEquals(TaskOutcome.SUCCESS, switched.task(":wasm2ktGenerateRoundtrip")?.outcome)
+        ZipFile(dir.resolve("build/wasm2kt/roundtrip/wasm2kt-roundtrip.jar")).use { zip ->
+            assertFalse(zip.entries().asSequence().any { it.name.endsWith("plan.json") || it.name.endsWith(".meta") })
+        }
+    }
+
+    @Test
+    fun `AOT backend rejects async components even when failOnUnsupportedFeatures is false`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("async-stream.wasm"), dir.resolve("async-stream.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"async-aot\"\n$ISOLATED_BUILD_CACHE")
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins { id("io.github.wasm2kt") }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.AOT)
+                failOnUnsupportedFeatures.set(false)
+                components {
+                    register("async-app") {
+                        source.set(file("async-stream.wasm"))
+                        packageName.set("com.example.async")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val failed = runner(dir, "wasm2ktGenerateAsyncApp").buildAndFail()
+        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktCheckAsyncApp")?.outcome)
+        assertTrue("AOT backend does not support" in failed.output && "async" in failed.output, failed.output)
+    }
+
+    @Test
+    fun `addWasiDependency warns when all components use AOT backend`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"wasi-aot-warn\"\n$ISOLATED_BUILD_CACHE")
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.AOT)
+                addWasiDependency.set(true)
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "help").build()
+        assertTrue("addWasiDependency is enabled while all components use the AOT backend" in result.output, result.output)
+    }
+
+    @Test
+    fun `android application AOT release build shrinks cleanly without Chicory or plan resources`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
+        val escapedRepo = testRepo.replace("\\", "/")
+        dir.resolve("gradle.properties").writeText("org.gradle.jvmargs=-Xmx2g\n")
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "android-aot-app"
+            pluginManagement {
+                repositories {
+                    maven(url = uri("$escapedRepo"))
+                    google()
+                    mavenCentral()
+                    gradlePluginPortal()
+                }
+            }
+            dependencyResolutionManagement {
+                repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+                repositories {
+                    maven(url = uri("$escapedRepo"))
+                    google()
+                    mavenCentral()
+                }
+            }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                id("com.android.application") version "$agpVersion"
+                id("org.jetbrains.kotlin.jvm") version "$kotlinVersion" apply false
+                id("io.github.wasm2kt") version "$wasm2ktVersion"
+            }
+            android {
+                namespace = "com.example.aotapp"
+                compileSdk = 35
+                defaultConfig {
+                    applicationId = "com.example.aotapp"
+                    minSdk = 26
+                    targetSdk = 35
+                }
+                buildTypes {
+                    release {
+                        isMinifyEnabled = true
+                        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+                    }
+                }
+                compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                }
+            }
+            kotlin {
+                compilerOptions {
+                    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                }
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.AOT)
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                    }
+                    register("counter") {
+                        source.set(file("counter.wasm"))
+                        packageName.set("com.example.ct")
+                    }
+                }
+            }
+            dependencies {
+                testImplementation("junit:junit:4.13.2")
+            }
+            """.trimIndent(),
+        )
+        dir.resolve("src/main").apply { mkdirs() }.resolve("AndroidManifest.xml").writeText("<manifest />\n")
+        dir.resolve("proguard-rules.pro").writeText("-keep class com.example.aotapp.AotEntry { *; }\n")
+        val mainSrc = dir.resolve("src/main/kotlin/com/example/aotapp").apply { mkdirs() }
+        mainSrc.resolve("AotEntry.kt").writeText(
+            """
+            package com.example.aotapp
+
+            import com.example.ct.CounterComponent
+            import com.example.ct.exports.example.counter.counter_api.Counter
+            import com.example.rt.RoundtripComponent
+            import com.example.rt.describeCode
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.scale
+            import com.example.rt.imports
+            import com.example.rt.withSession
+
+            object AotEntry {
+                fun runSample(): String {
+                    val imports = imports(
+                        exampleRoundtripEnvProvider = {
+                            object : EnvProvider {
+                                override fun getMultiplier(): Int = 6
+                                override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                            }
+                        },
+                    )
+                    val rt = withSession(RoundtripComponent, imports) {
+                        "${'$'}{scale(7)}:${'$'}{describeCode("AOT", 200u)}"
+                    }
+                    val ct = com.example.ct.withSession(CounterComponent) {
+                        Counter(41).use { c -> c.increment(); c.getValue() }
+                    }
+                    return "${'$'}rt:${'$'}ct"
+                }
+            }
+            """.trimIndent(),
+        )
+        val testSrc = dir.resolve("src/test/kotlin/com/example/aotapp").apply { mkdirs() }
+        testSrc.resolve("AotEntryTest.kt").writeText(
+            """
+            package com.example.aotapp
+
+            import org.junit.Assert.assertEquals
+            import org.junit.Test
+
+            class AotEntryTest {
+                @Test
+                fun runsAotComponents() {
+                    assertEquals("42:AOT#200:42", AotEntry.runSample())
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val aotTasks = listOf(
+            ":wasm2ktDecomposeRoundtrip",
+            ":wasm2ktCheckRoundtrip",
+            ":wasm2ktCompileRoundtrip",
+            ":wasm2ktGenerateRoundtripDebug",
+            ":wasm2ktGenerateRoundtripRelease",
+            ":wasm2ktDecomposeCounter",
+            ":wasm2ktCheckCounter",
+            ":wasm2ktCompileCounter",
+            ":wasm2ktGenerateCounterDebug",
+            ":wasm2ktGenerateCounterRelease",
+        )
+        val first = runner(
+            dir,
+            "testDebugUnitTest",
+            "assembleRelease",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        for (task in aotTasks + ":testDebugUnitTest" + ":assembleRelease") {
+            assertEquals(TaskOutcome.SUCCESS, first.task(task)?.outcome, "$task should succeed")
+        }
+
+        val apk = dir.resolve("build/outputs/apk/release")
+            .walkTopDown()
+            .firstOrNull { it.isFile && it.extension == "apk" }
+            ?: error("Expected release APK under build/outputs/apk/release")
+        ZipFile(apk).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in release APK: $names")
+        }
+
+        val second = runner(
+            dir,
+            "testDebugUnitTest",
+            "assembleRelease",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        assertTrue(
+            "Reusing configuration cache" in second.output || "Configuration cache entry reused" in second.output,
+            second.output,
+        )
+        for (task in aotTasks + ":testDebugUnitTest" + ":assembleRelease") {
+            assertEquals(TaskOutcome.UP_TO_DATE, second.task(task)?.outcome, "$task should be UP_TO_DATE")
+        }
+
+        val third = runner(
+            dir,
+            "clean",
+            "testDebugUnitTest",
+            "assembleRelease",
+            "--configuration-cache",
+            "--build-cache",
+            withPluginClasspath = false,
+        ).build()
+        for (task in aotTasks) {
+            assertEquals(TaskOutcome.FROM_CACHE, third.task(task)?.outcome, "$task should come FROM_CACHE")
+        }
     }
 }
 

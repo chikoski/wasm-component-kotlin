@@ -27,6 +27,8 @@ import wasm2kt.tooling.ComponentCodegen
 import wasm2kt.tooling.CoreModuleCompiler
 import wasm2kt.tooling.Decomposer
 import wasm2kt.tooling.PlanCheck
+import wasm2kt.tooling.aot.AotComponentCodegen
+import wasm2kt.tooling.aot.AotComponentCompiler
 import java.io.File
 import java.nio.file.Files
 import java.util.jar.JarEntry
@@ -58,10 +60,6 @@ abstract class Wasm2KtDecomposeTask : Wasm2KtToolingTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val component: RegularFileProperty
 
-    /** Fail the build, instead of warning, when the component uses something the Chicory backend cannot run. */
-    @get:Input
-    abstract val failOnUnsupportedFeatures: Property<Boolean>
-
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -69,42 +67,98 @@ abstract class Wasm2KtDecomposeTask : Wasm2KtToolingTask() {
     fun decompose() = submit(DecomposeAction::class.java) {
         it.component.set(component)
         it.outputDir.set(outputDir)
-        it.failOnUnsupportedFeatures.set(failOnUnsupportedFeatures)
     }
 
     interface Params : WorkParameters {
         val component: RegularFileProperty
         val outputDir: DirectoryProperty
-        val failOnUnsupportedFeatures: Property<Boolean>
     }
 
     abstract class DecomposeAction : WorkAction<Params> {
-        private val logger = org.gradle.api.logging.Logging.getLogger(Wasm2KtDecomposeTask::class.java)
-
         override fun execute() {
             val out = parameters.outputDir.get().asFile
             out.deleteRecursively()
             val component = parameters.component.get().asFile
             Decomposer.decompose(component.toPath(), out.toPath())
+        }
+    }
+}
+
+/** Validates a decomposed component against the configured backend (#39, #78, #186). */
+@CacheableTask
+abstract class Wasm2KtCheckTask : Wasm2KtToolingTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val decomposedDir: DirectoryProperty
+
+    @get:Input
+    abstract val sourceName: Property<String>
+
+    @get:Input
+    abstract val backend: Property<String>
+
+    /** Fail the build, instead of warning, when the component uses features the backend cannot run. */
+    @get:Input
+    abstract val failOnUnsupportedFeatures: Property<Boolean>
+
+    @get:OutputFile
+    abstract val warnings: RegularFileProperty
+
+    @TaskAction
+    fun check() = submit(CheckAction::class.java) {
+        it.decomposedDir.set(decomposedDir)
+        it.sourceName.set(sourceName)
+        it.backend.set(backend)
+        it.failOnUnsupportedFeatures.set(failOnUnsupportedFeatures)
+        it.warnings.set(warnings)
+    }
+
+    interface Params : WorkParameters {
+        val decomposedDir: DirectoryProperty
+        val sourceName: Property<String>
+        val backend: Property<String>
+        val failOnUnsupportedFeatures: Property<Boolean>
+        val warnings: RegularFileProperty
+    }
+
+    abstract class CheckAction : WorkAction<Params> {
+        override fun execute() {
+            val decomposed = parameters.decomposedDir.get().asFile.toPath()
+            val sourceName = parameters.sourceName.get()
+            val backend = parameters.backend.get()
+            val warningsFile = parameters.warnings.get().asFile
+            warningsFile.parentFile.mkdirs()
+
+            if (backend == "AOT" && PlanCheck.usesAsync(decomposed)) {
+                warningsFile.delete()
+                throw IllegalStateException(
+                    "wasm2kt: $sourceName uses async features (usesAsync = true), which the AOT backend does not support yet; " +
+                        "switch this component to Wasm2KtBackend.CHICORY",
+                )
+            }
 
             // Report what would otherwise only fail on the device, the first time it is used (#39).
-            val problems = PlanCheck.unsupportedFeatures(out.toPath())
-            if (problems.isEmpty()) return
-            val report = "wasm2kt: ${component.name} uses features the Chicory backend does not support yet; " +
+            val problems = PlanCheck.unsupportedFeatures(decomposed)
+            if (problems.isEmpty()) {
+                warningsFile.writeText("")
+                return
+            }
+            val report = "wasm2kt: $sourceName uses features this backend does not support yet; " +
                 "calls that reach them will throw at run time:\n" + problems.joinToString("\n") { "  - $it" }
             if (parameters.failOnUnsupportedFeatures.get()) {
-                out.deleteRecursively() // never leave a decomposed result behind for a failed check
+                warningsFile.delete()
                 throw IllegalStateException("$report\n(set wasm2kt.failOnUnsupportedFeatures = false to build anyway)")
             }
             // Printed by Wasm2KtWarningsTask, also when this task is UP-TO-DATE or FROM-CACHE (#78).
-            File(out, WARNINGS_FILE).writeText("$report\n(set wasm2kt.failOnUnsupportedFeatures = true to fail the build instead)\n")
+            warningsFile.writeText("$report\n(set wasm2kt.failOnUnsupportedFeatures = true to fail the build instead)\n")
         }
     }
 }
 
 /**
- * Compiles the core modules to JVM bytecode and packages them, with their `.meta` modules and the
- * plan, into one jar that is added to the project's dependencies (dexed like any library on Android).
+ * Compiles the core modules to JVM bytecode and packages them into one jar that is added to the
+ * project's dependencies (dexed like any library on Android). For `CHICORY`, includes `.meta`
+ * modules and `plan.json`; for `AOT`, emits only `.class` files and `.data` segment resources.
  */
 @CacheableTask
 abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
@@ -115,6 +169,9 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
     /** JVM package for the compiled classes and resources of this component. */
     @get:Input
     abstract val internalPackage: Property<String>
+
+    @get:Input
+    abstract val backend: Property<String>
 
     @get:OutputFile
     abstract val jar: RegularFileProperty
@@ -127,6 +184,7 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
     fun compile() = submit(CompileAction::class.java) {
         it.decomposedDir.set(decomposedDir)
         it.internalPackage.set(internalPackage)
+        it.backend.set(backend)
         it.jar.set(jar)
         it.warnings.set(warnings)
         it.workDir.set(temporaryDir)
@@ -135,6 +193,7 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
     interface Params : WorkParameters {
         val decomposedDir: DirectoryProperty
         val internalPackage: Property<String>
+        val backend: Property<String>
         val jar: RegularFileProperty
         val warnings: RegularFileProperty
         val workDir: DirectoryProperty
@@ -150,20 +209,35 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
             val resources = work.resolve("resources")
             val decomposed = parameters.decomposedDir.get().asFile.toPath()
             val pkg = parameters.internalPackage.get()
-            val compiled = CoreModuleCompiler.compile(decomposed, classes, resources, pkg)
-            ComponentBuild.copyPlan(decomposed, resources, pkg)
-            for (module in compiled) {
-                if (module.splitMethods > 0) {
-                    logger.info(
-                        "wasm2kt: split {} large method(s) in core module {} (max {} bytes after splitting)",
-                        module.splitMethods,
-                        module.index,
-                        module.maxMethodCodeBytes,
-                    )
+            val warnings = if (parameters.backend.get() == "AOT") {
+                val compiled = AotComponentCompiler.compile(decomposed, classes, resources, pkg)
+                for ((index, mod) in compiled.modules) {
+                    val s = mod.stats
+                    if (s.splitFunctions > 0) {
+                        logger.info(
+                            "wasm2kt (AOT): split {} large method(s) in core module {} (max {} bytes after splitting)",
+                            s.splitFunctions,
+                            index,
+                            s.maxMethodCodeBytes,
+                        )
+                    }
                 }
+                AotComponentCompiler.warningsFor(compiled).joinToString(separator = "") { "$it\n" }
+            } else {
+                val compiled = CoreModuleCompiler.compile(decomposed, classes, resources, pkg)
+                ComponentBuild.copyPlan(decomposed, resources, pkg)
+                for (module in compiled) {
+                    if (module.splitMethods > 0) {
+                        logger.info(
+                            "wasm2kt: split {} large method(s) in core module {} (max {} bytes after splitting)",
+                            module.splitMethods,
+                            module.index,
+                            module.maxMethodCodeBytes,
+                        )
+                    }
+                }
+                CoreModuleCompiler.warningsFor(compiled).joinToString(separator = "") { "$it\n" }
             }
-            val warnings = CoreModuleCompiler.warningsFor(compiled)
-                .joinToString(separator = "") { "$it\n" }
             parameters.warnings.get().asFile.apply { parentFile.mkdirs() }.writeText(warnings)
             writeJar(parameters.jar.get().asFile, listOf(classes, resources).map { it.toFile() })
         }
@@ -172,6 +246,7 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
             target.parentFile.mkdirs()
             JarOutputStream(Files.newOutputStream(target.toPath())).use { out ->
                 for (root in roots.map { it.toPath() }) {
+                    if (!Files.exists(root)) continue
                     Files.walk(root).use { paths ->
                         paths.filter { Files.isRegularFile(it) }.sorted().forEach { file ->
                             // Fixed timestamps keep the jar byte-for-byte reproducible for the build cache.
@@ -204,6 +279,9 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
     abstract val internalPackage: Property<String>
 
     @get:Input
+    abstract val backend: Property<String>
+
+    @get:Input
     @get:Optional
     abstract val world: Property<String>
 
@@ -224,6 +302,7 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
         it.componentName.set(componentName)
         it.packageName.set(packageName)
         it.internalPackage.set(internalPackage)
+        it.backend.set(backend)
         it.world.set(world)
         it.interfaceMappings.set(interfaceMappings)
         it.libraryClasspath.from(libraryClasspath)
@@ -235,6 +314,7 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
         val componentName: Property<String>
         val packageName: Property<String>
         val internalPackage: Property<String>
+        val backend: Property<String>
         val world: Property<String>
         val interfaceMappings: MapProperty<String, String>
         val libraryClasspath: ConfigurableFileCollection
@@ -247,26 +327,38 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
             val out = p.outputDir.get().asFile
             out.deleteRecursively()
             val decomposed = p.decomposedDir.get().asFile.toPath()
-            ComponentCodegen.generate(
-                decomposedDir = decomposed,
-                outputDir = out.toPath(),
-                componentName = p.componentName.get(),
-                packageName = p.packageName.get(),
-                compiled = CoreModuleCompiler.layout(decomposed, p.internalPackage.get()),
-                planResource = "/" + p.internalPackage.get().replace('.', '/') + "/plan.json",
-                worldName = p.world.orNull,
-                interfaceMappings = p.interfaceMappings.get(),
-                libraryClasspath = p.libraryClasspath.files.map { it.toPath() },
-            )
+            if (p.backend.get() == "AOT") {
+                val compiled = AotComponentCompiler.compileInMemory(decomposed, p.internalPackage.get())
+                AotComponentCodegen.generate(
+                    decomposedDir = decomposed,
+                    outputDir = out.toPath(),
+                    componentName = p.componentName.get(),
+                    packageName = p.packageName.get(),
+                    compiled = compiled,
+                    internalPackage = p.internalPackage.get(),
+                    worldName = p.world.orNull,
+                    interfaceMappings = p.interfaceMappings.get(),
+                    libraryClasspath = p.libraryClasspath.files.map { it.toPath() },
+                )
+            } else {
+                ComponentCodegen.generate(
+                    decomposedDir = decomposed,
+                    outputDir = out.toPath(),
+                    componentName = p.componentName.get(),
+                    packageName = p.packageName.get(),
+                    compiled = CoreModuleCompiler.layout(decomposed, p.internalPackage.get()),
+                    planResource = "/" + p.internalPackage.get().replace('.', '/') + "/plan.json",
+                    worldName = p.world.orNull,
+                    interfaceMappings = p.interfaceMappings.get(),
+                    libraryClasspath = p.libraryClasspath.files.map { it.toPath() },
+                )
+            }
         }
     }
 }
 
 /** 1980-02-01, the same constant Gradle uses for reproducible archives (zip has no earlier dates). */
 private const val REPRODUCIBLE_TIMESTAMP = 318211200000L
-
-/** The file in a decomposed directory that holds the decomposition's build-time warnings (#78). */
-internal const val WARNINGS_FILE = "wasm2kt-warnings.txt"
 
 /**
  * Prints the build-time warnings that a cacheable task recorded in [reports] (#39). The producing task

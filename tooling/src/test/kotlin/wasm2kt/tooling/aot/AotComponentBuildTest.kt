@@ -333,6 +333,29 @@ class AotComponentBuildTest {
         assertEquals(ExitCode.OK, exit, "Generated AOT sources must compile")
     }
 
+    @Test
+    fun `AotComponentCompiler compileInMemory matches compile without writing files`(@TempDir dir: Path) {
+        val decomposed = componentsDir.resolve("roundtrip")
+        val diskClasses = dir.resolve("disk-classes")
+        val diskResources = dir.resolve("disk-resources")
+        val disk = AotComponentCompiler.compile(
+            decomposedDir = decomposed,
+            classesDir = diskClasses,
+            resourcesDir = diskResources,
+            packageName = "com.example.inmem",
+        )
+        val inMemory = AotComponentCompiler.compileInMemory(
+            decomposedDir = decomposed,
+            packageName = "com.example.inmem",
+        )
+        assertEquals(disk.plan.modules.size, inMemory.plan.modules.size)
+        assertEquals(disk.modules.keys, inMemory.modules.keys)
+        for ((idx, diskMod) in disk.modules) {
+            assertEquals(diskMod.stats, inMemory.modules[idx]?.stats)
+        }
+        assertEquals(disk.irModules.keys, inMemory.irModules.keys)
+    }
+
     private fun walkFiles(root: Path): List<Path> =
         if (!Files.exists(root)) emptyList()
         else Files.walk(root).use { s -> s.filter { Files.isRegularFile(it) }.toList().sorted() }

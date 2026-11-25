@@ -4,25 +4,29 @@ import wasm2kt.ast.WitResolve
 import wasm2kt.generator.WitToKotlinPoetConverter
 import wasm2kt.tooling.ComponentBuild
 import wasm2kt.tooling.ComponentCodegen
+import wasm2kt.tooling.aot.AotComponentCodegen
+import wasm2kt.tooling.aot.AotComponentCompiler
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.io.path.name
 
 /**
- * Builds the benchmark components the way the Gradle plugin does (decompose, AOT-compile, generate)
- * and records build-time statistics. Usage: `Prepare <fixturesDir> <outDir> <name>...`
+ * Builds the benchmark components the way the Gradle plugin does (decompose, compile, generate)
+ * for both Chicory AOT and our static AOT backend, and records build-time statistics.
+ * Usage: `Prepare <fixturesDir> <outDir> <name>...`
  *
- * Writes `<outDir>/kotlin` (full bindings including the Wasmtime sessions, plus `<Name>Component`, and
- * `bench.typed.<name>` bindings opening their sessions on the typed bridge),
+ * Writes `<outDir>/kotlin` (full bindings including the Wasmtime sessions, plus `<Name>Component`
+ * and `<Name>AotComponent`, and `bench.typed.<name>` bindings opening their sessions on the typed bridge),
  * `<outDir>/classes` and `<outDir>/resources` (the compiled core modules), `<outDir>/decomposed/<name>`
- * (for the interpreter) and `<outDir>/build-stats.tsv`.
+ * (for the interpreter), `<outDir>/build-stats.tsv`, and `<outDir>/aot-build-stats.tsv`.
  */
 fun main(args: Array<String>) {
     val fixtures = Paths.get(args[0])
     val out = Paths.get(args[1])
     val kotlinOut = out.resolve("kotlin")
     val stats = StringBuilder("component\tcomponent_bytes\tcore_modules\tcore_bytes\tfunctions\tinterpreted_functions\tclass_files\tclass_bytes\tmeta_bytes\tbuild_ms\n")
+    val aotStats = StringBuilder("component\tcomponent_bytes\tcore_modules\tcore_bytes\tfunctions\tsplit_functions\tgenerated_helpers\tclass_files\tclass_bytes\tdata_bytes\tmax_method_bytes\tbuild_ms\n")
     for (name in args.drop(2)) {
         val pkg = "bench." + name.replace('-', '_')
         val work = out.resolve("work/$name")
@@ -70,10 +74,46 @@ fun main(args: Array<String>) {
                 classFiles.size, classFiles.sumOf { Files.size(it) }, metaBytes, buildMs,
             ).joinToString("\t"),
         ).append('\n')
-        println("prepared $name in $buildMs ms")
+
+        val aotWork = out.resolve("work/$name-aot")
+        aotWork.toFile().deleteRecursively()
+        val aotClasses = aotWork.resolve("classes")
+        val aotResources = aotWork.resolve("resources")
+        val aotKotlin = aotWork.resolve("kotlin")
+        val aotPkg = "$pkg.aot"
+        val aotStarted = System.nanoTime()
+        val aotCompiled = AotComponentCompiler.compile(decomposed, aotClasses, aotResources, aotPkg)
+        AotComponentCodegen.generateComponentOnly(
+            outputDir = aotKotlin,
+            componentName = "$name-aot",
+            packageName = pkg,
+            compiled = aotCompiled,
+            internalPackage = aotPkg,
+        )
+        val aotBuildMs = (System.nanoTime() - aotStarted) / 1_000_000
+        copyTree(aotKotlin, kotlinOut)
+        copyTree(aotClasses, out.resolve("classes"))
+        copyTree(aotResources, out.resolve("resources"))
+        val aotClassFiles = Files.walk(aotClasses).use { s -> s.filter { it.toString().endsWith(".class") }.toList() }
+        val aotDataBytes = if (Files.exists(aotResources)) {
+            Files.walk(aotResources).use { s -> s.filter { it.toString().endsWith(".data") }.mapToLong { Files.size(it) }.sum() }
+        } else 0L
+        val splitFns = aotCompiled.modules.values.sumOf { it.stats.splitFunctions }
+        val genHelpers = aotCompiled.modules.values.sumOf { it.stats.generatedSplitHelpers }
+        val maxMethodBytes = aotCompiled.modules.values.maxOfOrNull { it.stats.maxMethodCodeBytes } ?: 0
+        aotStats.append(
+            listOf(
+                name, Files.size(wasm), coreFiles.size, coreFiles.sumOf { Files.size(it) }, functions,
+                splitFns, genHelpers, aotClassFiles.size, aotClassFiles.sumOf { Files.size(it) },
+                aotDataBytes, maxMethodBytes, aotBuildMs,
+            ).joinToString("\t"),
+        ).append('\n')
+        println("prepared $name in $buildMs ms (aot $aotBuildMs ms)")
     }
     Files.writeString(out.resolve("build-stats.tsv"), stats)
+    Files.writeString(out.resolve("aot-build-stats.tsv"), aotStats)
     print(stats)
+    print(aotStats)
 }
 
 private fun copyTree(from: Path, to: Path) {

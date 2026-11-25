@@ -125,6 +125,12 @@ object ComponentCodegen {
     }
 }
 
+/** Backend targeted when building a component via [ComponentBuild.run]. */
+enum class BuildBackend {
+    CHICORY,
+    AOT,
+}
+
 /**
  * The whole build-time pipeline for one component, as the Gradle plugin runs it (split across
  * cacheable tasks there). Handy for tests and other build tools.
@@ -140,7 +146,20 @@ object ComponentBuild {
         worldName: String? = null,
         interfaceMappings: Map<String, String> = emptyMap(),
         libraryClasspath: List<Path> = emptyList(),
+        backend: BuildBackend = BuildBackend.CHICORY,
     ): Output {
+        if (backend == BuildBackend.AOT) {
+            val aot = wasm2kt.tooling.aot.AotComponentBuild.run(
+                component = component,
+                componentName = componentName,
+                packageName = packageName,
+                workDir = workDir,
+                worldName = worldName,
+                interfaceMappings = interfaceMappings,
+                libraryClasspath = libraryClasspath,
+            )
+            return Output(aot.kotlinDir, aot.classesDir, aot.resourcesDir)
+        }
         val decomposed = workDir.resolve("decomposed")
         val classes = workDir.resolve("classes")
         val resources = workDir.resolve("resources")

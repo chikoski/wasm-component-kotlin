@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* Gradle プラグインの AOT バックエンド切替と R8・ART 比較の追加
 * `plan.json` からの静的コンポーネント配線生成と `ComponentBackend` 互換層の実装
 * Core Wasm の JVM バイトコード直接生成と適合テストの追加
 * Core Wasm の型付き IR と Chicory パーサーアダプタの実装
@@ -61,6 +62,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#186](https://github.com/chikoski/wasm-component-kotlin/issues/186) に対応し、`io.github.wasm2kt` プラグインへ `Wasm2KtBackend.CHICORY` を既定としたまま `Wasm2KtBackend.AOT` を選択できる切替機構を追加しました。未対応機能の検証を `Wasm2KtCheckTask` へ分離したため、`CHICORY` と `AOT` の切り替え後も `Wasm2KtDecomposeTask` のキャッシュを共有できます。全コンポーネントが `AOT` の場合は `runtime-chicory` を `implementation` に追加せず、`addWasiDependency` 指定時の互換警告および非同期コンポーネントのビルド時拒否を行います。あわせてベンチマークと Android サンプルへ `AOT` 経路を組み込み、R8 APK サイズ、`dex2oat64`、初回起動、ARM64 NaN 保存、および実行時間の計測結果を [performance.md](docs/explanation/performance.md) にまとめました。
 
 [#185](https://github.com/chikoski/wasm-component-kotlin/issues/185) に対応し、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 1 として `plan.json` から静的なコンポーネント配線コードを生成する仕組みと `ComponentBackend` 互換層を実装しました。`:tooling` にはビルド時パーサー `BuildPlan`、コンパイラ駆動 `AotComponentCompiler`、配線生成器 `AotComponentCodegen`、および一括パイプライン `AotComponentBuild` を追加しています。あわせて `AotModuleClassEmitter` のネスト型に対する `InnerClasses` 属性出力と、`:runtime-aot` の `AotComponentBackend` も実装しました。これにより生成されるコンポーネントは実行時の `plan.json`、`.meta`、`kotlinx.serialization`、Chicory、およびリフレクションへ依存せずに動作します。非同期コンポーネントはビルド時に拒否する設計を維持しており、非同期の対応は後続の `#188` で進めます。Wasmtime との差分テスト、Canonical ABI の境界テスト、ワールド DSL テスト、および公式適合テストの同期範囲 `values/` と `resources/` の検証を通過しています。
 

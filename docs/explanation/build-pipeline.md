@@ -15,15 +15,18 @@
 
 ---
 
-## 2. Gradle プラグイン（Chicory バックエンド）
+## 2. Gradle プラグイン
 
 ```mermaid
 flowchart LR
-    wasm[".wasm"] --> D["wasm2ktDecompose&lt;Cap&gt;<br/>decomposer (wasm) を Chicory で実行<br/>+ PlanCheck"]
+    wasm[".wasm"] --> D["wasm2ktDecompose&lt;Cap&gt;<br/>decomposer (wasm) を Chicory で実行"]
     D --> dec["decomposed/<br/>plan.json, wit.json, coreN.wasm"]
-    dec --> C["wasm2ktCompile&lt;Cap&gt;<br/>CoreModuleCompiler"]
-    dec --> G["wasm2ktGenerate&lt;Cap&gt;<br/>ComponentCodegen"]
-    C --> jar["wasm2kt-&lt;name&gt;.jar<br/>マシンクラス, .meta, plan.json"]
+    dec --> V["wasm2ktCheck&lt;Cap&gt;<br/>PlanCheck"]
+    dec --> C["wasm2ktCompile&lt;Cap&gt;<br/>CoreModuleCompiler または AotComponentCompiler"]
+    dec --> G["wasm2ktGenerate&lt;Cap&gt;<br/>ComponentCodegen または AotComponentCodegen"]
+    V -.-> C
+    V -.-> G
+    C --> jar["wasm2kt-&lt;name&gt;.jar<br/>Chicory はマシンクラス・.meta・plan.json<br/>AOT はクラス・.data"]
     G --> kt["生成された Kotlin<br/>バインディング + &lt;Cap&gt;Component"]
     lib["依存関係の jar の<br/>マニフェスト (ADR-0014)"] --> G
     kt --> K["compileKotlin"]
@@ -31,11 +34,13 @@ flowchart LR
     K --> app["アプリ"]
 ```
 
-* コンポーネントごとに `Wasm2KtDecomposeTask`、`Wasm2KtCompileTask`、`Wasm2KtGenerateTask`（およびキャッシュ復元時にも警告を出す `Wasm2KtWarningsTask`）が登録されます
-* `tooling` は `wasm2ktTooling` 構成で解決したクラスパスを使い、分離したクラスローダーの Gradle Worker で動きます（[ADR-0004](../adr/0004-isolated-tooling-classloader.md)）
-* 生成された Kotlin コードは、Kotlin/JVM では `main` ソースセットに、Android では各バリアントの `variant.sources.java` に登録されます
-* AOT コンパイル結果の jar は `implementation` の依存として追加され、Android では通常のライブラリと同様に dex へ変換されます
-* `decomposer` は WebAssembly として `tooling` に同梱されているため、Rust ツールチェーンも `wasm-tools` も使いません
+* `Wasm2KtDecomposeTask`、`Wasm2KtCheckTask`、`Wasm2KtCompileTask`、`Wasm2KtGenerateTask`、`Wasm2KtWarningsTask`
+* Worker のクラスローダー分離
+* ソースセットとバリアントへの登録
+* ライブラリ jar としての依存追加
+* 同梱 WebAssembly 版 decomposer の利用
+
+コンポーネントごとに上記の Gradle タスクが登録されます。未対応機能や非同期拒否の検査は `Wasm2KtCheckTask` に分離されているため、バックエンドを切り替えても分解キャッシュは共有されます。また、`Wasm2KtWarningsTask` がキャッシュ復元時にも警告を再出力します。`tooling` は `wasm2ktTooling` 構成で解決したクラスパスを使い、分離したクラスローダーの Gradle Worker で動きます。詳細は [ADR-0004](../adr/0004-isolated-tooling-classloader.md) にまとめています。生成された Kotlin コードは Kotlin/JVM では `main` ソースセット、Android では各バリアントの `variant.sources.java` に登録されます。コンパイル結果の jar は `implementation` の依存として追加され、Android では通常のライブラリと同様に dex へ変換されます。なお、`decomposer` は WebAssembly として `tooling` に同梱されているため、利用側の環境に Rust ツールチェーンも `wasm-tools` も不要です。
 
 ---
 

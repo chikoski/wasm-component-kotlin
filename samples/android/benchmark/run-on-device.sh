@@ -20,7 +20,7 @@ adb shell nproc >> "$out/device.txt" || true
 # Cold start: every `am instrument` starts a new process.
 adb logcat -c
 for i in $(seq 1 "$runs"); do
-  for m in arithmetic heavy; do
+  for m in arithmetic arithmeticAot heavy heavyAot; do
     adb shell am instrument -w -e class "com.example.wasm2kt.bench.ColdStartProbe#$m" \
       -e androidx.benchmark.suppressErrors "$suppress" "$runner" > /dev/null
   done

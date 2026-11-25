@@ -27,30 +27,58 @@ object AotComponentCompiler {
         packageName: String,
         options: AotCompileOptions = AotCompileOptions(),
     ): CompiledAotComponent {
+        Files.createDirectories(classesDir)
+        Files.createDirectories(resourcesDir)
+        return compileModules(decomposedDir) { ir, baseSimpleName ->
+            AotCoreCompiler.compileToDirectory(
+                ir = ir,
+                classesDir = classesDir,
+                resourcesDir = resourcesDir,
+                packageName = packageName,
+                baseSimpleName = baseSimpleName,
+                dataResourcePath = null,
+                options = options,
+            )
+        }
+    }
+
+    /**
+     * Compiles all core modules of a decomposed component in memory without writing `.class` or
+     * `.data` files to disk. Useful when callers only need IR metadata and compilation stats (for
+     * example `Wasm2KtGenerateTask`, whose compiled `.class` / `.data` outputs live in `compile`
+     * task).
+     */
+    fun compileInMemory(
+        decomposedDir: Path,
+        packageName: String,
+        options: AotCompileOptions = AotCompileOptions(),
+    ): CompiledAotComponent = compileModules(decomposedDir) { ir, baseSimpleName ->
+        AotCoreCompiler.compile(
+            ir = ir,
+            packageName = packageName,
+            baseSimpleName = baseSimpleName,
+            dataResourcePath = null,
+            options = options,
+        )
+    }
+
+    private inline fun compileModules(
+        decomposedDir: Path,
+        compileModule: (IrModule, String) -> CompiledAotModule,
+    ): CompiledAotComponent {
         val plan = BuildPlan.fromDirectory(decomposedDir)
         if (plan.usesAsync) {
             throw IllegalStateException(
                 "The AOT backend does not support async components yet (usesAsync = true); use the CHICORY backend for async components.",
             )
         }
-        Files.createDirectories(classesDir)
-        Files.createDirectories(resourcesDir)
         val compiledModules = LinkedHashMap<Int, CompiledAotModule>(plan.modules.size)
         val irModules = LinkedHashMap<Int, IrModule>(plan.modules.size)
         for (mod in plan.modules) {
             val wasmBytes = Files.readAllBytes(decomposedDir.resolve(mod.file))
             val ir = ChicoryWasmAdapter.convert(wasmBytes, moduleIndex = mod.index)
-            val compiled = AotCoreCompiler.compileToDirectory(
-                ir = ir,
-                classesDir = classesDir,
-                resourcesDir = resourcesDir,
-                packageName = packageName,
-                baseSimpleName = "Core${mod.index}",
-                dataResourcePath = null,
-                options = options,
-            )
             irModules[mod.index] = ir
-            compiledModules[mod.index] = compiled
+            compiledModules[mod.index] = compileModule(ir, "Core${mod.index}")
         }
         return CompiledAotComponent(plan, compiledModules, irModules)
     }

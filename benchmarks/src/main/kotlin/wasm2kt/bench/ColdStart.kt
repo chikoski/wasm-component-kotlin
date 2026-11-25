@@ -15,7 +15,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     val java = ProcessHandle.current().info().command().orElse("java")
     val cp = System.getProperty("java.class.path")
     val props = listOf("wasm2kt.bench.gen", "wasm2kt.bench.out").map { "-D$it=${System.getProperty(it)}" }
-    val cases = listOf("arithmetic", "heavy").flatMap { c -> listOf("chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni").map { c to it } }
+    val cases = listOf("arithmetic", "heavy").flatMap { c -> listOf("aot", "chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni").map { c to it } }
     val tsv = StringBuilder("component\tbackend\tphase\tmedian_ms\tmin_ms\tmax_ms\truns\n")
     for ((component, backend) in cases) {
         val phases = linkedMapOf<String, MutableList<Double>>()
