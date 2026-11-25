@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-25。対象ブランチは `feat/185-static-component-wiring`。主な変更点は #185 による `plan.json` からの静的コンポーネント配線生成と Phase 1 `ComponentBackend` 互換層の実装です。
+> 最終更新: 2026-11-25。対象ブランチは `feat/186-gradle-plugin-aot-opt-in`。主な変更点は #186 による Gradle プラグインの AOT オプトイン切替と R8・ART ベンチマーク比較の完了です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -126,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* Gradle プラグインの AOT バックエンドオプトイン切替と R8・ART 比較の追加
 * 静的コンポーネント配線生成と Phase 1 互換層の実装
 * Core Wasm の JVM バイトコード直接生成と仕様適合テストの整備
 * Core Wasm の型付き IR とビルド時パーサーアダプタの実装
@@ -142,6 +143,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#186](https://github.com/chikoski/wasm-component-kotlin/issues/186) では、[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) Phase 1 の締めくくりとして `io.github.wasm2kt` プラグインへ `Wasm2KtBackend` を導入しました。既定値は `CHICORY` のまま維持しつつ、拡張およびコンポーネント単位で `Wasm2KtBackend.AOT` を選択できます。未対応機能と非同期拒否の検査は `Wasm2KtCheckTask` へ分離し、バックエンド切り替え時も分解キャッシュを共有します。全コンポーネントが `AOT` の場合は `runtime-chicory` を `implementation` に追加せず、`addWasiDependency` 有効時に互換警告を出します。あわせて `:benchmarks` と `samples/android` へ `AOT` 経路を追加し、Host JVM、R8 リリース APK サイズ、ARM64 `dex2oat64`、初回起動、および ARM64 ART での NaN ビット保存を検証しました。詳細と実測値は [performance.md](explanation/performance.md) にまとめています。
 
 [#185](https://github.com/chikoski/wasm-component-kotlin/issues/185) では、[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 1 として `plan.json` から静的な `<Name>Component` 配線コードを生成する機能と `ComponentBackend` 互換層を実装しました。`:tooling` に `BuildPlan`、`AotComponentCompiler`、`AotComponentCodegen`、および `AotComponentBuild` を追加し、`AotModuleClassEmitter` にネスト型向けの `InnerClasses` 属性出力を加えています。`:runtime-aot` には `AotComponentBackend` を実装し、同期アダプターの資源所有権移動、借用貸与追跡、ホスト例外境界、およびインスタンスの poison 処理を `:runtime-canonical` へ委譲しました。ビルド時に生成したコンポーネントとコアモジュールのバイトコードには、実行時の `plan.json`、`.meta`、`kotlinx.serialization`、Chicory、およびリフレクションへの参照が含まれません。非同期コンポーネントはビルド時に拒否する仕様で、非同期実行は `#188` で扱います。検証は `AotComponentBuildTest`、`AotDifferentialTest`、`AotCanonicalAbiStrictnessTest`、`AotGeneratedBindingsTest`、および `AotConformanceTest` で行い、`conformance/skip-aot.txt` に記載した非同期構文を含む `values/variants.wast:83` と関連アサーション、および上流の `nyi.txt` を除いたすべての同期ケースを通過しました。Gradle プラグインの切り替えは `#186`、直接の Lower や Lift 生成は `#187` で進めます。
 

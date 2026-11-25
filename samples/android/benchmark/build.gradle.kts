@@ -3,6 +3,7 @@
 // Run on a device or emulator with .github/workflows/bench.yml, or by hand:
 //   ./gradlew -p samples/android :benchmark:assembleReleaseAndroidTest
 // then install and `am instrument` it (see bench.yml).
+import wasm2kt.gradle.Wasm2KtBackend
 import wasm2kt.gradle.Wasm2KtDecomposeTask
 
 plugins {
@@ -50,6 +51,11 @@ wasm2kt {
             register(name) {
                 source.set(rootProject.file("../../fixtures/$name.wasm"))
                 packageName.set("com.example.wasm2kt.bench.$name")
+            }
+            register("$name-aot") {
+                source.set(rootProject.file("../../fixtures/$name.wasm"))
+                packageName.set("com.example.wasm2kt.bench.${name}_aot")
+                backend.set(Wasm2KtBackend.AOT)
             }
         }
     }

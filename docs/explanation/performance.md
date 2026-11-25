@@ -168,7 +168,102 @@
 
 ---
 
-## 7. 再計測の手順
+## 7. Chicory バックエンドと AOT バックエンドの同一コミット比較
+
+`#186` に伴い、同じコミット上で `CHICORY` バックエンドと `AOT` バックエンドを計測し比較しました。[ADR-0023](../adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 1 では、まだ `ComponentBackend` 経由のバイナリワイヤ境界を経由します。したがって、本節は R8 最適化・ART 事前コンパイル・初回起動・Core Wasm 実行の差分に焦点を当てて記載します。
+
+### 7.1 計測環境と対象
+
+デスクトップ計測には macOS Apple Silicon 環境の OpenJDK 21.0.13 を使用しました。ビルド統計では `arithmetic`、`types`、`heavy` を対象に `Prepare` で両バックエンドの生成時間と出力サイズを記録しています。
+
+Android のリリースサイズ比較には `compileSdk 35`、`minSdk 26`、`JavaVersion.VERSION_17`、`isMinifyEnabled = true`、および `proguard-android-optimize.txt` の条件を用いました。対象は `samples` に相当する `roundtrip` と `counter` の組、`heavy.wasm` 単体、および `1.8 MiB` の `png-glitch-component.wasm` です。それぞれ純粋な `CHICORY` のみ、および純粋な `AOT` のみのリリース APK を個別に生成して比較しました。
+
+Android ART の実行時間と `dex2oat64` 検査には、ローカルの ARM64 Android 16 エミュレーター `Medium_Phone_API_36.1` を使用しました。非 `debuggable` のリリース用テスト APK および R8 縮小済みリリース APK を導入し、`adb shell cmd package compile -m speed -f` による事前コンパイルも確認しています。
+
+### 7.2 ビルド時出力と R8 適用後 APK サイズ
+
+以下の表は、Host JVM 向けビルドにおける両バックエンドの出力差分です。
+
+| コンポーネント | 関数数 | インタプリタ実行関数 | 分割対象・補助メソッド数 | 生成クラス合計サイズ | メタまたはデータ領域サイズ | ビルド時間 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `arithmetic` Chicory | 4 | 0 | — | 42,999 B | `.meta` 70 B | 1,452 ms |
+| `arithmetic` AOT | 4 | 0 | 0 / 0 | 1,755 B | `.data` 0 B | 35 ms |
+| `types` Chicory | 70 | 0 | — | 83,062 B | `.meta` 1,562 B | 97 ms |
+| `types` AOT | 70 | 0 | 1 / 2 | 65,492 B | `.data` 640 B | 107 ms |
+| `heavy` Chicory | 1,012 | 1 | — | 1,349,649 B | `.meta` 432,255 B | 1,774 ms |
+| `heavy` AOT | 1,012 | 0 | 46 / 185 | 3,044,102 B | `.data` 369,924 B | 877 ms |
+
+`heavy` のような大規模コンポーネントでは、ビルド直後の生 `.class` サイズは `AOT` のほうが `3.04 MB` と大きくなります。これは、`AOT` がすべての Core Wasm 関数を静的分割してバイトコード化するためです。その結果、Chicory で残っていたインタプリタ実行関数と 8,000 バイト上限超過の警告は、`AOT` では 0 件になりました。`heavy` のコンパイル時間も `1,774 ms` から `877 ms` へ短縮しています。
+
+Android アプリに組み込んで R8 で縮小すると、`runtime-chicory`、`kotlinx.serialization`、および `.meta` と `plan.json` の除去が効いて傾向が逆転します。
+
+| 構成とバックエンド | リリース APK | 非圧縮 DEX | DEX クラス数 | DEX メソッド ID | `.meta` と `plan.json` | `.data` 資源 | `wasm2ktCompile` | R8 縮小時間 | 全体ビルド時間 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `samples` Chicory | 243,797 B | 488,664 B | 589 | 3,061 | 19,492 B | 0 B | 0.22 s | 9.18 s | 18.85 s |
+| `samples` AOT | 55,847 B | 76,468 B | 103 | 618 | 0 B | 24 B | 0.15 s | 3.15 s | 13.53 s |
+| `heavy` Chicory | 990,410 B | 1,859,204 B | 580 | 5,059 | 436,851 B | 0 B | 2.08 s | 15.43 s | 26.18 s |
+| `heavy` AOT | 805,797 B | 1,359,168 B | 82 | 1,429 | 0 B | 369,924 B | 0.84 s | 13.60 s | 24.10 s |
+| `png-glitch` Chicory | 1,524,654 B | 3,209,448 B | 604 | 6,992 | 168,179 B | 0 B | 4.45 s | 25.28 s | 39.07 s |
+| `png-glitch` AOT | 1,290,954 B | 2,454,168 B | 122 | 2,144 | 0 B | 125,200 B | 1.42 s | 16.95 s | 29.28 s |
+
+`samples` 構成では APK が `243,797 B` から `55,847 B` へ、非圧縮 DEX が `488,664 B` から `76,468 B` へ縮小しました。`heavy` と `png-glitch` でも DEX クラス数とメソッド ID 数が 7 割前後減少し、`wasm2ktCompile` と R8 の処理時間もともに短縮しています。これは R8 が静的配線を解析して未使用の型やヘルパーを除去できるためです。
+
+### 7.3 ARM64 `dex2oat64` による事前コンパイル
+
+`heavy` と `png-glitch` の R8 縮小済みリリース APK を `emulator-5554` へ導入し、`cmd package compile -m speed -f` を実行しました。4 つの APK はいずれも終了コード 0 で `dex2oat64` を完了し、命令数上限超過によるメソッドのスキップログは 0 件でした。
+
+ただし `Chicory` 版では関数インデックス 262 がビルド時点でインタプリタフォールバックに回っており、`dex2oat` 対象外の関数が残っています。一方の `AOT` 版では全関数が DEX へ出力され、`heavy` で `dex2oat` 壁時計時間が `1,810 ms` から `652 ms` へ、`.odex` サイズが `8,199,224 B` から `5,262,696 B` へ減りました。`png-glitch` でも `1,421 ms` から `1,026 ms` へ、`.odex` サイズが `13,601,108 B` から `8,611,148 B` へ縮小しています。
+
+### 7.4 初回インスタンス化と `.data` 読み込みコスト
+
+新規プロセスでの初回起動時間を、Host JVM は 9 回の中央値、ARM64 ART は 5 回の中央値で比較しました。
+
+| 対象と環境 | `CHICORY` 初回 open | `CHICORY` 初回合計 | `AOT` 初回 open | `AOT` 初回合計 |
+| :--- | ---: | ---: | ---: | ---: |
+| `arithmetic` Host JVM | 79.34 ms | 93.46 ms | 18.62 ms | 41.55 ms |
+| `heavy` Host JVM | 125.69 ms | 155.83 ms | 26.39 ms | 49.94 ms |
+| `arithmetic` ARM64 ART | 7.312 ms | 7.613 ms | 0.501 ms | 0.662 ms |
+| `heavy` ARM64 ART | 74.184 ms | 75.446 ms | 3.841 ms | 4.357 ms |
+
+`AOT` では実行時の `plan.json` 解析、`.meta` パース、および Chicory マシンの初期化が不要になり、静的データセグメントの `.data` 読み込みのみが残ります。特に ART 上では `heavy` の初回合計が `75.446 ms` から `4.357 ms` へ短縮しました。`heavy` の 2 回目以降の `openSession` は Host JVM で `0.59 ms`、ART で `0.920 ms` です。
+
+### 7.5 定常状態実行と NaN ビット保存の検証
+
+同じ Apple Silicon Host JVM 上で計測した、`aot/dsl` と他バックエンドの定常呼び出し中央値です。
+
+| 呼び出し | `aot/dsl` | `chicory-aot/dsl` | `chicory-interp/dsl` | `wasmtime-ffm/dsl` | `wasmtime-jni/dsl` |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `add(s32, s32)` | 169.3 ns | 181.8 ns | 256.0 ns | 701.3 ns | 622.5 ns |
+| `echo-name` 5 文字 | 334.4 ns | 442.6 ns | 3.42 µs | 859.8 ns | 788.1 ns |
+| `echo-bytes` 16 B | 311.9 ns | 371.6 ns | 3.18 µs | 1.20 µs | 1.13 µs |
+| `echo-bytes` 1 KiB | 320.0 ns | 402.3 ns | 3.01 µs | 19.21 µs | 19.01 µs |
+| `echo-bytes` 64 KiB | 9.44 µs | 11.93 µs | 14.66 µs | 1.08 ms | 1.08 ms |
+| `echo-blob` 1 KiB record | 649.8 ns | 770.9 ns | 6.95 µs | 19.63 µs | 19.53 µs |
+| `lcg-sum` 100 万回 | 303.5 µs | 307.9 µs | 62.82 ms | 324.2 µs | 324.0 µs |
+| `regex-count` 16 B | 42.0 µs | 132.0 µs | 2.73 ms | 10.6 µs | 10.5 µs |
+| `regex-count` 14 KiB | 179.3 µs | 403.2 µs | 8.17 ms | 51.3 µs | 49.1 µs |
+| `json-roundtrip` 13 KiB | 366.5 µs | 626.9 µs | 25.66 ms | 106.9 µs | 107.3 µs |
+| `sort-bytes` 64 KiB | 582.0 µs | 4.19 ms | 91.35 ms | 1.35 ms | 1.36 ms |
+
+`png-glitch-component.wasm` に対する 256×256 ピクセルの `Invert` プリセット計測でも、`CHICORY` の `open+listFilters` `119.15 ms`、`processFrame` `2.727 ms`、PNG `glitch` `11.271 ms` に対し、`AOT` はそれぞれ `32.53 ms`、`1.732 ms`、`10.410 ms` でした。`sort-bytes` や `regex-count` で `AOT` が有利な一方、`regex-count` のような正規表現処理ではなお Wasmtime のほうが約 3.6 倍高速です。
+
+ARM64 Android 16 エミュレーター上の `CallBenchmark` では、Perfetto トレースのストレージ不足で全 32 ケースのうち 8 ケースが完走しました。完了した指標の中央値は、`add_staticAot_dsl` が `263.53 ns`、`add_staticAot_backend` が `97.56 ns`、`add_aot_core` が `14.72 ns`、`add_interp_dsl` が `548.94 ns`、`codecBytes1024_wire` が `345.82 ns`、`echoBlob1024_aot_dsl` が `2,295.26 ns`、`regexCount16B_staticAot_dsl` が `135.24 µs`、`jsonRoundtrip13KiB_staticAot_dsl` が `825.86 µs` です。残り 24 ケースの同一エミュレーター上ペア比較は今回のストレージ枯渇により未取得であり、Linux KVM の CI や実機での後続計測に残しています。
+
+なお、`emulator-5554` 上の `AotComponentInstrumentedTest` により、`AOT` コンポーネントの E2E 動作と、ART 上における NaN ビット表現の保存を確認しました。ローカルの ARM64 環境では、`WasmNumerics` の `reinterpret` 群と `LinearMemory` の `F32`/`F64` ロード・ストア、および `AOT` コンパイル済みコードと同等の `intBitsToFloat`/`floatToRawIntBits` 系変換でシグナリング NaN を含むビット列が破壊されず保持されます。一方、CI の `emulator` ジョブは `x86_64` 構成で実行されるため、実機および ARM64 での検証は本節のローカル計測が基準です。
+
+### 7.6 制約と Phase 2 への課題
+
+Phase 1 の `AOT` バックエンドにはいくつかの技術的制約と設計上のトレードオフがあります。
+
+* 非同期コンポーネント非対応
+* バイナリワイヤ境界の残存
+* `ByteArray` によるロードとストアの実装
+
+非同期コンポーネントと WASI 0.3 はまだ `AOT` で実行できず、Gradle プラグインは設定値にかかわらずビルド時にエラーで拒否します。また、Phase 1 では生成バインディングとバックエンドの間に `WitWriter` と `WitReader` の直列化が残っているため、境界でのコピーとボックス化をなくす直接の Lower と Lift の生成は `#187` で進めます。さらに `LinearMemory` は Android API 26 互換のため `VarHandle` を使わず `ByteArray` へのバイト単位シフトで 4 バイトや 8 バイトのアクセスを実装しています。この構造でも `sort-bytes` や `processFrame` では高速に動作しましたが、高頻度メモリアクセスに対する `ByteBuffer` や `Unsafe` 相当手段の評価は Phase 2 以降の検討課題です。
+
+---
+
+## 8. 再計測の手順
 
 ```bash
 ./gradlew -Pwasm2kt.bench :benchmarks:bench        # 定常状態（JVM）。-Pwasm2kt.bench.filter=<正規表現> で絞り込み可

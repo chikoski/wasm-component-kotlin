@@ -47,9 +47,9 @@ wasm-tools component new embedded.wasm -o my-component.wasm
 
 `cargo component` を使う場合で、WASI の import を含めたくないときは、`wasm32-unknown-unknown` ターゲットを使うか、不要な標準出力・環境変数アクセスを避けてください。
 
-## 3. 未対応機能の事前検査（`failOnUnsupportedFeatures`）
+## 3. 未対応機能の事前検査 `failOnUnsupportedFeatures`
 
-Gradle プラグインでビルドする際、`wasm2ktDecompose<Name>` タスクは分解後の `plan.json` を検査し、Chicory バックエンドが未対応の機能（`map<K, V>` などの型、未対応の組み込み関数）が含まれていれば警告を出します（[#39](https://github.com/chikoski/wasm-component-kotlin/issues/39)、[#78](https://github.com/chikoski/wasm-component-kotlin/issues/78)）。
+Gradle プラグインでビルドする際、`wasm2ktCheck<Name>` タスクは分解後の `plan.json` を検査し、選択されたバックエンドが未対応の機能が含まれていれば警告を出します。詳細は [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) と [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) を参照してください。なお `Wasm2KtBackend.AOT` を選択したコンポーネントが非同期機能を使用している場合は、`failOnUnsupportedFeatures` の設定にかかわらずこの検査タスクがビルドを失敗させます。
 
 CI などで未対応機能の使用をビルドエラーにしたい場合は、`build.gradle.kts` で `failOnUnsupportedFeatures.set(true)` を設定します。
 

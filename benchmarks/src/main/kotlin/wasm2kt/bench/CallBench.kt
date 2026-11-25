@@ -20,7 +20,7 @@ import kotlin.random.Random
 fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     println(environment())
     val h = Harness()
-    val backends = listOf("chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni")
+    val backends = listOf("aot", "chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni")
 
     // ---- arithmetic: per-call overhead with almost no work or data
     for (b in backends) {
@@ -29,8 +29,12 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
         s.close()
     }
     run {
-        val backend = bench.arithmetic.ArithmeticComponent.instantiate(null)
+        val aotBackend = bench.arithmetic.ArithmeticAotComponent.instantiate(null)
         val args = WitWriter().apply { int(1); int(2) }
+        val aotAdd = aotBackend.resolve("add")
+        h.run("call", "add(s32,s32)", "aot/backend") { aotBackend.invoke(aotAdd, args.toReader()) }
+        aotBackend.close()
+        val backend = bench.arithmetic.ArithmeticComponent.instantiate(null)
         val add = backend.resolve("add")
         h.run("call", "add(s32,s32)", "chicory-aot/backend") { backend.invoke(add, args.toReader()) }
         backend.close()
@@ -58,6 +62,13 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
         s.close()
     }
     run {
+        val aotBackend = bench.types.TypesAotComponent.instantiate(null)
+        val aotEchoBytes = aotBackend.resolve("echo-bytes")
+        for (n in sizes) {
+            val args = WitWriter().apply { bytes(payloads.getValue(n)) }
+            h.run("data", "echo-bytes(list<u8> $n)", "aot/backend") { aotBackend.invoke(aotEchoBytes, args.toReader()) }
+        }
+        aotBackend.close()
         val backend = bench.types.TypesComponent.instantiate(null)
         val echoBytes = backend.resolve("echo-bytes")
         for (n in sizes) {
@@ -99,6 +110,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
 private fun wasmtime(b: String, jni: () -> Unit, ffm: () -> Unit) { if (b == "wasmtime-jni") jni() else ffm() }
 
 internal fun openArithmetic(b: String): bench.arithmetic.Session = when (b) {
+    "aot" -> bench.arithmetic.openSession(bench.arithmetic.ArithmeticAotComponent)
     "chicory-aot" -> bench.arithmetic.openSession(bench.arithmetic.ArithmeticComponent)
     "chicory-interp" -> bench.arithmetic.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("arithmetic")))
     else -> {
@@ -108,6 +120,7 @@ internal fun openArithmetic(b: String): bench.arithmetic.Session = when (b) {
 }
 
 internal fun openTypes(b: String): bench.types.Session = when (b) {
+    "aot" -> bench.types.openSession(bench.types.TypesAotComponent)
     "chicory-aot" -> bench.types.openSession(bench.types.TypesComponent)
     "chicory-interp" -> bench.types.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("types")))
     else -> {
@@ -117,6 +130,7 @@ internal fun openTypes(b: String): bench.types.Session = when (b) {
 }
 
 internal fun openHeavy(b: String): bench.heavy.Session = when (b) {
+    "aot" -> bench.heavy.openSession(bench.heavy.HeavyAotComponent)
     "chicory-aot" -> bench.heavy.openSession(bench.heavy.HeavyComponent)
     "chicory-interp" -> bench.heavy.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("heavy")))
     else -> {

@@ -62,8 +62,10 @@ internal object AndroidWiring {
                     t.componentName.set(c.component.name)
                     t.packageName.set(c.component.packageName)
                     t.internalPackage.set(shared.flatMap { it.internalPackage })
+                    t.backend.set(shared.flatMap { it.backend })
                     t.world.set(c.component.world)
                     t.interfaceMappings.set(c.component.interfaceMappings)
+                    t.dependsOn(c.check)
                     // Libraries that may provide interfaces (ADR-0014): the classes jars of this variant's module
                     // and project dependencies. Not `variant.compileClasspath`, which also holds the app's own
                     // compiled classes and would make generating depend on compiling.

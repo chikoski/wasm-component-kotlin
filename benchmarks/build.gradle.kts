@@ -40,6 +40,7 @@ val generatedClasses = files(benchGen.map { it.dir("classes") }, benchGen.map { 
 
 dependencies {
     implementation(project(":tooling"))
+    implementation(project(":runtime-aot"))
     implementation(project(":runtime-chicory"))
     implementation(project(":runtime-wasmtime"))
     implementation(generatedClasses)
