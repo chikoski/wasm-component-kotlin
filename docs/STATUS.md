@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-24。対象ブランチは `feat/183-core-wasm-typed-ir`。主な変更点は #183 による Core Wasm の型付き IR と Chicory パーサーアダプタの実装です。
+> 最終更新: 2026-11-25。対象ブランチは `feat/185-static-component-wiring`。主な変更点は #185 による `plan.json` からの静的コンポーネント配線生成と Phase 1 `ComponentBackend` 互換層の実装です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -38,7 +38,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
 | `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 17 | 稼働 |
 | `runtime-canonical` | Chicory 非依存の共通 Canonical ABI 層 | 17 | 稼働 |
-| `runtime-aot` | 自作 Core Wasm コンパイラ向けの実行時基盤 | 17 | 基盤実装済み |
+| `runtime-aot` | 自作 Core Wasm コンパイラと Phase 1 互換層の実行時基盤 | 17 | Phase 1 稼働 |
 | `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 17 | 稼働 |
 | `runtime-wasi` | WASI 0.3 コアインターフェースのホスト実装 | 17 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
@@ -50,7 +50,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 ### 検証済み
 
 * `./gradlew check`（TestKit の functionalTest と generator のユニットテストを含む）と integration-tests: すべて成功。1 件だけスキップ（wasm-tools が 33 個以上の flags を拒否するため。仕様どおり）。CI ではこれに加えて、decomposer と rust-bridge の `cargo clippy` と `cargo test` を実行
-* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 482 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目
+* Component Model の公式テストスイートは [ADR-0017](adr/0017-component-model-conformance-suite.md) と #30 に基づき Chicory で実行。`values/` と `resources/` は 191 コマンド中 190 件、`async/` は 514 件中 482 件が通過し、`resources/` の 36 件はすべて通過。残りは `conformance/skip.txt` に理由付きで記録しており、主な理由は wasmtime-environ 48 が再入をトラップにする項目。同期向けの Phase 1 AOT 配線は `AotConformanceTest` で `values/` と `resources/` を検証しており、非同期機能を使う `values/variants.wast:83` のみを `conformance/skip-aot.txt` で除外した同期コマンドすべてが通過
 * async（#16、[ADR-0018](adr/0018-async-abi-on-chicory.md)）: Chicory で、callback 形式と stackful 形式の async lift、`task.return`、waitable set、subtask、`stream` / `future` / `error-context`、協調スレッドの組み込み関数、合成コンポーネントの async の呼び出しが動く。生成コード（`suspend fun`、`Flow`、`Deferred`）とホストの間の stream / future、ホストの `suspend fun` の import、並行の呼び出しと取り消し（ADR-0019）は、`async-stream` と `async-import` フィクスチャの E2E テストで確認
 * 差分テストは、Wasmtime の FFM と JNI の両方で流す。型付きブリッジでは、結果とブリッジ自身のエラーメッセージが汎用ブリッジと同じであることも確かめる（Wasmtime の lift のエラーは、種類だけを比べる）。境界値（空と 256 KiB の list、サロゲートペア、char の端、長い list<option>）も含む
 * Chicory と Wasmtime の差分テスト: rich types / host import / resource のライフサイクル / Canonical ABI のトラップ（不正な char・判別子・文字列、範囲外やアラインされていないポインタ、`cabi_realloc` の結果、`may_leave`、poison、borrow 中のハンドルの move）で結果が一致
@@ -126,6 +126,7 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 
 ### 完了
 
+* 静的コンポーネント配線生成と Phase 1 互換層の実装
 * Core Wasm の JVM バイトコード直接生成と仕様適合テストの整備
 * Core Wasm の型付き IR とビルド時パーサーアダプタの実装
 * 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
@@ -141,6 +142,8 @@ WASI 0.3 の P1 スコープも #13 と #100〜#102 で完結しました。「�
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#185](https://github.com/chikoski/wasm-component-kotlin/issues/185) では、[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 1 として `plan.json` から静的な `<Name>Component` 配線コードを生成する機能と `ComponentBackend` 互換層を実装しました。`:tooling` に `BuildPlan`、`AotComponentCompiler`、`AotComponentCodegen`、および `AotComponentBuild` を追加し、`AotModuleClassEmitter` にネスト型向けの `InnerClasses` 属性出力を加えています。`:runtime-aot` には `AotComponentBackend` を実装し、同期アダプターの資源所有権移動、借用貸与追跡、ホスト例外境界、およびインスタンスの poison 処理を `:runtime-canonical` へ委譲しました。ビルド時に生成したコンポーネントとコアモジュールのバイトコードには、実行時の `plan.json`、`.meta`、`kotlinx.serialization`、Chicory、およびリフレクションへの参照が含まれません。非同期コンポーネントはビルド時に拒否する仕様で、非同期実行は `#188` で扱います。検証は `AotComponentBuildTest`、`AotDifferentialTest`、`AotCanonicalAbiStrictnessTest`、`AotGeneratedBindingsTest`、および `AotConformanceTest` で行い、`conformance/skip-aot.txt` に記載した非同期構文を含む `values/variants.wast:83` と関連アサーション、および上流の `nyi.txt` を除いたすべての同期ケースを通過しました。Gradle プラグインの切り替えは `#186`、直接の Lower や Lift 生成は `#187` で進めます。
 
 [#184](https://github.com/chikoski/wasm-component-kotlin/issues/184) では、型付き IR から JVM バイトコードを直接生成する `AotCoreCompiler`、`WasmBytecodeEmitter`、`AotModuleClassEmitter`、および事前分割器 `IrMethodSplitter` を `:tooling` に実装しました。各モジュールのインスタンス状態、`data` セグメント、共有グローバルセル、複数引数スピル用 `AotSpillFrame`、および他モジュールとの `call_indirect` 連携を備えます。事前分割は後行順と適応的サイズ再計算で JVM と ART のメソッド上限内に収め、リポジトリ内の全フィクスチャおよび `runtime-chicory` の全コアモジュールでフォールバックなしのコンパイルと `verifyAll` 検証を通過しました。`pixelfray` の `png-glitch-component.wasm` については `-Dwasm2kt.extraWasm` を用いたローカル検証で同条件の通過を確認しています。さらに `conformance/core-wasm/` に Core Wasm 2.0 公式テストスイート 90 ファイルを取り込み、`:integration-tests` の `CoreWasmConformanceTest` で全 28,018 コマンドを検証しました。テキスト形式の `assert_malformed` 581 件はバイナリ検証の対象外としてスキップし、[ADR-0013](adr/0013-multi-memory-adapters.md) と [ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の複数メモリ対応方針と競合する 13 件を `conformance/core-wasm/skip.txt` で管理したうえで、残る 27,424 件のバイナリおよび実行時テストがすべて通過しました。なおコンポーネント全体の統合生成、R8 縮小、および Android ART エミュレーター上での実行検証は、後続の `#185` から `#188` の課題で進めます。
 

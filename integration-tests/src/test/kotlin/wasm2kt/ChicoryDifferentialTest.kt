@@ -48,14 +48,14 @@ open class ChicoryDifferentialTest {
      */
     protected open val compareWithGenericBridge: Boolean = false
 
-    private fun fixture(name: String): Path = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$name.wasm")).toURI())
+    protected fun fixture(name: String): Path = Paths.get(requireNotNull(javaClass.getResource("/fixtures/$name.wasm")).toURI())
 
     private fun chicoryPlanDir(name: String): Path =
         Paths.get("runtime-chicory/src/test/resources/components/$name").toAbsolutePath()
 
     /** Adapts a Wasmtime FFM bridge session to [ComponentBackend] so both can be driven alike. */
     /** Adapts a Wasmtime bridge session (FFM or JNI) to [ComponentBackend] so both can be driven alike. */
-    private class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?, componentId: String?, private val jni: Boolean) : ComponentBackend {
+    protected class WasmtimeBackend(wasm: Path, imports: WitHostImportDispatcher?, componentId: String?, private val jni: Boolean) : ComponentBackend {
         private val ffm = if (jni) null else FfmWasmtimeBridge.getDefault()
         private val session = ffm?.openSession(wasm, imports, componentId) ?: JniWasmtimeBridge.openSession(wasm, imports, componentId)
 
@@ -74,9 +74,9 @@ open class ChicoryDifferentialTest {
     }
 
     /** Host imports answered with JSON-written values (typed by the component's plan). */
-    private fun types(name: String) = PlanTypes.fromDirectory(chicoryPlanDir(name))
+    protected fun types(name: String) = PlanTypes.fromDirectory(chicoryPlanDir(name))
 
-    private fun wasmtime(name: String, imports: JsonImports?, typed: Boolean = typedBridge): JsonBackend {
+    protected fun wasmtime(name: String, imports: JsonImports?, typed: Boolean = typedBridge): JsonBackend {
         val types = types(name)
         val id = if (typed) name else null
         return JsonBackend(WasmtimeBackend(fixture(name), imports?.let { JsonHostImports(types, it) }, id, jni), types)
@@ -86,6 +86,8 @@ open class ChicoryDifferentialTest {
         val types = types(name)
         return JsonBackend(ChicoryComponent.fromDirectory(chicoryPlanDir(name)).instantiate(imports?.let { JsonHostImports(types, it) }), types)
     }
+
+    protected open fun pureJvmBackend(name: String, imports: JsonImports?): JsonBackend = chicory(name, imports)
 
     private class Call(val fn: String, vararg val args: JsonElement)
 
@@ -103,7 +105,7 @@ open class ChicoryDifferentialTest {
         }
         fun outcome(r: String) = if (r.startsWith("error: ")) "error" else r
         val expected = run(wasmtime(name, imports()))
-        val actual = run(chicory(name, imports()))
+        val actual = run(pureJvmBackend(name, imports()))
         calls.forEachIndexed { i, c ->
             assertEquals(outcome(expected[i]), outcome(actual[i]), "Mismatch for ${c.fn}(${c.args.joinToString()})")
         }
@@ -232,7 +234,7 @@ open class ChicoryDifferentialTest {
         )
         runBoth("counter", { null }, calls)
         // Matching is not enough (both could fail): the refused call must leave handle 1 usable.
-        val backends = listOf(wasmtime("counter", null), chicory("counter", null))
+        val backends = listOf(wasmtime("counter", null), pureJvmBackend("counter", null))
         for (b in backends) b.use {
             val one = JsonArray(listOf(JsonPrimitive(1)))
             assertEquals(1, it.invoke("[constructor]counter", JsonArray(listOf(JsonPrimitive(10)))).jsonPrimitive.int)
@@ -380,7 +382,7 @@ open class ChicoryDifferentialTest {
                 Call("echo-blob", j("""{"name":"ok","data":[1,2],"tag":7}""")),
             ),
         )
-        chicory("types", null).use { c ->
+        pureJvmBackend("types", null).use { c ->
             val result = c.invoke("echo-flagged", JsonArray(listOf(j(flagged)))).jsonObject
             assertEquals("some", result.getValue("option").jsonPrimitive.content)
             assertEquals(j(flagged), result.getValue("value"))
@@ -411,7 +413,7 @@ open class ChicoryDifferentialTest {
         wasmtime("live_calc", recorder(wasmtimeLog)).use { b ->
             inputs.forEach { (a, c) -> b.invoke("add", JsonArray(listOf(JsonPrimitive(a), JsonPrimitive(c)))) }
         }
-        chicory("live_calc", recorder(chicoryLog)).use { b ->
+        pureJvmBackend("live_calc", recorder(chicoryLog)).use { b ->
             inputs.forEach { (a, c) -> b.invoke("add", JsonArray(listOf(JsonPrimitive(a), JsonPrimitive(c)))) }
         }
         assertEquals(wasmtimeLog, chicoryLog)

@@ -7,9 +7,11 @@ Chicory バックエンドが仕様に適合しているかを、Wasmtime との
 
 ```bash
 ./gradlew :integration-tests:test --tests 'wasm2kt.conformance.ConformanceTest'
+./gradlew :integration-tests:test --tests 'wasm2kt.conformance.AotConformanceTest'
 ```
 
 * `ConformanceTest` が、`.wast` を `wasm-tools json-from-wast` で変換し、コンポーネントを同梱の decomposer で分解して、Chicory（インタプリタ）で実行します。テストは、コマンドごとに 1 つです（`values/strings.wast:23 assert_return f1` のような名前）
+* `AotConformanceTest` が `values/` と `resources/` の同期項目をビルド時 AOT 配線でコンパイルし、同じコマンド形式で実行します
 * 対象のディレクトリは、今は `values/`、`resources/`、`async/` です（`async/` は #16）。`validation/`、`linking/`、`binary/` は、まだ対象にしていません
 * `assert_trap` は、`ComponentTrapException`（ADR-0007）になることを確かめます。メッセージは比べません
 * `assert_invalid` は分解が失敗すること、`assert_uninstantiable` はインスタンス化が `ComponentTrapException` になることを確かめます
@@ -17,7 +19,7 @@ Chicory バックエンドが仕様に適合しているかを、Wasmtime との
 
 ## 失敗を管理する
 
-* 既知の失敗は `skip.txt` に、理由と Issue の番号を付けて書きます
+* 既知の失敗は `skip.txt`（Chicory）または `skip-aot.txt`（AOT）に、理由と Issue の番号を付けて書きます
   * `<ファイル>`: そのファイルのすべて
   * `<ファイル>:<行>`: その行のコマンドだけ
 * 仕様リポジトリの `nyi.txt`（実装が追いついていないテスト）に載ったファイルも飛ばします
