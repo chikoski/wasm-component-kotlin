@@ -1133,7 +1133,15 @@ class Wasm2KtPluginFunctionalTest {
             withPluginClasspath = false,
         ).build()
         for (task in aotTasks + ":testDebugUnitTest" + ":assembleRelease") {
-            assertEquals(TaskOutcome.SUCCESS, first.task(task)?.outcome, "$task should succeed")
+            val outcome = first.task(task)?.outcome
+            if (":wasm2ktGenerate" in task) {
+                assertTrue(
+                    outcome == TaskOutcome.SUCCESS || outcome == TaskOutcome.FROM_CACHE,
+                    "$task should succeed or reuse sibling variant cache entry (was $outcome)",
+                )
+            } else {
+                assertEquals(TaskOutcome.SUCCESS, outcome, "$task should succeed")
+            }
         }
 
         val apk = dir.resolve("build/outputs/apk/release")
