@@ -6,10 +6,13 @@ import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.ComponentTrapException
+import wasm2kt.runtime.HostFunction as WitHostFunction
+import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.canonical.AbiContext
 import wasm2kt.runtime.canonical.CanonicalMemory
 import wasm2kt.runtime.canonical.ComponentGuard
+import wasm2kt.runtime.canonical.FuncType
 import wasm2kt.runtime.canonical.InternalWasm2KtApi
 import wasm2kt.runtime.canonical.Lifter
 import wasm2kt.runtime.canonical.Lowerer
@@ -461,5 +464,175 @@ class RuntimeAotTest {
         assertEquals(0xFFF0_0000_0000_0456uL.toLong(), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Copysign(snan64, -1.0)))
         assertEquals(java.lang.Double.doubleToRawLongBits(-0.0), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Trunc(-0.5)))
         assertEquals(java.lang.Double.doubleToRawLongBits(-0.0), java.lang.Double.doubleToRawLongBits(WasmNumerics.f64Sqrt(-0.0)))
+    }
+
+    @Test
+    fun `AotComponentBackend handles exports, sync resource transfers, traps, and host errors`() {
+        val droppedReps = mutableListOf<Int>()
+        val hostSeen = mutableListOf<String>()
+        val tables = arrayOf(
+            AotResourceTableDesc(index = 0, resource = 0, imported = false, instance = 0, definedInInstance = 0),
+            AotResourceTableDesc(index = 1, resource = 0, imported = false, instance = 1, definedInInstance = 0),
+            AotResourceTableDesc(index = 2, resource = -1, imported = true, instance = 0, definedInInstance = -1, dropKey = "env#[resource-drop]h"),
+        )
+        val dispatcher = object : WitHostImportDispatcher {
+            override fun hostFunction(key: String): WitHostFunction = WitHostFunction { args, results ->
+                when (key) {
+                    "env#echo" -> {
+                        val s = args.string()
+                        hostSeen += s
+                        results.string("$s!")
+                    }
+                    "env#[resource-drop]h" -> {
+                        droppedReps += args.int()
+                    }
+                    "env#boom" -> throw UnsupportedOperationException("host boom")
+                    else -> error("Unknown $key")
+                }
+            }
+        }
+        val mem = LinearMemory(1, 2)
+        var bump = 64
+        val opts = AotCanonOptions(StringEncoding.UTF8, instance = 0).apply {
+            memory = mem
+            realloc = AotRealloc { _, _, align, size ->
+                bump = ((bump + align - 1) / align) * align
+                val p = bump
+                bump += size
+                p
+            }
+        }
+
+        lateinit var rt: AotComponentBackend
+        val exports = arrayOf(
+            AotExportDesc(
+                instance = "pkg:ns/api@1.0",
+                name = "round-str",
+                type = FuncType(listOf("s" to WitType.Str), listOf(WitType.Str)),
+                options = opts,
+                func = AotCoreFunction { coreArgs ->
+                    val ptr = coreArgs[0].toInt()
+                    val len = coreArgs[1].toInt()
+                    assertEquals("hi", mem.readBytes(ptr, len).decodeToString())
+                    val retPtr = 128
+                    rt.callHost("env#echo", FuncType(listOf("x" to WitType.Str), listOf(WitType.Str)), opts, longArrayOf(ptr.toLong(), len.toLong(), retPtr.toLong()))
+                    val resPtr = mem.readInt(retPtr)
+                    val resLen = mem.readInt(retPtr + 4)
+                    assertEquals("hi!", mem.readBytes(resPtr, resLen).decodeToString())
+                    longArrayOf(retPtr.toLong())
+                },
+            ),
+            AotExportDesc(
+                instance = null,
+                name = "make-res",
+                type = FuncType(emptyList(), listOf(WitType.Own(0))),
+                options = opts,
+                func = AotCoreFunction { longArrayOf(rt.resourceNew(0, 77).toLong()) },
+            ),
+            AotExportDesc(
+                instance = null,
+                name = "sync-borrow-rep",
+                type = FuncType(listOf("r" to WitType.Borrow(0)), listOf(WitType.S32)),
+                options = opts,
+                func = AotCoreFunction { args ->
+                    // Borrow the caller's rep inside a nested owning handle for a sync call; verify dropping the
+                    // owning handle while lent traps, and that exitSyncCall releases the lend cleanly afterward.
+                    rt.enterSyncCall()
+                    val h0 = rt.resourceNew(0, args[0].toInt())
+                    val h1 = rt.resourceTransferBorrow(h0, 0, 1)
+                    val rep = rt.resourceRep(1, h1)
+                    val lentDropTrap = assertThrows<ComponentTrapException> { rt.resourceDrop(0, h0) }
+                    assertTrue("lent" in lentDropTrap.message!!)
+                    rt.resourceDrop(1, h1)
+                    rt.exitSyncCall()
+                    rt.resourceDrop(0, h0)
+                    longArrayOf(rep.toLong())
+                },
+            ),
+            AotExportDesc(
+                instance = null,
+                name = "trap-while-borrowing",
+                type = FuncType(emptyList(), emptyList()),
+                options = opts,
+                func = AotCoreFunction {
+                    rt.enterSyncCall()
+                    val h0 = rt.resourceNew(0, 55)
+                    rt.resourceTransferBorrow(h0, 0, 1)
+                    // Trap mid-sync-call before dropping borrow h1 or calling exitSyncCall; invoke's finally unwinds syncCallStack.
+                    rt.adapterTrap(0, arrayOf("mid-sync trap"))
+                },
+            ),
+            AotExportDesc(
+                instance = null,
+                name = "unreleased-borrow",
+                type = FuncType(emptyList(), listOf(WitType.S32)),
+                options = opts,
+                func = AotCoreFunction {
+                    rt.enterSyncCall()
+                    val h0 = rt.resourceNew(0, 99)
+                    rt.resourceTransferBorrow(h0, 0, 1)
+                    rt.exitSyncCall()
+                    longArrayOf(1)
+                },
+            ),
+            AotExportDesc(
+                instance = null,
+                name = "call-boom",
+                type = FuncType(emptyList(), emptyList()),
+                options = opts,
+                func = AotCoreFunction {
+                    rt.callHost("env#boom", FuncType(emptyList(), emptyList()), opts, LongArray(0))
+                },
+            ),
+        )
+        rt = AotComponentBackend(dispatcher, tables).apply {
+            registerResourceDtor(0, AotResourceDtor { rep -> droppedReps += rep })
+            setExports(exports)
+        }
+
+        // ADR-0011 short & unversioned resolution
+        val fnIdx = rt.resolve("api#round-str")
+        assertEquals(fnIdx, rt.resolve("pkg:ns/api#round-str"))
+        assertEquals(fnIdx, rt.resolve("round-str"))
+        val out = rt.invoke(fnIdx, WitWriter().apply { string("hi") }.toReader()).string()
+        assertEquals("hi!", out)
+        assertEquals(listOf("hi"), hostSeen)
+
+        // Own + Borrow lifecycle & host error on invalid unread bytes without poisoning
+        val ownHandle = rt.invoke(rt.resolve("make-res"), WitWriter().toReader()).int()
+        assertThrows<IllegalArgumentException> {
+            rt.invoke(rt.resolve("sync-borrow-rep"), WitWriter().apply { int(ownHandle); int(123) }.toReader())
+        }
+        assertEquals(77, rt.invoke(rt.resolve("sync-borrow-rep"), WitWriter().apply { int(ownHandle) }.toReader()).int())
+        // sync-borrow-rep destroyed its inner owning handle h0 for rep 77; the caller's ownHandle still owns rep 77 until dropped.
+        assertEquals(listOf(77), droppedReps)
+        rt.dropResource(ownHandle)
+        assertEquals(listOf(77, 77), droppedReps)
+
+        // Trap mid-sync-call unwinds syncCallStack and poisons the instance
+        val rtMid = AotComponentBackend(dispatcher, tables).apply { setExports(exports) }
+        val midTrap = assertThrows<ComponentTrapException> {
+            rtMid.invoke(rtMid.resolve("trap-while-borrowing"), WitWriter().toReader())
+        }
+        assertTrue("mid-sync trap" in midTrap.message!!)
+        assertThrows<ComponentTrapException> { rtMid.resolve("make-res") }
+        rtMid.close()
+
+        // Unreleased borrow traps and poisons
+        val borrowTrap = assertThrows<ComponentTrapException> {
+            rt.invoke(rt.resolve("unreleased-borrow"), WitWriter().toReader())
+        }
+        assertTrue("borrow handles still remain" in borrowTrap.message!!)
+        assertThrows<ComponentTrapException> { rt.resolve("make-res") }
+        rt.close()
+
+        // Host exception preserves original type and poisons instance
+        val rt2 = AotComponentBackend(dispatcher, tables).apply { setExports(exports) }
+        assertThrows<UnsupportedOperationException> {
+            rt2.invoke(rt2.resolve("call-boom"), WitWriter().toReader())
+        }
+        assertThrows<ComponentTrapException> { rt2.resolve("make-res") }
+        rt2.close()
+        assertThrows<IllegalStateException> { rt2.resolve("make-res") }
     }
 }

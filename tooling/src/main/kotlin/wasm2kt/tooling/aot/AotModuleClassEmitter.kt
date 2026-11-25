@@ -186,6 +186,7 @@ internal object AotModuleClassEmitter {
         }
 
         // 2. FuncGroup_* classes
+        val funcGroupNodes = ArrayList<ClassNode>(funcGroups.size)
         for (group in funcGroups) {
             val cn = ClassNode().apply {
                 version = Opcodes.V17
@@ -197,6 +198,7 @@ internal object AotModuleClassEmitter {
             for (plan in group.plans) {
                 cn.methods.addAll(WasmBytecodeEmitter.emitFunctionMethods(plan, emitCtx))
             }
+            funcGroupNodes += cn
             emittedNodes += cn
         }
 
@@ -210,6 +212,17 @@ internal object AotModuleClassEmitter {
                 options = options,
             ),
         )
+
+        // Attach JVMS §4.7.6 InnerClasses metadata on FuncGroup_* classes referencing Result_* / Imports.
+        for (fg in funcGroupNodes) {
+            if (importsIfaceInternal != null) {
+                fg.visitInnerClass(importsIfaceInternal, instanceInternalName, "Imports", Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_ABSTRACT or Opcodes.ACC_INTERFACE)
+            }
+            for ((_, results) in multiValueTupleTypes) {
+                val tupleInternal = AotNames.multiValueInternalName(instanceInternalName, results)
+                fg.visitInnerClass(tupleInternal, instanceInternalName, tupleInternal.substringAfterLast('$'), Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_FINAL)
+            }
+        }
 
         // 4. Multi-value Result_* classes
         for ((_, results) in multiValueTupleTypes) {
@@ -936,12 +949,14 @@ internal object AotModuleClassEmitter {
 
     private fun emitMultiValueTupleClass(instanceInternalName: String, results: List<IrValType>): ClassNode {
         val name = AotNames.multiValueInternalName(instanceInternalName, results)
+        val simpleName = name.substringAfterLast('$')
         val cn = ClassNode().apply {
             version = Opcodes.V17
             access = Opcodes.ACC_PUBLIC or Opcodes.ACC_FINAL or Opcodes.ACC_SUPER
             this.name = name
             superName = "java/lang/Object"
         }
+        cn.visitInnerClass(name, instanceInternalName, simpleName, Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_FINAL)
         for (i in results.indices) {
             cn.visitField(Opcodes.ACC_PUBLIC, "v$i", AotNames.jvmDesc(results[i]), null, null)
         }
@@ -967,10 +982,28 @@ internal object AotModuleClassEmitter {
             name = importsIfaceInternal
             superName = "java/lang/Object"
         }
+        cn.visitInnerClass(
+            importsIfaceInternal,
+            instanceInternalName,
+            "Imports",
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_ABSTRACT or Opcodes.ACC_INTERFACE,
+        )
+        val visitedResults = HashSet<String>()
         for (imp in ir.importedFunctions) {
             val ft = ir.types[imp.typeIndex]
             val desc = AotNames.importMethodDesc(ft.params, ft.results, instanceInternalName)
             cn.methods.add(MethodNode(Opcodes.ACC_PUBLIC or Opcodes.ACC_ABSTRACT, AotNames.importBridgeName(imp.funcIndex), desc, null, null))
+            if (ft.results.size >= 2) {
+                val tupleInternal = AotNames.multiValueInternalName(instanceInternalName, ft.results)
+                if (visitedResults.add(tupleInternal)) {
+                    cn.visitInnerClass(
+                        tupleInternal,
+                        instanceInternalName,
+                        tupleInternal.substringAfterLast('$'),
+                        Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_FINAL,
+                    )
+                }
+            }
         }
         return cn
     }
@@ -1000,6 +1033,23 @@ internal object AotModuleClassEmitter {
             superName = "java/lang/Object"
             interfaces = mutableListOf(AotNames.CORE_INSTANCE_IFACE_INTERNAL)
             sourceFile = "core${ir.moduleIndex}.wasm"
+        }
+        if (importsIfaceInternal != null) {
+            cn.visitInnerClass(
+                importsIfaceInternal,
+                instanceInternalName,
+                "Imports",
+                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_ABSTRACT or Opcodes.ACC_INTERFACE,
+            )
+        }
+        for ((_, results) in multiValueTupleTypes) {
+            val tupleInternal = AotNames.multiValueInternalName(instanceInternalName, results)
+            cn.visitInnerClass(
+                tupleInternal,
+                instanceInternalName,
+                tupleInternal.substringAfterLast('$'),
+                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_FINAL,
+            )
         }
 
         // Instance fields.

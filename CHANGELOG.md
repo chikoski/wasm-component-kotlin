@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* `plan.json` からの静的コンポーネント配線生成と `ComponentBackend` 互換層の実装
 * Core Wasm の JVM バイトコード直接生成と適合テストの追加
 * Core Wasm の型付き IR と Chicory パーサーアダプタの実装
 * 共通 Canonical ABI 層と AOT 実行時基盤モジュールの追加
@@ -60,6 +61,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#185](https://github.com/chikoski/wasm-component-kotlin/issues/185) に対応し、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 1 として `plan.json` から静的なコンポーネント配線コードを生成する仕組みと `ComponentBackend` 互換層を実装しました。`:tooling` にはビルド時パーサー `BuildPlan`、コンパイラ駆動 `AotComponentCompiler`、配線生成器 `AotComponentCodegen`、および一括パイプライン `AotComponentBuild` を追加しています。あわせて `AotModuleClassEmitter` のネスト型に対する `InnerClasses` 属性出力と、`:runtime-aot` の `AotComponentBackend` も実装しました。これにより生成されるコンポーネントは実行時の `plan.json`、`.meta`、`kotlinx.serialization`、Chicory、およびリフレクションへ依存せずに動作します。非同期コンポーネントはビルド時に拒否する設計を維持しており、非同期の対応は後続の `#188` で進めます。Wasmtime との差分テスト、Canonical ABI の境界テスト、ワールド DSL テスト、および公式適合テストの同期範囲 `values/` と `resources/` の検証を通過しています。
 
 [#184](https://github.com/chikoski/wasm-component-kotlin/issues/184) に対応し、`:tooling` に型付き IR から ASM ベースで JVM バイトコードを直接生成する `AotCoreCompiler`、`WasmBytecodeEmitter`、`AotModuleClassEmitter`、および `IrMethodSplitter` を実装しました。出力されるメソッドのコードサイズ上限を守るため、構造化 CFG 上で事前分割を行い、ローカル変数が 64 個を超える関数では型別のフレーム配列に切り替えます。`:runtime-aot` では `AotSpillFrame` や数値変換補助などを整備し、JVM 17 と `animalsnifferMain` による Android API 26 互換検査を維持しました。あわせて Core Wasm 2.0 公式テストスイート 90 ファイルから `simd/` を除いて取り込み、`CoreWasmConformanceTest` で全 28,018 コマンドを検証しました。テキスト形式の `assert_malformed` 581 件はバイナリコンパイラの対象外としてスキップし、`multi-memory` 対応方針と競合する `skip.txt` の 13 件を除いた 27,424 件のバイナリおよび実行時テストが通過しています。
 

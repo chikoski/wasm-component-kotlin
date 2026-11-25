@@ -1,0 +1,5 @@
+# Known failures of the Component Model reference tests (values/, resources/) on the AOT backend (#185).
+# `<file>` skips a whole file, `<file>:<line>` one command (the line of the command in the .wast).
+# A listed command that passes fails AotConformanceTest, so remove it once fixed.
+
+values/variants.wast:83  # uses Component Model async ABI (canon task.return / async lift & lower); AOT async support is tracked in #188

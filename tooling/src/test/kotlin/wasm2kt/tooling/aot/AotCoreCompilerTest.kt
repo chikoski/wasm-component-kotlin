@@ -500,6 +500,66 @@ class AotCoreCompilerTest {
         assertEquals(0, loader.invoke(inst, "sz"))
     }
 
+    @Test
+    fun `emits InnerClasses attributes for Imports and multi-value tuple nested classes`(@TempDir tempDir: Path) {
+        val modBytes = wasmModule(
+            1 to typeSection(funcType(listOf(I32), listOf(I32, I64))),
+            2 to importSection(strBytes("env") + strBytes("pair") + listOf(0x00, 0x00)),
+            3 to funcSection(0),
+            7 to exportSection("run" to (0x00 to 1)),
+            10 to codeSection(codeBody(emptyList(), listOf(0x20, 0x00, 0x10, 0x00))),
+        )
+        val classesDir = tempDir.resolve("classes")
+        val resDir = tempDir.resolve("res")
+        val compiled = AotCoreCompiler.compileToDirectory(
+            ChicoryWasmAdapter.convert(modBytes, 0),
+            classesDir,
+            resDir,
+            "wasm2kt.test.inner",
+            "Core0",
+        )
+        AotCoreCompiler.verifyAll(compiled)
+
+        val instNode = ClassNode().also { ClassReader(compiled.classes.getValue("wasm2kt/test/inner/Core0Instance")).accept(it, 0) }
+        val innerNames = instNode.innerClasses.map { it.name }.toSet()
+        assertTrue("wasm2kt/test/inner/Core0Instance\$Imports" in innerNames)
+        assertTrue("wasm2kt/test/inner/Core0Instance\$Result_IJ" in innerNames)
+
+        val ktSrc = tempDir.resolve("Caller.kt")
+        Files.writeString(
+            ktSrc,
+            """
+            package wasm2kt.test.inner.caller
+            import wasm2kt.test.inner.Core0Instance
+            import wasm2kt.test.inner.Core0FuncGroup_0
+            fun callIt(): Long {
+                val imp = object : Core0Instance.Imports {
+                    override fun imp_0(p0: Int): Core0Instance.Result_IJ =
+                        Core0Instance.Result_IJ().apply { v0 = p0 + 1; v1 = p0.toLong() * 10L }
+                }
+                val inst = Core0Instance(imp)
+                val res = Core0FuncGroup_0.func_1(5, inst)
+                return res.v0.toLong() + res.v1
+            }
+            """.trimIndent(),
+        )
+        val outDir = tempDir.resolve("caller-classes")
+        Files.createDirectories(outDir)
+        val classpath = listOf(System.getProperty("java.class.path"), classesDir.toString())
+            .joinToString(java.io.File.pathSeparator)
+        val exit = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-jvm-target", "17", "-no-stdlib",
+            "-classpath", classpath,
+            "-d", outDir.toString(),
+            ktSrc.toString(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exit)
+        val loader = java.net.URLClassLoader(arrayOf(outDir.toUri().toURL(), classesDir.toUri().toURL()), javaClass.classLoader)
+        val result = loader.loadClass("wasm2kt.test.inner.caller.CallerKt").getDeclaredMethod("callIt").invoke(null) as Long
+        assertEquals(56L, result)
+    }
+
     // ---------------------------------------------------------------- Test helpers
 
     internal class CompiledModuleLoader(
