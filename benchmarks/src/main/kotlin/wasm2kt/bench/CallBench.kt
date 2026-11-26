@@ -20,19 +20,24 @@ import kotlin.random.Random
 fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     println(environment())
     val h = Harness()
-    val backends = listOf("aot", "chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni")
+    val backends = listOf("aot", "aot-p1", "chicory-aot", "chicory-interp", "wasmtime-ffm", "wasmtime-jni")
 
     // ---- arithmetic: per-call overhead with almost no work or data
-    for (b in backends) {
+    run {
+        val s = bench.arithmetic_aot.openSession(bench.arithmetic_aot.ArithmeticAotComponent)
+        context(s) { h.run("call", "add(s32,s32)", "aot/dsl") { bench.arithmetic_aot.add(1, 2) } }
+        s.close()
+    }
+    for (b in backends.drop(1)) {
         val s = openArithmetic(b)
         context(s) { h.run("call", "add(s32,s32)", "$b/dsl") { bench.arithmetic.add(1, 2) } }
         s.close()
     }
     run {
-        val aotBackend = bench.arithmetic.ArithmeticAotComponent.instantiate(null)
+        val aotBackend = bench.arithmetic.ArithmeticAotP1Component.instantiate(null)
         val args = WitWriter().apply { int(1); int(2) }
         val aotAdd = aotBackend.resolve("add")
-        h.run("call", "add(s32,s32)", "aot/backend") { aotBackend.invoke(aotAdd, args.toReader()) }
+        h.run("call", "add(s32,s32)", "aot-p1/backend") { aotBackend.invoke(aotAdd, args.toReader()) }
         aotBackend.close()
         val backend = bench.arithmetic.ArithmeticComponent.instantiate(null)
         val add = backend.resolve("add")
@@ -51,8 +56,18 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     // ---- types: strings, bytes and records across the boundary
     val sizes = listOf(16, 1024, 65536)
     val payloads = sizes.associateWith { Random(it).nextBytes(it) }
+    val blobAot = bench.types_aot.Blob(name = "sample", data = Random(7).nextBytes(1024), tag = 7u)
+    run {
+        val s = bench.types_aot.openSession(bench.types_aot.TypesAotComponent)
+        context(s) {
+            h.run("data", "echo-name(string 5)", "aot/dsl") { bench.types_aot.echoName("hello") }
+            for (n in sizes) h.run("data", "echo-bytes(list<u8> $n)", "aot/dsl") { bench.types_aot.echoBytes(payloads.getValue(n)) }
+            h.run("data", "echo-blob(record, 1 KiB)", "aot/dsl") { bench.types_aot.echoBlob(blobAot) }
+        }
+        s.close()
+    }
     val blob = bench.types.Blob(name = "sample", data = Random(7).nextBytes(1024), tag = 7u)
-    for (b in backends) {
+    for (b in backends.drop(1)) {
         val s = openTypes(b)
         context(s) {
             h.run("data", "echo-name(string 5)", "$b/dsl") { bench.types.echoName("hello") }
@@ -62,11 +77,11 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
         s.close()
     }
     run {
-        val aotBackend = bench.types.TypesAotComponent.instantiate(null)
+        val aotBackend = bench.types.TypesAotP1Component.instantiate(null)
         val aotEchoBytes = aotBackend.resolve("echo-bytes")
         for (n in sizes) {
             val args = WitWriter().apply { bytes(payloads.getValue(n)) }
-            h.run("data", "echo-bytes(list<u8> $n)", "aot/backend") { aotBackend.invoke(aotEchoBytes, args.toReader()) }
+            h.run("data", "echo-bytes(list<u8> $n)", "aot-p1/backend") { aotBackend.invoke(aotEchoBytes, args.toReader()) }
         }
         aotBackend.close()
         val backend = bench.types.TypesComponent.instantiate(null)
@@ -91,7 +106,18 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
         append(']')
     }
     val sortInput = Random(11).nextBytes(65536)
-    for (b in backends) {
+    run {
+        val s = bench.heavy_aot.openSession(bench.heavy_aot.HeavyAotComponent)
+        context(s) {
+            h.run("compute", "lcg-sum(n=1e6)", "aot/dsl") { bench.heavy_aot.lcgSum(1u, 1_000_000u) }
+            h.run("compute", "regex-count(16 B)", "aot/dsl") { bench.heavy_aot.regexCount("[a-z]+ing", "running walking ") }
+            h.run("compute", "regex-count(${text.length / 1024} KiB)", "aot/dsl") { bench.heavy_aot.regexCount("[a-z]+ing", text) }
+            h.run("compute", "json-roundtrip(${json.length / 1024} KiB)", "aot/dsl") { bench.heavy_aot.jsonRoundtrip(json) }
+            h.run("compute", "sort-bytes(64 KiB)", "aot/dsl") { bench.heavy_aot.sortBytes(sortInput) }
+        }
+        s.close()
+    }
+    for (b in backends.drop(1)) {
         val s = openHeavy(b)
         context(s) {
             h.run("compute", "lcg-sum(n=1e6)", "$b/dsl") { bench.heavy.lcgSum(1u, 1_000_000u) }
@@ -110,7 +136,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
 private fun wasmtime(b: String, jni: () -> Unit, ffm: () -> Unit) { if (b == "wasmtime-jni") jni() else ffm() }
 
 internal fun openArithmetic(b: String): bench.arithmetic.Session = when (b) {
-    "aot" -> bench.arithmetic.openSession(bench.arithmetic.ArithmeticAotComponent)
+    "aot-p1" -> bench.arithmetic.openSession(bench.arithmetic.ArithmeticAotP1Component)
     "chicory-aot" -> bench.arithmetic.openSession(bench.arithmetic.ArithmeticComponent)
     "chicory-interp" -> bench.arithmetic.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("arithmetic")))
     else -> {
@@ -120,7 +146,7 @@ internal fun openArithmetic(b: String): bench.arithmetic.Session = when (b) {
 }
 
 internal fun openTypes(b: String): bench.types.Session = when (b) {
-    "aot" -> bench.types.openSession(bench.types.TypesAotComponent)
+    "aot-p1" -> bench.types.openSession(bench.types.TypesAotP1Component)
     "chicory-aot" -> bench.types.openSession(bench.types.TypesComponent)
     "chicory-interp" -> bench.types.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("types")))
     else -> {
@@ -130,7 +156,7 @@ internal fun openTypes(b: String): bench.types.Session = when (b) {
 }
 
 internal fun openHeavy(b: String): bench.heavy.Session = when (b) {
-    "aot" -> bench.heavy.openSession(bench.heavy.HeavyAotComponent)
+    "aot-p1" -> bench.heavy.openSession(bench.heavy.HeavyAotP1Component)
     "chicory-aot" -> bench.heavy.openSession(bench.heavy.HeavyComponent)
     "chicory-interp" -> bench.heavy.openSession(ChicoryComponent.fromDirectory(BenchPaths.decomposed("heavy")))
     else -> {

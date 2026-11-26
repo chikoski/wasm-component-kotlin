@@ -33,14 +33,6 @@ class CallBenchmark {
     @Test fun add_aot_dsl() = arithmetic(ArithmeticComponent) { com.example.wasm2kt.bench.arithmetic.add(1, 2) }
     @Test fun add_interp_dsl() = arithmetic(Payloads.interpreted("arithmetic")) { com.example.wasm2kt.bench.arithmetic.add(1, 2) }
 
-    @Test fun add_staticAot_backend() {
-        val backend = ArithmeticAotComponent.instantiate(null)
-        val args = WitWriter().apply { int(1); int(2) }
-        val add = backend.resolve("add")
-        rule.measureRepeated { backend.invoke(add, args.toReader()) }
-        backend.close()
-    }
-
     @Test fun add_aot_backend() {
         val backend = ArithmeticComponent.instantiate(null)
         val args = WitWriter().apply { int(1); int(2) }
@@ -62,12 +54,10 @@ class CallBenchmark {
     @Test fun echoBytes16_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(16)) }
     @Test fun echoBytes1024_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(1024)) }
     @Test fun echoBytes65536_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(65536)) }
-    @Test fun echoBytes1024_staticAot_backend() {
-        val backend = TypesAotComponent.instantiate(null)
-        val args = WitWriter().apply { bytes(Payloads.bytes.getValue(1024)) }
-        val echoBytes = backend.resolve("echo-bytes")
-        rule.measureRepeated { backend.invoke(echoBytes, args.toReader()) }
-        backend.close()
+    @Test fun echoBlob1024_staticAot_dsl() = typesStaticAot {
+        com.example.wasm2kt.bench.types_aot.echoBlob(
+            com.example.wasm2kt.bench.types_aot.Blob(name = "sample", data = Payloads.bytes.getValue(1024), tag = 7u),
+        )
     }
 
     @Test fun echoName5_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoName("hello") }

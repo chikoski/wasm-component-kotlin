@@ -127,7 +127,20 @@ class WitToKotlinPoetConverter(
      * the bridge library must be a typed bridge that contains it. `null` uses the generic path.
      */
     private val bridgeId: String? = null,
+    /**
+     * Generate Phase 2 direct-wired AOT World DSL bindings (ADR-0023): `Session` exposes
+     * `internal abstract fun __export_*`, `openSession`/`withSession` accept only
+     * `AotComponentFactory<AotImports, Session>`, local value types omit `WitWriter`/`WitReader`, and
+     * local unmapped host imports omit `Linker`.
+     */
+    private val aotDirectMode: Boolean = false,
 ) {
+    init {
+        require(!(interfacesOnly && aotDirectMode)) {
+            "aotDirectMode cannot be combined with interfacesOnly (ADR-0014 libraries stay backend-agnostic)"
+        }
+    }
+
     private val generatedTupleArities = mutableSetOf<Int>()
 
     /** `, "<bridgeId>"` for the bridges' `open*` calls, or nothing. */
@@ -138,6 +151,10 @@ class WitToKotlinPoetConverter(
 
     /** The manifest of the generated library; set by [generate] when [interfacesOnly] is on. */
     var manifest: InterfaceManifest? = null
+        private set
+
+    /** Metadata of the generated world when [aotDirectMode] is enabled, populated by [generate]. */
+    var aotModel: AotWorldModel? = null
         private set
 
     // State of the world being generated (ADR-0011).
@@ -156,14 +173,28 @@ class WitToKotlinPoetConverter(
     private val hostContracts = mutableMapOf<Int, HostContract?>()
     private val exportedInterfaceObjects = mutableSetOf<Int>()
 
-    private val witSessionClass = ClassName(targetPackage, "WitSession")
+    private val witSessionClass: ClassName
+        get() = if (aotDirectMode) ClassName(targetPackage, "Session") else ClassName(targetPackage, "WitSession")
     private val witExportsClass = ClassName(targetPackage, "WitExports")
+    private val aotImportsClass = ClassName(targetPackage, "AotImports")
+    private val aotComponentFactoryClass = ClassName("wasm2kt.runtime.aot", "AotComponentFactory")
     private val linkerClass = ClassName("wasm2kt.runtime", "Linker")
     private val importsFactoryClass = ClassName("wasm2kt.runtime", "ImportsFactory")
     private val hostResourceTableClass = ClassName("wasm2kt.runtime", "HostResourceTable")
     private val witHostResourceClass = ClassName("wasm2kt.runtime", "WitHostResource")
     private val witBorrowedClass = ClassName("wasm2kt.runtime", "WitBorrowed")
     private val hostResourceBoundSessionClass = ClassName(targetPackage, "HostResourceBoundSession")
+
+    // Phase 2 AOT model collectors populated when aotDirectMode == true.
+    private var aotSessionBuilder: TypeSpec.Builder? = null
+    private val aotExportsMap = linkedMapOf<String, AotExportBinding>()
+    private val aotImportsMap = linkedMapOf<String, AotImportBinding>()
+    private val aotMappedDropKeys = linkedSetOf<String>()
+    private var aotNextExportId: Int = 0
+    private var aotHasHostResources: Boolean = false
+    private var aotHasGuestResources: Boolean = false
+    private val aotCatalogEntries = linkedMapOf<AotTypeKey, AotTypeInfo>()
+    private val aotCatalogVisited = mutableSetOf<AotTypeKey>()
 
     /** Monotonic counter so temporary locals in generated `writeTo` / encoders never shadow or collide. */
     private var localVarCounter: Int = 0
@@ -402,6 +433,17 @@ class WitToKotlinPoetConverter(
         val exportedIds = currentExportedIfaces
 
         val resourceFunctions = collectResourceFunctions(importedIds + exportedIds, world)
+        val exportMarkers = world.exports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { exportMarkerClassName(it.id) }
+        if (aotDirectMode) {
+            aotSessionBuilder = TypeSpec.classBuilder("Session")
+                .addModifiers(KModifier.ABSTRACT)
+                .addKdoc("A direct-wired AOT session of the `%L` world. Close it to release the component instance.\n", world.name)
+                .apply { world.docs?.contents?.let { addKdoc("\n%L\n", it.trim()) } }
+                .addSuperinterface(ClassName("java.lang", "AutoCloseable"))
+                .addSuperinterface(witExportsClass)
+                .addSuperinterfaces(exportMarkers)
+                .primaryConstructor(FunSpec.constructorBuilder().addModifiers(KModifier.INTERNAL).build())
+        }
 
         // 1. Types: interface types go to the interface's own file and package, world types into the world object.
         for (ifaceId in importedIds) if (ifaceId !in mappedPackages) emitInterfaceTypes(ifaceId, Direction.IMPORT, resourceFunctions)
@@ -417,19 +459,22 @@ class WitToKotlinPoetConverter(
             }
         }
 
-        // 2. Host imports: a Kotlin interface + `Linker.add` per imported interface, the same for
-        // world-level functions, and a typed `imports(...)` that builds a complete linker.
+        // 2. Host imports: a Kotlin interface (+ `Linker.add` in non-AOT mode or mapped ADR-0014 libs),
+        // the same for world-level functions, and a typed `imports(...)`.
         val importParams = mutableListOf<ImportParam>()
         val requiredKeys = mutableListOf<String>()
+        val mappedRequiredKeys = mutableListOf<String>()
         for (ifaceId in importedIds) {
             val contract = hostContract(ifaceId) ?: continue
+            val mapped = ifaceId in mappedPackages
             importParams += ImportParam(
                 importParameterName(ifaceId),
                 contract.className,
                 contract.addFunction,
-                isMapped = ifaceId in mappedPackages,
+                isMapped = mapped,
             )
             requiredKeys += contract.keys
+            if (mapped) mappedRequiredKeys += contract.keys
         }
         val worldContract = worldHostContract(world, worldImportsClassName, fileBuilder)
         if (worldContract != null) {
@@ -437,181 +482,142 @@ class WitToKotlinPoetConverter(
             requiredKeys += worldContract.keys
         }
         val hasImports = importParams.isNotEmpty()
+        val hasMappedImports = importParams.any { it.isMapped }
         val duplicateParams = importParams.groupBy { it.name }.filterValues { it.size > 1 }.keys
         require(duplicateParams.isEmpty()) {
             "World '${world.name}' has imports that map to the same imports(...) parameter: ${duplicateParams.joinToString()}"
         }
-        if (hasImports) {
-            worldObjBuilder.addFunction(buildImportsFunction(importParams, fileBuilder))
-            if (importParams.any { it.isMapped }) {
-                worldObjBuilder.addFunction(buildBaseImportsFunction(importParams))
-            }
-        }
 
+        val mappedLinkFunctionName = "link${worldObjectName}MappedImports"
         val linkFunctionName = "link${worldObjectName}Imports"
         val requiredKeysName = "${worldObjectName.replaceFirstChar { it.lowercaseChar() }}ImportKeys"
-        fileBuilder.addProperty(
-            PropertySpec.builder(requiredKeysName, SET.parameterizedBy(STRING), KModifier.PRIVATE)
-                .initializer(
-                    if (requiredKeys.isEmpty()) CodeBlock.of("emptySet()")
-                    else CodeBlock.of("setOf(\n⇥%L⇤)", requiredKeys.map { CodeBlock.of("%S", it) }.joinToCode(",\n", suffix = ",\n")),
-                )
-                .build(),
-        )
-        fileBuilder.addFunction(
-            FunSpec.builder(linkFunctionName)
-                .addModifiers(KModifier.PRIVATE)
-                .addParameter("imports", importsFactoryClass)
-                .returns(linkerClass)
-                .addStatement("return imports.newLinker().also { it.requireDefined(%N) }", requiredKeysName)
-                .build(),
-        )
+        if (aotDirectMode) {
+            emitAotImportsAndFactories(
+                fileBuilder = fileBuilder,
+                worldObjBuilder = worldObjBuilder,
+                importParams = importParams,
+                hasImports = hasImports,
+                hasMappedImports = hasMappedImports,
+                mappedRequiredKeys = mappedRequiredKeys,
+            )
+        } else {
+            if (hasImports) {
+                worldObjBuilder.addFunction(buildImportsFunction(importParams, fileBuilder))
+                if (hasMappedImports) {
+                    worldObjBuilder.addFunction(buildBaseImportsFunction(importParams))
+                }
+            }
+            fileBuilder.addProperty(
+                PropertySpec.builder(requiredKeysName, SET.parameterizedBy(STRING), KModifier.PRIVATE)
+                    .initializer(
+                        if (requiredKeys.isEmpty()) CodeBlock.of("emptySet()")
+                        else CodeBlock.of("setOf(\n⇥%L⇤)", requiredKeys.map { CodeBlock.of("%S", it) }.joinToCode(",\n", suffix = ",\n")),
+                    )
+                    .build(),
+            )
+            fileBuilder.addFunction(
+                FunSpec.builder(linkFunctionName)
+                    .addModifiers(KModifier.PRIVATE)
+                    .addParameter("imports", importsFactoryClass)
+                    .returns(linkerClass)
+                    .addStatement("return imports.newLinker().also { it.requireDefined(%N) }", requiredKeysName)
+                    .build(),
+            )
+        }
 
-        // 3. Session
+        // 3. Session & entry points (non-AOT emits before exports; AOT emits after exports populate Session methods)
         val runtimeSessionClass = ClassName(targetPackage, "WasmtimeSession")
-        val exportMarkers = world.exports.values.filterIsInstance<WitWorldItem.InterfaceRef>().map { exportMarkerClassName(it.id) }
-        worldObjBuilder.addType(
-            TypeSpec.classBuilder("Session")
-                .addKdoc("A session of the `%L` world. Close it to release the component instance.\n", world.name)
-                .apply { world.docs?.contents?.let { addKdoc("\n%L\n", it.trim()) } }
-                .superclass(witSessionClass)
-                .addSuperclassConstructorParameter("runtimeSession")
-                .addSuperinterfaces(exportMarkers)
-                .primaryConstructor(
-                    FunSpec.constructorBuilder()
-                        .addModifiers(KModifier.INTERNAL)
-                        .addParameter("runtimeSession", runtimeSessionClass)
-                        .build(),
-                )
-                .build(),
-        )
-
-        // 4. openSession & withSession (Path, ByteArray and ComponentBackendFactory)
-        fun importsParam(): ParameterSpec = ParameterSpec.builder("imports", importsFactoryClass)
-            .apply { if (!hasImports) defaultValue("%T.EMPTY", importsFactoryClass) }
-            .build()
-
-        val pathClass = ClassName("java.nio.file", "Path")
-        val byteArrayClass = ClassName("kotlin", "ByteArray")
-        for ((paramName, paramType) in listOf("wasmPath" to pathClass, "wasmBytes" to byteArrayClass)) {
-            worldObjBuilder.addFunction(
-                FunSpec.builder("openSession")
-                    .addParameter(paramName, paramType)
-                    .addParameter(importsParam())
-                    .returns(sessionClassName)
-                    .addStatement("val linker = %N(imports)", linkFunctionName)
-                    .addStatement("val resources = %T()", hostResourceTableClass)
-                    .addStatement("return Session(%T(resources.bind { %T.open($paramName, linker) }, resources))", hostResourceBoundSessionClass, runtimeSessionClass)
-                    .build(),
-            )
-        }
-
-        // Backend-agnostic overload: any runtime implementing ComponentBackendFactory (e.g. the Chicory
-        // backend running core modules compiled at build time) can host this world.
-        val backendFactoryClass = ClassName("wasm2kt.runtime", "ComponentBackendFactory")
-        val backendSessionClass = ClassName(targetPackage, "BackendWasmtimeSession")
-        worldObjBuilder.addFunction(
-            FunSpec.builder("openSession")
-                .addParameter("component", backendFactoryClass)
-                .addParameter(importsParam())
-                .returns(sessionClassName)
-                .addStatement("val linker = %N(imports)", linkFunctionName)
-                .addStatement("val resources = %T()", hostResourceTableClass)
-                .addStatement(
-                    "return Session(%T(%T(resources.bind { component.instantiate(linker) }), resources))",
-                    hostResourceBoundSessionClass,
-                    backendSessionClass,
-                )
-                .build(),
-        )
-
-        val typeVarR = TypeVariableName("R")
-        val contextLambdaType = LambdaTypeName.get(
-            receiver = null,
-            parameters = emptyList(),
-            returnType = typeVarR,
-            contextParameters = listOf(sessionClassName),
-        )
-        val coroutineScopeClass = ClassName("kotlinx.coroutines", "CoroutineScope")
-        val runBlockingMember = MemberName("kotlinx.coroutines", "runBlocking")
-        val blockingContextLambdaType = LambdaTypeName.get(
-            receiver = coroutineScopeClass,
-            parameters = emptyList(),
-            returnType = typeVarR,
-            contextParameters = listOf(sessionClassName),
-        ).copy(suspending = true)
-        for ((paramName, paramType) in listOf("wasmPath" to pathClass, "component" to backendFactoryClass, "wasmBytes" to byteArrayClass)) {
-            worldObjBuilder.addFunction(
-                FunSpec.builder("withSession")
-                    .addModifiers(KModifier.INLINE)
-                    .addTypeVariable(typeVarR)
-                    .addParameter(paramName, paramType)
-                    .addParameter(importsParam())
-                    .addParameter("block", contextLambdaType)
-                    .returns(typeVarR)
-                    .addStatement("return openSession($paramName, imports).use { session -> context(session) { block() } }")
-                    .build(),
-            )
-            worldObjBuilder.addFunction(
-                FunSpec.builder("withSessionBlocking")
-                    .addKdoc(
-                        "Opens a session, runs [block] inside `runBlocking` with [Session] in context and " +
-                            "`CoroutineScope` as receiver, and closes the session.\n\n" +
-                            "Blocks the calling thread via `runBlocking` until [block] returns; do not call " +
-                            "from a UI/main thread (such as Android's main thread) or from inside an existing " +
-                            "coroutine (use `withSession` instead).\n",
-                    )
-                    .addTypeVariable(typeVarR)
-                    .addParameter(paramName, paramType)
-                    .addParameter(importsParam())
-                    .addParameter("block", blockingContextLambdaType)
-                    .returns(typeVarR)
-                    .addStatement(
-                        "return openSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
-                        runBlockingMember,
+        if (!aotDirectMode) {
+            worldObjBuilder.addType(
+                TypeSpec.classBuilder("Session")
+                    .addKdoc("A session of the `%L` world. Close it to release the component instance.\n", world.name)
+                    .apply { world.docs?.contents?.let { addKdoc("\n%L\n", it.trim()) } }
+                    .superclass(witSessionClass)
+                    .addSuperclassConstructorParameter("runtimeSession")
+                    .addSuperinterfaces(exportMarkers)
+                    .primaryConstructor(
+                        FunSpec.constructorBuilder()
+                            .addModifiers(KModifier.INTERNAL)
+                            .addParameter("runtimeSession", runtimeSessionClass)
+                            .build(),
                     )
                     .build(),
             )
-        }
 
-        // Precompiled .cwasm images run native code without validation, so they get their own,
-        // explicitly named entry points instead of being accepted by openSession (#33).
-        if (emitWasmtimeSessions) {
-            for ((paramName, paramType) in listOf("cwasmPath" to pathClass, "cwasmBytes" to byteArrayClass)) {
+            // 4. openSession & withSession (Path, ByteArray and ComponentBackendFactory)
+            fun importsParam(): ParameterSpec = ParameterSpec.builder("imports", importsFactoryClass)
+                .apply { if (!hasImports) defaultValue("%T.EMPTY", importsFactoryClass) }
+                .build()
+
+            val pathClass = ClassName("java.nio.file", "Path")
+            val byteArrayClass = ClassName("kotlin", "ByteArray")
+            for ((paramName, paramType) in listOf("wasmPath" to pathClass, "wasmBytes" to byteArrayClass)) {
                 worldObjBuilder.addFunction(
-                    FunSpec.builder("openPrecompiledSession")
-                        .addKdoc(PRECOMPILED_TRUST_KDOC)
+                    FunSpec.builder("openSession")
                         .addParameter(paramName, paramType)
                         .addParameter(importsParam())
                         .returns(sessionClassName)
                         .addStatement("val linker = %N(imports)", linkFunctionName)
                         .addStatement("val resources = %T()", hostResourceTableClass)
-                        .addStatement(
-                            "return Session(%T(resources.bind { %T.openPrecompiled($paramName, linker) }, resources))",
-                            hostResourceBoundSessionClass,
-                            runtimeSessionClass,
-                        )
+                        .addStatement("return Session(%T(resources.bind { %T.open($paramName, linker) }, resources))", hostResourceBoundSessionClass, runtimeSessionClass)
                         .build(),
                 )
+            }
+
+            // Backend-agnostic overload: any runtime implementing ComponentBackendFactory (e.g. the Chicory
+            // backend running core modules compiled at build time) can host this world.
+            val backendFactoryClass = ClassName("wasm2kt.runtime", "ComponentBackendFactory")
+            val backendSessionClass = ClassName(targetPackage, "BackendWasmtimeSession")
+            worldObjBuilder.addFunction(
+                FunSpec.builder("openSession")
+                    .addParameter("component", backendFactoryClass)
+                    .addParameter(importsParam())
+                    .returns(sessionClassName)
+                    .addStatement("val linker = %N(imports)", linkFunctionName)
+                    .addStatement("val resources = %T()", hostResourceTableClass)
+                    .addStatement(
+                        "return Session(%T(%T(resources.bind { component.instantiate(linker) }), resources))",
+                        hostResourceBoundSessionClass,
+                        backendSessionClass,
+                    )
+                    .build(),
+            )
+
+            val typeVarR = TypeVariableName("R")
+            val contextLambdaType = LambdaTypeName.get(
+                receiver = null,
+                parameters = emptyList(),
+                returnType = typeVarR,
+                contextParameters = listOf(sessionClassName),
+            )
+            val coroutineScopeClass = ClassName("kotlinx.coroutines", "CoroutineScope")
+            val runBlockingMember = MemberName("kotlinx.coroutines", "runBlocking")
+            val blockingContextLambdaType = LambdaTypeName.get(
+                receiver = coroutineScopeClass,
+                parameters = emptyList(),
+                returnType = typeVarR,
+                contextParameters = listOf(sessionClassName),
+            ).copy(suspending = true)
+            for ((paramName, paramType) in listOf("wasmPath" to pathClass, "component" to backendFactoryClass, "wasmBytes" to byteArrayClass)) {
                 worldObjBuilder.addFunction(
-                    FunSpec.builder("withPrecompiledSession")
-                        .addKdoc(PRECOMPILED_TRUST_KDOC)
+                    FunSpec.builder("withSession")
                         .addModifiers(KModifier.INLINE)
                         .addTypeVariable(typeVarR)
                         .addParameter(paramName, paramType)
                         .addParameter(importsParam())
                         .addParameter("block", contextLambdaType)
                         .returns(typeVarR)
-                        .addStatement("return openPrecompiledSession($paramName, imports).use { session -> context(session) { block() } }")
+                        .addStatement("return openSession($paramName, imports).use { session -> context(session) { block() } }")
                         .build(),
                 )
                 worldObjBuilder.addFunction(
-                    FunSpec.builder("withPrecompiledSessionBlocking")
+                    FunSpec.builder("withSessionBlocking")
                         .addKdoc(
-                            PRECOMPILED_TRUST_KDOC +
-                                "\nBlocks the calling thread via `runBlocking` until [block] returns; do not call " +
-                                "from a UI/main thread or from inside an existing coroutine (use " +
-                                "`withPrecompiledSession` instead).\n",
+                            "Opens a session, runs [block] inside `runBlocking` with [Session] in context and " +
+                                "`CoroutineScope` as receiver, and closes the session.\n\n" +
+                                "Blocks the calling thread via `runBlocking` until [block] returns; do not call " +
+                                "from a UI/main thread (such as Android's main thread) or from inside an existing " +
+                                "coroutine (use `withSession` instead).\n",
                         )
                         .addTypeVariable(typeVarR)
                         .addParameter(paramName, paramType)
@@ -619,11 +625,64 @@ class WitToKotlinPoetConverter(
                         .addParameter("block", blockingContextLambdaType)
                         .returns(typeVarR)
                         .addStatement(
-                            "return openPrecompiledSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
+                            "return openSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
                             runBlockingMember,
                         )
                         .build(),
                 )
+            }
+
+            // Precompiled .cwasm images run native code without validation, so they get their own,
+            // explicitly named entry points instead of being accepted by openSession (#33).
+            if (emitWasmtimeSessions) {
+                for ((paramName, paramType) in listOf("cwasmPath" to pathClass, "cwasmBytes" to byteArrayClass)) {
+                    worldObjBuilder.addFunction(
+                        FunSpec.builder("openPrecompiledSession")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addParameter(paramName, paramType)
+                            .addParameter(importsParam())
+                            .returns(sessionClassName)
+                            .addStatement("val linker = %N(imports)", linkFunctionName)
+                            .addStatement("val resources = %T()", hostResourceTableClass)
+                            .addStatement(
+                                "return Session(%T(resources.bind { %T.openPrecompiled($paramName, linker) }, resources))",
+                                hostResourceBoundSessionClass,
+                                runtimeSessionClass,
+                            )
+                            .build(),
+                    )
+                    worldObjBuilder.addFunction(
+                        FunSpec.builder("withPrecompiledSession")
+                            .addKdoc(PRECOMPILED_TRUST_KDOC)
+                            .addModifiers(KModifier.INLINE)
+                            .addTypeVariable(typeVarR)
+                            .addParameter(paramName, paramType)
+                            .addParameter(importsParam())
+                            .addParameter("block", contextLambdaType)
+                            .returns(typeVarR)
+                            .addStatement("return openPrecompiledSession($paramName, imports).use { session -> context(session) { block() } }")
+                            .build(),
+                    )
+                    worldObjBuilder.addFunction(
+                        FunSpec.builder("withPrecompiledSessionBlocking")
+                            .addKdoc(
+                                PRECOMPILED_TRUST_KDOC +
+                                    "\nBlocks the calling thread via `runBlocking` until [block] returns; do not call " +
+                                    "from a UI/main thread or from inside an existing coroutine (use " +
+                                    "`withPrecompiledSession` instead).\n",
+                            )
+                            .addTypeVariable(typeVarR)
+                            .addParameter(paramName, paramType)
+                            .addParameter(importsParam())
+                            .addParameter("block", blockingContextLambdaType)
+                            .returns(typeVarR)
+                            .addStatement(
+                                "return openPrecompiledSession($paramName, imports).use { session -> %M { context(session) { block() } } }",
+                                runBlockingMember,
+                            )
+                            .build(),
+                    )
+                }
             }
         }
 
@@ -646,6 +705,34 @@ class WitToKotlinPoetConverter(
                 is WitWorldItem.InterfaceRef -> emitExportedInterface(item.id)
                 is WitWorldItem.TypeRef -> Unit
             }
+        }
+
+        if (aotDirectMode) {
+            val sb = checkNotNull(aotSessionBuilder)
+            if (aotHasGuestResources) {
+                sb.addFunction(
+                    FunSpec.builder("__dropResource")
+                        .addModifiers(KModifier.INTERNAL, KModifier.ABSTRACT)
+                        .addParameter("handle", INT)
+                        .build(),
+                )
+            }
+            worldObjBuilder.addType(sb.build())
+            emitAotSessionEntryPoints(worldObjBuilder, sessionClassName, hasImports)
+            aotModel = AotWorldModel(
+                worldClassName = worldClassName,
+                sessionClassName = sessionClassName,
+                aotImportsClassName = aotImportsClass,
+                hasImports = hasImports,
+                hasMappedImports = hasMappedImports,
+                hasHostResources = aotHasHostResources || hasMappedImports,
+                hasGuestResources = aotHasGuestResources,
+                exports = aotExportsMap.toMap(),
+                imports = aotImportsMap.toMap(),
+                importProviders = importParams.filter { !it.isMapped }.map { AotImportProviderInfo(it.name, it.contractClass) },
+                mappedResourceDropKeys = aotMappedDropKeys.toSet(),
+                typeCatalog = AotTypeCatalog(aotCatalogEntries.toMap()),
+            )
         }
 
         checkReservedWorldNames(world)
@@ -860,6 +947,15 @@ class WitToKotlinPoetConverter(
         mappedPackages[ifaceId]?.let { pkg ->
             val keyPrefix = "${interfaceKey(ifaceId)}#"
             val keys = functions.map { "$keyPrefix${it.name}" } + hostResources.map { "$keyPrefix[resource-drop]${resolve.types[it].name}" }
+            if (aotDirectMode) {
+                for (fn in functions) {
+                    val key = "$keyPrefix${fn.name}"
+                    registerAotImport(key, isMapped = true, providerPropName = null, kotlinMethodName = hostContractMemberName(fn), fn = fn)
+                }
+                for (res in hostResources) {
+                    aotMappedDropKeys += "$keyPrefix[resource-drop]${resolve.types[res].name}"
+                }
+            }
             return HostContract(ClassName(pkg, interfaceTypeName(ifaceId)), MemberName(pkg, "add"), keys)
         }
 
@@ -867,21 +963,38 @@ class WitToKotlinPoetConverter(
         val contractClass = ClassName(file.builder.packageName, interfaceTypeName(ifaceId))
         val contractBuilder = TypeSpec.interfaceBuilder(contractClass)
         iface.docs?.contents?.let { contractBuilder.addKdoc("%L\n\n", it.trim()) }
-        contractBuilder.addKdoc("Implemented by the host for `%L`. Register it with `Linker.add` or the world's `imports(...)`.\n", interfaceKey(ifaceId))
+        contractBuilder.addKdoc(
+            if (aotDirectMode) "Implemented by the host for `%L`. Pass it to the world's `imports(...)`.\n"
+            else "Implemented by the host for `%L`. Register it with `Linker.add` or the world's `imports(...)`.\n",
+            interfaceKey(ifaceId),
+        )
         val keyPrefix = "${interfaceKey(ifaceId)}#"
         val keys = mutableListOf<String>()
         val body = CodeBlock.builder()
+        val providerProp = importParameterName(ifaceId)
         for (fn in functions) {
-            keys += "$keyPrefix${fn.name}"
-            body.add(buildHostImportDefinition(fn, "$keyPrefix${fn.name}", contractBuilder))
+            val key = "$keyPrefix${fn.name}"
+            keys += key
+            if (aotDirectMode) {
+                val memberName = addHostContractMember(fn, contractBuilder)
+                registerAotImport(key, isMapped = false, providerPropName = providerProp, kotlinMethodName = memberName, fn = fn)
+            } else {
+                body.add(buildHostImportDefinition(fn, key, contractBuilder))
+            }
         }
         for (res in hostResources) {
             val key = "$keyPrefix[resource-drop]${resolve.types[res].name}"
             keys += key
-            body.add(buildHostResourceDropDefinition(key))
+            if (aotDirectMode) {
+                aotHasHostResources = true
+            } else {
+                body.add(buildHostResourceDropDefinition(key))
+            }
         }
         file.builder.addType(contractBuilder.build())
-        file.builder.addFunction(buildLinkerAddFunction(contractClass, body.build()))
+        if (!aotDirectMode) {
+            file.builder.addFunction(buildLinkerAddFunction(contractClass, body.build()))
+        }
         return HostContract(contractClass, MemberName(file.builder.packageName, "add"), keys)
     }
 
@@ -898,20 +1011,34 @@ class WitToKotlinPoetConverter(
         }
         if (functions.isEmpty() && worldResources.isEmpty()) return null
         val contractBuilder = TypeSpec.interfaceBuilder(className)
-        contractBuilder.addKdoc("Implemented by the host for the world's own imports. Register it with `Linker.add` or `imports(...)`.\n")
+        contractBuilder.addKdoc(
+            if (aotDirectMode) "Implemented by the host for the world's own imports. Pass it to `imports(...)`.\n"
+            else "Implemented by the host for the world's own imports. Register it with `Linker.add` or `imports(...)`.\n",
+        )
         val keys = mutableListOf<String>()
         val body = CodeBlock.builder()
         for (fn in functions) {
             keys += fn.name
-            body.add(buildHostImportDefinition(fn, fn.name, contractBuilder))
+            if (aotDirectMode) {
+                val memberName = addHostContractMember(fn, contractBuilder)
+                registerAotImport(fn.name, isMapped = false, providerPropName = "world", kotlinMethodName = memberName, fn = fn)
+            } else {
+                body.add(buildHostImportDefinition(fn, fn.name, contractBuilder))
+            }
         }
         for (res in worldResources) {
             val key = "[resource-drop]${resolve.types[res].name}"
             keys += key
-            body.add(buildHostResourceDropDefinition(key))
+            if (aotDirectMode) {
+                aotHasHostResources = true
+            } else {
+                body.add(buildHostResourceDropDefinition(key))
+            }
         }
         fileBuilder.addType(contractBuilder.build())
-        fileBuilder.addFunction(buildLinkerAddFunction(className, body.build()))
+        if (!aotDirectMode) {
+            fileBuilder.addFunction(buildLinkerAddFunction(className, body.build()))
+        }
         return HostContract(className, MemberName(fileBuilder.packageName, "add"), keys)
     }
 
@@ -994,29 +1121,20 @@ class WitToKotlinPoetConverter(
         return builder.addCode(body.build()).build()
     }
 
-    /**
-     * `define(key) { args, results -> ... }` for one host import. Freestanding functions, constructors
-     * and statics become abstract members of [contractBuilder]; methods are called on the host object
-     * behind `self`.
-     */
-    private fun buildHostImportDefinition(fn: WitFunction, key: String, contractBuilder: TypeSpec.Builder): CodeBlock {
+    private fun hostContractMemberName(fn: WitFunction): String = when (fn.kind) {
+        is WitFunctionKind.Freestanding -> NamingConventions.toCamelCase(fn.name)
+        is WitFunctionKind.Method -> NamingConventions.extractResourceMemberName(fn.name)
+        else -> hostResourceImportName(fn)
+    }
+
+    private fun addHostContractMember(fn: WitFunction, contractBuilder: TypeSpec.Builder): String {
         val worldClassName = currentWorldClassName
-        val b = CodeBlock.builder()
-        val argsName = if (fn.params.isEmpty()) "_" else "__args"
-        localVarCounter = 0
-        // An imported `async func` is a suspending host function (ADR-0019).
-        b.beginControlFlow("${if (fn.isAsync) "defineAsync" else "define"}(%S) { $argsName, __results ->", key)
-        fn.params.forEachIndexed { i, param -> b.addStatement("val __a$i = %L", buildRead(param.type, "__args")) }
-        val args = fn.params.indices.map { CodeBlock.of("__a$it") }
-        val callExpr = when (fn.kind) {
+        return when (fn.kind) {
             is WitFunctionKind.Freestanding -> {
                 contractBuilder.addFunction(buildInterfaceFunctionSpec(fn, worldClassName))
-                CodeBlock.of("impl.%N(%L)", NamingConventions.toCamelCase(fn.name), args.joinToCode(", "))
+                NamingConventions.toCamelCase(fn.name)
             }
-            is WitFunctionKind.Method -> {
-                val member = NamingConventions.extractResourceMemberName(fn.name)
-                CodeBlock.of("%L.%N(%L)", args.first(), member, args.drop(1).joinToCode(", "))
-            }
+            is WitFunctionKind.Method -> NamingConventions.extractResourceMemberName(fn.name)
             else -> {
                 val name = hostResourceImportName(fn)
                 val spec = FunSpec.builder(name).addModifiers(KModifier.ABSTRACT)
@@ -1028,8 +1146,28 @@ class WitToKotlinPoetConverter(
                     else mapFunctionReturnType(fn, worldClassName),
                 )
                 contractBuilder.addFunction(spec.build())
-                CodeBlock.of("impl.%N(%L)", name, args.joinToCode(", "))
+                name
             }
+        }
+    }
+
+    /**
+     * `define(key) { args, results -> ... }` for one host import. Freestanding functions, constructors
+     * and statics become abstract members of [contractBuilder]; methods are called on the host object
+     * behind `self`.
+     */
+    private fun buildHostImportDefinition(fn: WitFunction, key: String, contractBuilder: TypeSpec.Builder): CodeBlock {
+        val b = CodeBlock.builder()
+        val argsName = if (fn.params.isEmpty()) "_" else "__args"
+        localVarCounter = 0
+        // An imported `async func` is a suspending host function (ADR-0019).
+        b.beginControlFlow("${if (fn.isAsync) "defineAsync" else "define"}(%S) { $argsName, __results ->", key)
+        fn.params.forEachIndexed { i, param -> b.addStatement("val __a$i = %L", buildRead(param.type, "__args")) }
+        val args = fn.params.indices.map { CodeBlock.of("__a$it") }
+        val memberName = addHostContractMember(fn, contractBuilder)
+        val callExpr = when (fn.kind) {
+            is WitFunctionKind.Method -> CodeBlock.of("%L.%N(%L)", args.first(), memberName, args.drop(1).joinToCode(", "))
+            else -> CodeBlock.of("impl.%N(%L)", memberName, args.joinToCode(", "))
         }
         when {
             // A constructor's result is the new object, moved to the component.
@@ -1096,10 +1234,11 @@ class WitToKotlinPoetConverter(
      * with one of these names would collide, so it is reported instead of generating broken code.
      */
     private fun checkReservedWorldNames(world: WitWorld) {
-        val reservedTypes = setOf(
+        val baseReservedTypes = setOf(
             "Session", "Imports", "WitSession", "WitExports", "WitOption", "WitResult", "CodePoint", "WasmtimeSession",
             "FfmWasmtimeSession", "JniWasmtimeSession", "InMemoryWasmtimeSession", "BackendWasmtimeSession", "HostResourceBoundSession",
         )
+        val reservedTypes = if (aotDirectMode) baseReservedTypes + "AotImports" else baseReservedTypes
         val reservedFunctions = setOf(
             "imports", "openSession", "withSession", "withSessionBlocking",
             "openPrecompiledSession", "withPrecompiledSession", "withPrecompiledSessionBlocking",
@@ -1388,6 +1527,8 @@ class WitToKotlinPoetConverter(
             fields.map { NamingConventions.toCamelCase(it.name) to mapTypeRef(it.type, worldClassName) },
         )
 
+        if (aotDirectMode) return builder.build()
+
         val writeTo = FunSpec.builder("writeTo")
             .addKdoc(WRITE_TO_KDOC)
             .addParameter("writer", witWriterClass)
@@ -1431,6 +1572,7 @@ class WitToKotlinPoetConverter(
                 .build()
             builder.addEnumConstant(entryName, entrySpec)
         }
+        if (aotDirectMode) return builder.build()
         builder.addFunction(
             FunSpec.builder("writeTo")
                 .addKdoc(WRITE_TO_KDOC)
@@ -1517,22 +1659,31 @@ class WitToKotlinPoetConverter(
             )
         }
 
-        // Canonical ABI widths: u8 / u16 / u32 words (ADR-0015).
-        val (writeCode, readExpr) = when {
-            flags.size <= 8 -> "writer.byte(raw.toInt())" to "(reader.byte().toUInt() and 0xFFu)"
-            flags.size <= 16 -> "writer.short(raw.toInt())" to "(reader.short().toUInt() and 0xFFFFu)"
-            flags.size <= 32 -> "writer.int(raw.toInt())" to "reader.int().toUInt()"
-            else -> "writer.int(raw.toInt())\nwriter.int((raw shr 32).toInt())" to
-                "((reader.int().toULong() and 0xFFFF_FFFFuL) or (reader.int().toULong() shl 32))"
+        if (!aotDirectMode) {
+            // Canonical ABI widths: u8 / u16 / u32 words (ADR-0015).
+            val (writeCode, readExpr) = when {
+                flags.size <= 8 -> "writer.byte(raw.toInt())" to "(reader.byte().toUInt() and 0xFFu)"
+                flags.size <= 16 -> "writer.short(raw.toInt())" to "(reader.short().toUInt() and 0xFFFFu)"
+                flags.size <= 32 -> "writer.int(raw.toInt())" to "reader.int().toUInt()"
+                else -> "writer.int(raw.toInt())\nwriter.int((raw shr 32).toInt())" to
+                    "((reader.int().toULong() and 0xFFFF_FFFFuL) or (reader.int().toULong() shl 32))"
+            }
+            companionBuilder.addFunction(
+                FunSpec.builder("read")
+                    .addKdoc(READ_KDOC)
+                    .addParameter("reader", witReaderClass)
+                    .returns(selfClassName)
+                    .addStatement("return %T($readExpr)", selfClassName)
+                    .build(),
+            )
+            builder.addFunction(
+                FunSpec.builder("writeTo")
+                    .addKdoc(WRITE_TO_KDOC)
+                    .addParameter("writer", witWriterClass)
+                    .addCode(writeCode.split("\n").joinToString("") { "$it\n" })
+                    .build(),
+            )
         }
-        companionBuilder.addFunction(
-            FunSpec.builder("read")
-                .addKdoc(READ_KDOC)
-                .addParameter("reader", witReaderClass)
-                .returns(selfClassName)
-                .addStatement("return %T($readExpr)", selfClassName)
-                .build(),
-        )
 
         builder.addFunction(
             FunSpec.builder("or")
@@ -1548,13 +1699,6 @@ class WitToKotlinPoetConverter(
                 .addParameter("other", selfClassName)
                 .returns(selfClassName)
                 .addStatement("return %T(raw and other.raw)", selfClassName)
-                .build(),
-        )
-        builder.addFunction(
-            FunSpec.builder("writeTo")
-                .addKdoc(WRITE_TO_KDOC)
-                .addParameter("writer", witWriterClass)
-                .addCode(writeCode.split("\n").joinToString("") { "$it\n" })
                 .build(),
         )
         builder.addType(companionBuilder.build())
@@ -1616,6 +1760,7 @@ class WitToKotlinPoetConverter(
             }
         }
         writeTo.endControlFlow()
+        if (aotDirectMode) return builder.build()
         builder.addFunction(
             FunSpec.builder("writeTo")
                 .addKdoc(WRITE_TO_KDOC)
@@ -1734,6 +1879,7 @@ class WitToKotlinPoetConverter(
         docs?.contents?.let { builder.addKdoc("%L\n", it.trim()) }
 
         val companionBuilder = TypeSpec.companionObjectBuilder()
+        if (aotDirectMode) aotHasGuestResources = true
 
         for (fn in functions) {
             val key = "$keyPrefix${fn.name}"
@@ -1746,11 +1892,17 @@ class WitToKotlinPoetConverter(
                     val sessionName = addSessionContext(invokeBuilder, contextClassName, viaMarker = true, paramNames = paramNames)
                     addFunctionKdoc(invokeBuilder, fn)
                     for (param in fn.params) invokeBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
-                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
-                    invokeBuilder.addCode(call.prelude)
-                    val handleVar = if ("handle" in paramNames) "__handle" else "handle"
-                    invokeBuilder.addStatement("val $handleVar = $sessionName.runtimeSession.newResource(%S, %L, %L)%L", key, call.args, call.encode, call.after)
-                    invokeBuilder.addStatement("return %T($sessionName, $handleVar)", resourceClassName)
+                    if (aotDirectMode) {
+                        val exportMethod = registerAotExport(key, fn, resourceClassName)
+                        val args = fn.params.map { CodeBlock.of("%N", NamingConventions.toCamelCase(it.name)) }.joinToCode(", ")
+                        invokeBuilder.addStatement("return $sessionName.%N(%L)", exportMethod, args)
+                    } else {
+                        val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
+                        invokeBuilder.addCode(call.prelude)
+                        val handleVar = if ("handle" in paramNames) "__handle" else "handle"
+                        invokeBuilder.addStatement("val $handleVar = $sessionName.runtimeSession.newResource(%S, %L, %L)%L", key, call.args, call.encode, call.after)
+                        invokeBuilder.addStatement("return %T($sessionName, $handleVar)", resourceClassName)
+                    }
                     companionBuilder.addFunction(invokeBuilder.build())
                 }
                 is WitFunctionKind.Method -> {
@@ -1764,15 +1916,21 @@ class WitToKotlinPoetConverter(
                     methodBuilder.addStatement("check(!this.isClosed) { %P }", "Resource $resourcePascalName(handle=\${this.handle}) is already closed or moved")
                     val sessionName = if ("session" in paramNames) "__session" else "session"
                     methodBuilder.addStatement("val $sessionName = this.boundSession")
-                    val call = buildCallParts(fn, userParams, selfHandle = true, sessionExpr = CodeBlock.of(sessionName))
-                    methodBuilder.addCode(call.prelude)
-                    val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
-                    val target = if (returnsOwnedResource(fn)) "val $resultHandleVar =" else "return"
-                    methodBuilder.addStatement(
-                        "$target $sessionName.runtimeSession.${if (fn.isAsync) "invokeMethodSuspending" else "invokeMethod"}(this.handle, %S, %L, %L, %L)%L",
-                        key, call.args, call.encode, call.decode, call.after,
-                    )
-                    if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
+                    if (aotDirectMode) {
+                        val exportMethod = registerAotExport(key, fn, null)
+                        val args = (listOf(CodeBlock.of("this")) + userParams.map { CodeBlock.of("%N", NamingConventions.toCamelCase(it.name)) }).joinToCode(", ")
+                        methodBuilder.addStatement("return $sessionName.%N(%L)", exportMethod, args)
+                    } else {
+                        val call = buildCallParts(fn, userParams, selfHandle = true, sessionExpr = CodeBlock.of(sessionName))
+                        methodBuilder.addCode(call.prelude)
+                        val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
+                        val target = if (returnsOwnedResource(fn)) "val $resultHandleVar =" else "return"
+                        methodBuilder.addStatement(
+                            "$target $sessionName.runtimeSession.${if (fn.isAsync) "invokeMethodSuspending" else "invokeMethod"}(this.handle, %S, %L, %L, %L)%L",
+                            key, call.args, call.encode, call.decode, call.after,
+                        )
+                        if (returnsOwnedResource(fn)) methodBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
+                    }
                     builder.addFunction(methodBuilder.build())
                 }
                 is WitFunctionKind.Static -> {
@@ -1783,15 +1941,21 @@ class WitToKotlinPoetConverter(
                     if (fn.isAsync) staticBuilder.addModifiers(KModifier.SUSPEND)
                     for (param in fn.params) staticBuilder.addParameter(NamingConventions.toCamelCase(param.name), mapTypeRef(param.type, worldClassName))
                     staticBuilder.returns(mapFunctionReturnType(fn, worldClassName))
-                    val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
-                    staticBuilder.addCode(call.prelude)
-                    val staticInvoke = if (fn.isAsync) "invokeSuspending" else "invoke"
-                    val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
-                    if (returnsOwnedResource(fn)) {
-                        staticBuilder.addStatement("val $resultHandleVar = $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
-                        staticBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
+                    if (aotDirectMode) {
+                        val exportMethod = registerAotExport(key, fn, null)
+                        val args = fn.params.map { CodeBlock.of("%N", NamingConventions.toCamelCase(it.name)) }.joinToCode(", ")
+                        staticBuilder.addStatement("return $sessionName.%N(%L)", exportMethod, args)
                     } else {
-                        staticBuilder.addStatement("return $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+                        val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
+                        staticBuilder.addCode(call.prelude)
+                        val staticInvoke = if (fn.isAsync) "invokeSuspending" else "invoke"
+                        val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
+                        if (returnsOwnedResource(fn)) {
+                            staticBuilder.addStatement("val $resultHandleVar = $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+                            staticBuilder.addStatement("return %T($sessionName, $resultHandleVar)", mapFunctionReturnType(fn, worldClassName))
+                        } else {
+                            staticBuilder.addStatement("return $sessionName.runtimeSession.$staticInvoke(%S, %L, %L, %L)%L", key, call.args, call.encode, call.decode, call.after)
+                        }
                     }
                     companionBuilder.addFunction(staticBuilder.build())
                 }
@@ -1804,7 +1968,7 @@ class WitToKotlinPoetConverter(
                 .addModifiers(KModifier.OVERRIDE)
                 .beginControlFlow("if (!isClosed)")
                 .addStatement("isClosed = true")
-                .addStatement("session?.runtimeSession?.dropResource(handle)")
+                .addStatement(if (aotDirectMode) "session?.__dropResource(handle)" else "session?.runtimeSession?.dropResource(handle)")
                 .endControlFlow()
                 .build(),
         )
@@ -1852,9 +2016,16 @@ class WitToKotlinPoetConverter(
         val returnType = mapFunctionReturnType(fn, worldClassName)
         builder.returns(returnType)
 
+        val key = "$invokeTargetPrefix${fn.name}"
+        if (aotDirectMode) {
+            val exportMethod = registerAotExport(key, fn, null)
+            val args = fn.params.map { CodeBlock.of("%N", NamingConventions.toCamelCase(it.name)) }.joinToCode(", ")
+            builder.addStatement("return $sessionName.%N(%L)", exportMethod, args)
+            return builder.build()
+        }
+
         val call = buildCallParts(fn, fn.params, selfHandle = false, sessionExpr = CodeBlock.of(sessionName))
         builder.addCode(call.prelude)
-        val key = "$invokeTargetPrefix${fn.name}"
         val invoke = if (fn.isAsync) "invokeSuspending" else "invoke"
         val resultHandleVar = if ("resultHandle" in paramNames) "__resultHandle" else "resultHandle"
         if (returnsOwnedResource(fn)) {
@@ -2466,16 +2637,18 @@ class WitToKotlinPoetConverter(
         // A library of interfaces has no sessions (ADR-0014).
         if (interfacesOnly) return fileBuilder.build()
 
-        // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
-        fileBuilder.addType(buildWasmtimeSessionTypeSpec())
-        if (emitWasmtimeSessions) {
-            fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
-            fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
+        if (!aotDirectMode) {
+            // 4. WasmtimeSession runtime bridge interface, FfmWasmtimeSession, JniWasmtimeSession & InMemoryWasmtimeSession
+            fileBuilder.addType(buildWasmtimeSessionTypeSpec())
+            if (emitWasmtimeSessions) {
+                fileBuilder.addType(buildFfmWasmtimeSessionTypeSpec())
+                fileBuilder.addType(buildJniWasmtimeSessionTypeSpec())
+            }
+            fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
+            fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
+            fileBuilder.addType(buildHostResourceBoundSessionTypeSpec())
+            fileBuilder.addType(buildWitSessionTypeSpec())
         }
-        fileBuilder.addType(buildInMemoryWasmtimeSessionTypeSpec())
-        fileBuilder.addType(buildBackendWasmtimeSessionTypeSpec())
-        fileBuilder.addType(buildHostResourceBoundSessionTypeSpec())
-        fileBuilder.addType(buildWitSessionTypeSpec())
         fileBuilder.addType(
             TypeSpec.interfaceBuilder(witExportsClass)
                 .addKdoc("Base of the `<Iface>Exports` markers, implemented by a world's `Session` for each interface it exports (ADR-0012).\n")
@@ -3702,6 +3875,399 @@ class WitToKotlinPoetConverter(
                     .build(),
             )
             .build()
+    }
+
+    // ------------------------------------------------------------------ Phase 2 AOT model & entry points
+
+    private fun emitAotImportsAndFactories(
+        fileBuilder: FileSpec.Builder,
+        worldObjBuilder: FileSpec.Builder,
+        importParams: List<ImportParam>,
+        hasImports: Boolean,
+        hasMappedImports: Boolean,
+        mappedRequiredKeys: List<String>,
+    ) {
+        val classBuilder = TypeSpec.classBuilder(aotImportsClass)
+            .addKdoc("Host import bundle for Phase 2 direct-wired AOT instantiation (ADR-0023).\n")
+        val ctorBuilder = FunSpec.constructorBuilder().addModifiers(KModifier.INTERNAL)
+        val unmappedParams = importParams.filter { !it.isMapped }
+        for (param in unmappedParams) {
+            val lambdaType = LambdaTypeName.get(returnType = param.contractClass)
+            ctorBuilder.addParameter(param.name, lambdaType)
+            classBuilder.addProperty(
+                PropertySpec.builder(param.name, lambdaType, KModifier.INTERNAL)
+                    .initializer(param.name)
+                    .build(),
+            )
+        }
+        if (hasMappedImports) {
+            ctorBuilder.addParameter("mappedLinker", importsFactoryClass)
+            classBuilder.addProperty(
+                PropertySpec.builder("mappedLinker", importsFactoryClass, KModifier.INTERNAL)
+                    .initializer("mappedLinker")
+                    .build(),
+            )
+            classBuilder.addProperty(
+                PropertySpec.builder("mappedImportKeys", SET.parameterizedBy(STRING), KModifier.PRIVATE)
+                    .initializer(
+                        if (mappedRequiredKeys.isEmpty()) CodeBlock.of("emptySet()")
+                        else CodeBlock.of("setOf(\n⇥%L⇤)", mappedRequiredKeys.map { CodeBlock.of("%S", it) }.joinToCode(",\n", suffix = ",\n")),
+                    )
+                    .build(),
+            )
+            val dispatcherClass = ClassName("wasm2kt.runtime", "WitHostImportDispatcher")
+            classBuilder.addFunction(
+                FunSpec.builder("newMappedDispatcher")
+                    .addModifiers(KModifier.INTERNAL)
+                    .returns(dispatcherClass)
+                    .addStatement("return mappedLinker.newLinker().also { it.requireDefined(mappedImportKeys) }")
+                    .build(),
+            )
+        }
+        classBuilder.primaryConstructor(ctorBuilder.build())
+        if (!hasImports) {
+            classBuilder.addType(
+                TypeSpec.companionObjectBuilder()
+                    .addProperty(PropertySpec.builder("EMPTY", aotImportsClass).initializer("%T()", aotImportsClass).build())
+                    .build(),
+            )
+        }
+        worldObjBuilder.addType(classBuilder.build())
+
+        if (!hasImports) return
+
+        // Primary imports(...) overload
+        val importsFn = FunSpec.builder("imports")
+            .addKdoc(
+                "Host implementations of this world's imports. Each function is called once per session, " +
+                    "so a stateful implementation is not shared between sessions; return the same object to share it.\n",
+            )
+            .returns(aotImportsClass)
+        for (param in importParams) {
+            importsFn.addParameter(param.name, LambdaTypeName.get(returnType = param.contractClass))
+        }
+        val body = CodeBlock.builder()
+        val ctorArgs = mutableListOf<CodeBlock>()
+        for (param in unmappedParams) {
+            ctorArgs += CodeBlock.of("%N", param.name)
+        }
+        if (hasMappedImports) {
+            body.beginControlFlow("val __mapped = %T", importsFactoryClass)
+            body.beginControlFlow("%T().apply", linkerClass)
+            for (param in importParams.filter { it.isMapped }) {
+                val alias = importAlias(param)
+                fileBuilder.addAliasedImport(param.addFunction, alias)
+                body.addStatement("%N(%N())", alias, param.name)
+            }
+            body.endControlFlow()
+            body.endControlFlow()
+            ctorArgs += CodeBlock.of("__mapped")
+        }
+        body.addStatement("return %T(%L)", aotImportsClass, ctorArgs.joinToCode(", "))
+        worldObjBuilder.addFunction(importsFn.addCode(body.build()).build())
+
+        // Base overload when mapped library interfaces are present (ADR-0022).
+        if (hasMappedImports) {
+            var baseParamName = "base"
+            if (importParams.any { it.name == baseParamName }) baseParamName = "baseImports"
+            while (importParams.any { it.name == baseParamName }) baseParamName += "_"
+            val baseFn = FunSpec.builder("imports")
+                .addKdoc(
+                    "Host implementations seeded from [%N] (such as `wasi03Imports { ... }`). Mapped library " +
+                        "interfaces default to `null` and fall back to [%N]; any non-null argument overrides it. " +
+                        "Unmapped imports remain required at compile time.\n",
+                    baseParamName,
+                    baseParamName,
+                )
+                .addParameter(baseParamName, importsFactoryClass)
+                .returns(aotImportsClass)
+            val baseBody = CodeBlock.builder()
+                .beginControlFlow("val __mapped = %T", importsFactoryClass)
+                .beginControlFlow("val __overrides = %T().apply", linkerClass)
+            for (param in importParams) {
+                val lambdaType = LambdaTypeName.get(returnType = param.contractClass)
+                if (param.isMapped) {
+                    val alias = importAlias(param)
+                    baseFn.addParameter(ParameterSpec.builder(param.name, lambdaType.copy(nullable = true)).defaultValue("null").build())
+                    baseBody.addStatement("%N?.let { __factory -> %N(__factory()) }", param.name, alias)
+                } else {
+                    baseFn.addParameter(param.name, lambdaType)
+                }
+            }
+            baseBody.endControlFlow()
+            baseBody.addStatement("%T().addAll(%N.newLinker()).addAll(__overrides, overwrite = true)", linkerClass, baseParamName)
+            baseBody.endControlFlow()
+            baseBody.addStatement("return %T(%L)", aotImportsClass, (unmappedParams.map { CodeBlock.of("%N", it.name) } + CodeBlock.of("__mapped")).joinToCode(", "))
+            worldObjBuilder.addFunction(baseFn.addCode(baseBody.build()).build())
+        }
+    }
+
+    private fun emitAotSessionEntryPoints(
+        worldObjBuilder: FileSpec.Builder,
+        sessionClassName: ClassName,
+        hasImports: Boolean,
+    ) {
+        val factoryType = aotComponentFactoryClass.parameterizedBy(aotImportsClass, sessionClassName)
+        fun aotImportsParam(): ParameterSpec = ParameterSpec.builder("imports", aotImportsClass)
+            .apply { if (!hasImports) defaultValue("%T.EMPTY", aotImportsClass) }
+            .build()
+
+        worldObjBuilder.addFunction(
+            FunSpec.builder("openSession")
+                .addParameter("component", factoryType)
+                .addParameter(aotImportsParam())
+                .returns(sessionClassName)
+                .addStatement("return component.instantiate(imports)")
+                .build(),
+        )
+
+        val typeVarR = TypeVariableName("R")
+        val contextLambdaType = LambdaTypeName.get(
+            receiver = null,
+            parameters = emptyList(),
+            returnType = typeVarR,
+            contextParameters = listOf(sessionClassName),
+        )
+        val coroutineScopeClass = ClassName("kotlinx.coroutines", "CoroutineScope")
+        val runBlockingMember = MemberName("kotlinx.coroutines", "runBlocking")
+        val blockingContextLambdaType = LambdaTypeName.get(
+            receiver = coroutineScopeClass,
+            parameters = emptyList(),
+            returnType = typeVarR,
+            contextParameters = listOf(sessionClassName),
+        ).copy(suspending = true)
+
+        worldObjBuilder.addFunction(
+            FunSpec.builder("withSession")
+                .addModifiers(KModifier.INLINE)
+                .addTypeVariable(typeVarR)
+                .addParameter("component", factoryType)
+                .addParameter(aotImportsParam())
+                .addParameter("block", contextLambdaType)
+                .returns(typeVarR)
+                .addStatement("return openSession(component, imports).use { session -> context(session) { block() } }")
+                .build(),
+        )
+        worldObjBuilder.addFunction(
+            FunSpec.builder("withSessionBlocking")
+                .addKdoc(
+                    "Opens a session, runs [block] inside `runBlocking` with [Session] in context and " +
+                        "`CoroutineScope` as receiver, and closes the session.\n\n" +
+                        "Blocks the calling thread via `runBlocking` until [block] returns; do not call " +
+                        "from a UI/main thread (such as Android's main thread) or from inside an existing " +
+                        "coroutine (use `withSession` instead).\n",
+                )
+                .addTypeVariable(typeVarR)
+                .addParameter("component", factoryType)
+                .addParameter(aotImportsParam())
+                .addParameter("block", blockingContextLambdaType)
+                .returns(typeVarR)
+                .addStatement(
+                    "return openSession(component, imports).use { session -> %M { context(session) { block() } } }",
+                    runBlockingMember,
+                )
+                .build(),
+        )
+    }
+
+    private fun registerAotExport(key: String, fn: WitFunction, constructedResourceClass: ClassName?): String {
+        aotExportsMap[key]?.let { return it.methodName }
+        val sanitized = NamingConventions.toCamelCase(fn.name.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_')).ifEmpty { "fn" }
+        val methodName = "__export_${aotNextExportId++}_$sanitized"
+        val resultTypes = if (constructedResourceClass != null && fn.kind is WitFunctionKind.Constructor) {
+            listOf(WitTypeRef.Id(checkNotNull(resourceIdOf(fn))))
+        } else {
+            fn.results.map { it.type }
+        }
+        val (params, returnKotlin) = withExportContext(true) {
+            val ps = fn.params.map { param ->
+                val kotlinType = mapTypeRef(param.type, currentWorldClassName)
+                catalogTypeRef(param.type, exportCtx = true)
+                AotValueInfo(NamingConventions.toCamelCase(param.name), param.type, kotlinType)
+            }
+            val ret = if (constructedResourceClass != null && fn.kind is WitFunctionKind.Constructor) {
+                catalogTypeRef(resultTypes.single(), exportCtx = true)
+                constructedResourceClass
+            } else {
+                resultTypes.forEach { catalogTypeRef(it, exportCtx = true) }
+                mapFunctionReturnType(fn, currentWorldClassName)
+            }
+            ps to ret
+        }
+
+        val sb = checkNotNull(aotSessionBuilder)
+        val fnSpec = FunSpec.builder(methodName)
+            .addModifiers(KModifier.INTERNAL, KModifier.ABSTRACT)
+            .returns(returnKotlin)
+        val usedNames = mutableSetOf<String>()
+        fn.params.forEachIndexed { idx, p ->
+            var pName = if (fn.kind is WitFunctionKind.Method && idx == 0) "self" else NamingConventions.toCamelCase(p.name)
+            while (!usedNames.add(pName)) pName = "${pName}_$idx"
+            fnSpec.addParameter(pName, params[idx].kotlinType)
+        }
+        sb.addFunction(fnSpec.build())
+
+        aotExportsMap[key] = AotExportBinding(
+            key = key,
+            methodName = methodName,
+            witFunction = fn,
+            params = params,
+            resultTypes = resultTypes,
+            returnKotlinType = returnKotlin,
+            constructedResourceClass = constructedResourceClass,
+        )
+        return methodName
+    }
+
+    private fun registerAotImport(
+        key: String,
+        isMapped: Boolean,
+        providerPropName: String?,
+        kotlinMethodName: String,
+        fn: WitFunction,
+    ) {
+        if (key in aotImportsMap) return
+        val resultTypes = if (fn.kind is WitFunctionKind.Constructor) {
+            listOf(WitTypeRef.Id(checkNotNull(resourceIdOf(fn))))
+        } else {
+            fn.results.map { it.type }
+        }
+        val (params, returnKotlin) = withExportContext(false) {
+            val ps = fn.params.map { param ->
+                val kotlinType = mapTypeRef(param.type, currentWorldClassName)
+                catalogTypeRef(param.type, exportCtx = false)
+                AotValueInfo(NamingConventions.toCamelCase(param.name), param.type, kotlinType)
+            }
+            val ret = if (fn.kind is WitFunctionKind.Constructor) {
+                catalogTypeRef(resultTypes.single(), exportCtx = false)
+                mapTypeDefByIndex(checkNotNull(resourceIdOf(fn)), currentWorldClassName)
+            } else {
+                resultTypes.forEach { catalogTypeRef(it, exportCtx = false) }
+                mapFunctionReturnType(fn, currentWorldClassName)
+            }
+            ps to ret
+        }
+        aotImportsMap[key] = AotImportBinding(
+            key = key,
+            isMapped = isMapped,
+            providerPropName = providerPropName,
+            kotlinMethodName = kotlinMethodName,
+            witFunction = fn,
+            params = params,
+            resultTypes = resultTypes,
+            returnKotlinType = returnKotlin,
+        )
+    }
+
+    private fun catalogTypeRef(typeRef: WitTypeRef, exportCtx: Boolean) {
+        if (typeRef !is WitTypeRef.Id) return
+        val idx = typeRef.index
+        val key = AotTypeKey(idx, exportCtx)
+        if (!aotCatalogVisited.add(key)) return
+        val def = resolve.types.getOrNull(idx) ?: return
+        val info: AotTypeInfo = withExportContext(exportCtx) {
+            when (val kind = def.kind) {
+                is WitTypeDefKind.Record -> {
+                    val cls = typeClassName(idx)
+                    val fields = kind.fields.map { f ->
+                        catalogTypeRef(f.type, exportCtx)
+                        AotRecordField(
+                            kotlinName = NamingConventions.toCamelCase(f.name),
+                            type = f.type,
+                            kotlinType = mapTypeRef(f.type, currentWorldClassName),
+                        )
+                    }
+                    AotTypeInfo.RecordInfo(cls, fields)
+                }
+                is WitTypeDefKind.Enum -> {
+                    val cls = typeClassName(idx)
+                    AotTypeInfo.EnumInfo(cls, kind.cases.map { NamingConventions.toUpperSnakeCase(it.name) })
+                }
+                is WitTypeDefKind.Flags -> {
+                    val cls = typeClassName(idx)
+                    AotTypeInfo.FlagsInfo(cls, useULong = kind.flags.size > 32, flagCount = kind.flags.size)
+                }
+                is WitTypeDefKind.Variant -> {
+                    val variantClass = typeClassName(idx)
+                    val usedCaseNames = mutableSetOf(variantClass.simpleName, "Companion")
+                    val cases = kind.cases.map { c ->
+                        var candidate = NamingConventions.toPascalCase(c.name)
+                        while (!usedCaseNames.add(candidate)) candidate += "Case"
+                        c.type?.let { catalogTypeRef(it, exportCtx) }
+                        AotVariantCase(
+                            className = variantClass.nestedClass(candidate),
+                            isObject = c.type == null,
+                            payloadType = c.type,
+                            payloadKotlinType = c.type?.let { mapTypeRef(it, currentWorldClassName) },
+                        )
+                    }
+                    AotTypeInfo.VariantInfo(variantClass, cases)
+                }
+                is WitTypeDefKind.Resource -> {
+                    val isHost = isHostResource(idx)
+                    AotTypeInfo.ResourceInfo(typeClassName(idx), isHost = isHost, hasSession = !isHost)
+                }
+                is WitTypeDefKind.Handle -> {
+                    catalogTypeRef(WitTypeRef.Id(kind.resourceId), exportCtx)
+                    val isHost = isHostResource(kind.resourceId)
+                    AotTypeInfo.HandleInfo(
+                        resourceId = kind.resourceId,
+                        isOwn = kind.kind == wasm2kt.ast.HandleKind.OWN,
+                        isHost = isHost,
+                        resourceClass = typeClassName(kind.resourceId),
+                    )
+                }
+                is WitTypeDefKind.OptionType -> {
+                    catalogTypeRef(kind.type, exportCtx)
+                    val innerKotlin = mapTypeRef(kind.type, currentWorldClassName)
+                    val isWitOption = innerKotlin.isNullable
+                    val witOpt = ClassName(targetPackage, "WitOption")
+                    AotTypeInfo.OptionInfo(
+                        inner = kind.type,
+                        isWitOption = isWitOption,
+                        witOptionClass = witOpt,
+                        innerKotlinType = innerKotlin,
+                        kotlinType = mapTypeDefByIndex(idx, currentWorldClassName),
+                    )
+                }
+                is WitTypeDefKind.ResultType -> {
+                    kind.ok?.let { catalogTypeRef(it, exportCtx) }
+                    kind.err?.let { catalogTypeRef(it, exportCtx) }
+                    AotTypeInfo.ResultInfo(
+                        ok = kind.ok,
+                        err = kind.err,
+                        witResultClass = ClassName(targetPackage, "WitResult"),
+                        okKotlinType = kind.ok?.let { mapTypeRef(it, currentWorldClassName) } ?: UNIT,
+                        errKotlinType = kind.err?.let { mapTypeRef(it, currentWorldClassName) } ?: UNIT,
+                        kotlinType = mapTypeDefByIndex(idx, currentWorldClassName),
+                    )
+                }
+                is WitTypeDefKind.ListType -> {
+                    catalogTypeRef(kind.type, exportCtx)
+                    AotTypeInfo.ListInfo(
+                        element = kind.type,
+                        isByteArray = isPrimitive(kind.type, "u8"),
+                        elementKotlinType = mapTypeRef(kind.type, currentWorldClassName),
+                    )
+                }
+                is WitTypeDefKind.Tuple -> {
+                    kind.types.forEach { catalogTypeRef(it, exportCtx) }
+                    val tupleClass = ClassName(targetPackage, "Tuple${kind.types.size}")
+                    AotTypeInfo.TupleInfo(
+                        types = kind.types,
+                        tupleClass = tupleClass,
+                        kotlinType = mapTypeDefByIndex(idx, currentWorldClassName),
+                    )
+                }
+                is WitTypeDefKind.TypeAlias -> {
+                    catalogTypeRef(kind.type, exportCtx)
+                    AotTypeInfo.TypeAliasInfo(kind.type)
+                }
+                is WitTypeDefKind.FutureType -> AotTypeInfo.AsyncUnsupportedInfo("future")
+                is WitTypeDefKind.StreamType -> AotTypeInfo.AsyncUnsupportedInfo("stream")
+            }
+        }
+        aotCatalogEntries[key] = info
     }
 
     companion object {

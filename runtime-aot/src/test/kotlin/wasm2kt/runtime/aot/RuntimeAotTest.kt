@@ -635,4 +635,33 @@ class RuntimeAotTest {
         rt2.close()
         assertThrows<IllegalStateException> { rt2.resolve("make-res") }
     }
+
+    @Test
+    fun `DirectResourceContext rollbackLowering restores host resources without losing usability`() {
+        val tables = arrayOf(AotResourceTableDesc(index = 0, resource = -1, imported = true, instance = 0, definedInInstance = -1))
+        val rt = AotComponentRuntime(tables, hasHostResources = true)
+        val closed = mutableListOf<String>()
+        val hostTable = requireNotNull(rt.hostResources)
+        val res = object : wasm2kt.runtime.WitHostResource {
+            override fun close() {
+                closed += "closed"
+            }
+        }
+        rt.withHostResources {
+            val cx = rt.newResourceContext(AbiDirection.HOST_TO_GUEST)
+            val coreHandle = cx.lowerHostOwn(0, res)
+            assertEquals(1, hostTable.size)
+            cx.rollbackLowering()
+            assertEquals(0, hostTable.size)
+            assertTrue(closed.isEmpty(), "Rollback must not close the host resource")
+            // Host resource can still be re-lowered into a fresh call cleanly.
+            val cx2 = rt.newResourceContext(AbiDirection.HOST_TO_GUEST)
+            val handle2 = cx2.lowerHostOwn(0, res)
+            assertNotEquals(0, handle2)
+            assertNotEquals(0, coreHandle)
+            cx2.commitMoves()
+            hostTable.close()
+        }
+        assertEquals(listOf("closed"), closed)
+    }
 }

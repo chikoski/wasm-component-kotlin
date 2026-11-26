@@ -66,7 +66,7 @@ JDK 21 がインストールされていれば、Gradle が自動で見つけま
 * `plan.json` の形式を変えるときは、`decomposer/src/main.rs` の `PLAN_VERSION`、`ComponentPlan.SUPPORTED_VERSION`、および `BuildPlan.SUPPORTED_VERSION` を同時に上げる。
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない
-* 値のバイナリ形式、関数名の解決、ホスト import のキーは両バックエンドで揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら差分テストを通す。なお、ADR-0023 に基づくオプトイン AOT バックエンドの Phase 2 完了時に、AOT 選択時の例外条件をここへ本更新する予定
+* 値のバイナリ形式、関数名の解決、ホスト import のキーは Chicory バックエンドと Wasmtime バックエンドで揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら差分テストを通す。例外として、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づくオプトイン `AOT` バックエンドの Phase 2 では、エクスポートとワールドローカルなホスト import に `WitWriter` と `WitReader` を通さず `DirectCanonicalAbi` と静的直接結合を使う。外部ライブラリと共有する `with` 指定済み interface だけを `AotMappedImportBridge` と `Linker` で中継し、ADR-0011 のキー規則、ADR-0007 のトラップ・poison、ADR-0008 の資源契約、および `#75` の直列化契約は共通に保つ
 * 汎用ブリッジと型付きブリッジは同じ C ABI / JNI の関数を公開する（`rust-bridge/core` の `export_bridge!`）。resource の規則は `core` の関数を両方から使う。`core` か `TypedBridge.kt` を変えたら `typedBridgeTest` も通す（ADR-0016）
 * Chicory の挙動を直したら `ConformanceTest` も通し、通るようになった項目を `conformance/skip.txt` から消す。AOT バックエンドの同期パスを変えた場合は `AotConformanceTest` と `conformance/skip-aot.txt` もあわせて確認する（ADR-0017）
 * `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）

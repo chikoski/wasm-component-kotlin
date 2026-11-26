@@ -13,6 +13,7 @@
 | `FfmWasmtimeSession` / `JniWasmtimeSession` | 生成コード | Wasmtime ブリッジへの橋渡し。同上 |
 | `WitWriter` / `WitReader` | `runtime-api` | 値のバイナリ形式（[ADR-0015](../adr/0015-binary-value-boundary.md)）の読み書き |
 | `ChicoryComponent` | `runtime-chicory` | 関数名の解決、Canonical ABI の lower / lift、core 関数の呼び出し |
+| `DirectCanonicalAbi` / `AotComponentRuntime` | `runtime-canonical` / `runtime-aot` | Phase 2 の静的直結 `AOT` バックエンド向けの検証・文字変換・資源寿命管理を行う |
 | `FfmWasmtimeBridge` / `JniWasmtimeBridge` | `runtime-wasmtime` | ネイティブ関数の呼び出し（ダウンコール）と、ホスト import のコールバック（アップコール） |
 | `rust-bridge` | `rust-bridge/core`（共通部）、`rust-bridge/src`（汎用ブリッジ） | セッション管理、C ABI / JNI。汎用経路ではバイナリ形式と `Val` の変換および `Func::call` を行う |
 | 型付きブリッジ | `tooling` が生成するクレート（`TypedBridge`、[ADR-0016](../adr/0016-typed-bridge-from-wit-json.md)） | コンポーネントごとの Rust の型と、`TypedFunc::call` / `func_wrap` による型付きの呼び出し |
@@ -107,3 +108,9 @@ Chicory・Wasmtime ともに同じ順序で処理します。
 2. import のインデックスで Kotlin 側へコールバックする
 3. 生成された `HostFunction` が `WitReader` から引数をデコードし、ホストの実装を呼び出し、戻り値を `WitWriter` に書き込む
 4. バックエンドが `WitWriter` のバイト列を読み取ってゲストへ lower する
+
+### 3.4 AOT バックエンドの直接経路
+
+[ADR-0023](../adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 2 で生成される `AOT` 向けワールド DSL は、`WitWriter`、`WitReader`、`ComponentBackend.invoke`、および `Linker` を経由せず、生成された `Session` の内部抽象メソッドを通じて `<Name>Component.Instance` 内の `__export_*` メソッドを直接呼び出します。`__export_*` はコンパイル済みの型情報を基に `DirectCanonicalAbi` や `LinearMemory` へ直接 Lower と Lift のコードを展開し、`CoreNInstance` の関数を静的呼び出しで実行します。
+
+ホスト import についても、ワールドローカルな関数やインライン interface は生成済みアダプタのローカル関数から `AotImports` の具象プロバイダを直接呼び出します。一方で、外部ライブラリとの間で共有される `with` 指定済み interface のみに限っては、`AotMappedImportBridge` を隔離層として `Linker` 経由のディスパッチを維持します。これにより、`with` 指定を含まない一般的な同期コンポーネントの実行バイナリからはワイヤ層や `Linker` を完全に切り離せます。

@@ -41,10 +41,10 @@ object CanonicalAbi {
 
     /** Parameters of an async-lowered import beyond this many flat values are passed by pointer. */
     const val MAX_FLAT_ASYNC_PARAMS = 4
-    const val MAX_STRING_BYTE_LENGTH = (1L shl 28) - 1
-    const val MAX_LIST_BYTE_LENGTH = (1L shl 28) - 1
-    const val CANONICAL_FLOAT32_NAN = 0x7fc00000
-    const val CANONICAL_FLOAT64_NAN = 0x7ff8000000000000L
+    const val MAX_STRING_BYTE_LENGTH = DirectCanonicalAbi.MAX_STRING_BYTE_LENGTH
+    const val MAX_LIST_BYTE_LENGTH = DirectCanonicalAbi.MAX_LIST_BYTE_LENGTH
+    const val CANONICAL_FLOAT32_NAN = DirectCanonicalAbi.CANONICAL_FLOAT32_NAN
+    const val CANONICAL_FLOAT64_NAN = DirectCanonicalAbi.CANONICAL_FLOAT64_NAN
 
     @InternalWasm2KtApi
     enum class CoreType { I32, I64, F32, F64 }
@@ -580,41 +580,15 @@ class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     /** A UTF-8 guest string is validated and copied as is; other encodings are transcoded to UTF-8. */
     private fun loadString(ptr: Int, taggedLen: Int) {
         val m = cx.memory
-        val tagged = taggedLen.toLong() and 0xFFFF_FFFFL
-        val utf16Tag = UTF16_TAG.toLong() and 0xFFFF_FFFFL
-        val align: Int
-        val byteLength: Long
-        val kind: StringEncoding
-        when (cx.encoding) {
-            StringEncoding.UTF8 -> {
-                align = 1
-                byteLength = tagged
-                kind = StringEncoding.UTF8
-            }
-            StringEncoding.UTF16 -> {
-                align = 2
-                byteLength = 2 * tagged
-                kind = StringEncoding.UTF16
-            }
-            StringEncoding.LATIN1_UTF16 -> {
-                align = 2
-                if (tagged and utf16Tag != 0L) {
-                    byteLength = 2 * (tagged xor utf16Tag)
-                    kind = StringEncoding.UTF16
-                } else {
-                    byteLength = tagged
-                    kind = StringEncoding.LATIN1_UTF16
-                }
-            }
-        }
-        if (byteLength > CanonicalAbi.MAX_STRING_BYTE_LENGTH) trap("String byte length $byteLength exceeds the maximum")
+        val align = DirectCanonicalAbi.stringBufferAlign(cx.encoding)
+        val byteLength = DirectCanonicalAbi.stringBufferByteLength(taggedLen, cx.encoding)
         checkRange(m, ptr, byteLength, align, "string")
         if (byteLength == 0L) {
             w.int(0)
             return
         }
         val n = byteLength.toInt()
-        when (kind) {
+        when (DirectCanonicalAbi.stringBufferKind(taggedLen, cx.encoding)) {
             StringEncoding.UTF8 -> {
                 w.int(n)
                 val at = copyFromMemory(m, ptr, n)
@@ -696,73 +670,4 @@ class Lifter(private val cx: AbiContext, private val w: WitWriter) {
     }
 }
 
-private const val UTF16_TAG = 1 shl 31
-
-@InternalWasm2KtApi
-fun trap(message: String): Nothing = throw ComponentTrapException(message)
-
-@InternalWasm2KtApi
-fun unsigned(i: Int): Long = i.toLong() and 0xFFFF_FFFFL
-
-/** Traps unless `[ptr, ptr + byteLength)` lies inside [memory] and [ptr] is aligned to [align]. */
-@InternalWasm2KtApi
-fun checkRange(memory: CanonicalMemory, ptr: Int, byteLength: Long, align: Int, what: String) {
-    val p = unsigned(ptr)
-    if (p % align != 0L) trap("Misaligned $what: $p is not a multiple of $align")
-    val size = memory.byteSize
-    if (p + byteLength > size) trap("Out-of-bounds $what: [$p, ${p + byteLength}) exceeds linear memory of $size bytes")
-}
-
-/**
- * Encoding checks without `CharsetDecoder`, which is costly to create on Android (#58).
- */
-@InternalWasm2KtApi
-object Utf8 {
-    /** Well-formed UTF-8 (no overlong forms, surrogates or code points past U+10FFFF). */
-    fun isValid(a: ByteArray, offset: Int, length: Int): Boolean {
-        var i = offset
-        val end = offset + length
-        while (i < end) {
-            val b0 = a[i].toInt() and 0xFF
-            if (b0 < 0x80) {
-                i++
-                continue
-            }
-            val n = when {
-                b0 in 0xC2..0xDF -> 1
-                b0 in 0xE0..0xEF -> 2
-                b0 in 0xF0..0xF4 -> 3
-                else -> return false
-            }
-            if (i + n >= end) return false
-            val b1 = a[i + 1].toInt() and 0xFF
-            when (b0) {
-                0xE0 -> if (b1 !in 0xA0..0xBF) return false
-                0xED -> if (b1 !in 0x80..0x9F) return false
-                0xF0 -> if (b1 !in 0x90..0xBF) return false
-                0xF4 -> if (b1 !in 0x80..0x8F) return false
-                else -> if (b1 !in 0x80..0xBF) return false
-            }
-            for (k in 2..n) if ((a[i + k].toInt() and 0xC0) != 0x80) return false
-            i += n + 1
-        }
-        return true
-    }
-
-    /** Every surrogate is part of a pair. */
-    fun isValidUtf16(chars: CharArray): Boolean {
-        var i = 0
-        while (i < chars.size) {
-            val c = chars[i]
-            if (Character.isHighSurrogate(c)) {
-                if (i + 1 >= chars.size || !Character.isLowSurrogate(chars[i + 1])) return false
-                i += 2
-            } else if (Character.isLowSurrogate(c)) {
-                return false
-            } else {
-                i++
-            }
-        }
-        return true
-    }
-}
+private const val UTF16_TAG = DirectCanonicalAbi.UTF16_TAG

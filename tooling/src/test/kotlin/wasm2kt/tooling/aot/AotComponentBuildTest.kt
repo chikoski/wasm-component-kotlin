@@ -76,12 +76,36 @@ class AotComponentBuildTest {
             "Class.forName",
             "getDeclaredMethod",
             "getDeclaredField",
+            "WitWriter",
+            "WitReader",
+            "Lowerer",
+            "Lifter",
+            "ComponentBackend",
+            "AotComponentBackend",
+            "AotMappedImportBridge",
+            "Linker",
+            "ImportsFactory",
+            "FuncType",
+            "WitType",
+            "canonical.CanonicalAbi",
         )
         val forbiddenConstantPoolPrefixes = listOf(
             "kotlinx/serialization/",
             "com/dylibso/chicory/",
             "wasm2kt/runtime/chicory/",
             "java/lang/reflect/",
+            "wasm2kt/runtime/WitWriter",
+            "wasm2kt/runtime/WitReader",
+            "wasm2kt/runtime/ComponentBackend",
+            "wasm2kt/runtime/Linker",
+            "wasm2kt/runtime/ImportsFactory",
+            "wasm2kt/runtime/aot/AotComponentBackend",
+            "wasm2kt/runtime/aot/AotMappedImportBridge",
+            "wasm2kt/runtime/canonical/Lowerer",
+            "wasm2kt/runtime/canonical/Lifter",
+            "wasm2kt/runtime/canonical/CanonicalAbi;",
+            "wasm2kt/runtime/canonical/WitType",
+            "wasm2kt/runtime/canonical/FuncType",
         )
 
         for ((name, wasmFile) in listOf(
@@ -173,7 +197,6 @@ class AotComponentBuildTest {
             import com.example.aot.hr.makeAndMeasure
             import com.example.aot.hr.ticketId
             import com.example.aot.hv.HeavyComponent
-            import wasm2kt.runtime.WitWriter
 
             fun run(): String {
                 val rtImports = com.example.aot.rt.imports(
@@ -199,16 +222,16 @@ class AotComponentBuildTest {
                     }
                 }
 
-                val csOut = ComposedStrComponent.instantiate(null).use { b ->
+                val csOut = com.example.aot.cs.withSession(ComposedStrComponent) {
                     val s = "aé日🎌".repeat(50)
-                    listOf("utf8-utf16", "utf16-utf8", "compact-utf8", "utf8-compact").all { pair ->
-                        val fn = b.resolve("echo-${'$'}pair")
-                        b.invoke(fn, WitWriter().apply { string(s) }.toReader()).string() == s
-                    }
+                    com.example.aot.cs.echoUtf8Utf16(s) == s &&
+                        com.example.aot.cs.echoUtf16Utf8(s) == s &&
+                        com.example.aot.cs.echoCompactUtf8(s) == s &&
+                        com.example.aot.cs.echoUtf8Compact(s) == s
                 }
 
-                val crOut = ComposedResComponent.instantiate(null).use { b ->
-                    b.invoke(b.resolve("g"), WitWriter().toReader()).int()
+                val crOut = com.example.aot.cr.withSession(ComposedResComponent) {
+                    com.example.aot.cr.g()
                 }
 
                 var closedBlobs = 0
@@ -392,5 +415,50 @@ class AotComponentBuildTest {
             i++
         }
         return utf8s
+    }
+
+    @Test
+    fun `Phase 2 AOT bindings reject ComponentBackendFactory and Path at compile time`(@TempDir dir: Path) {
+        val output = AotComponentBuild.run(
+            component = fixtures.resolve("arithmetic.wasm"),
+            componentName = "arithmetic",
+            packageName = "com.example.aot.typesafety",
+            workDir = dir.resolve("arith"),
+        )
+        val genKt = walkFiles(output.kotlinDir).filter { it.name.endsWith(".kt") }
+        for ((name, snippet) in listOf(
+            "backendFactory" to """
+                import wasm2kt.runtime.ComponentBackendFactory
+                fun bad(f: ComponentBackendFactory) {
+                    com.example.aot.typesafety.openSession(f)
+                }
+            """.trimIndent(),
+            "pathArg" to """
+                import java.nio.file.Path
+                fun bad(p: Path) {
+                    com.example.aot.typesafety.openSession(p)
+                }
+            """.trimIndent(),
+        )) {
+            val badFile = dir.resolve("Bad_$name.kt")
+            Files.writeString(badFile, snippet)
+            val cp = (listOf(System.getProperty("java.class.path")) + output.classesDir.toString()).joinToString(File.pathSeparator)
+            val outDir = dir.resolve("out-$name")
+            Files.createDirectories(outDir)
+            val args = arrayOf(
+                "-Xcontext-parameters",
+                "-jvm-target",
+                "17",
+                "-no-stdlib",
+                "-classpath",
+                cp,
+                "-d",
+                outDir.toString(),
+                *(genKt + badFile).map { it.toString() }.toTypedArray(),
+            )
+            val errBuf = java.io.ByteArrayOutputStream()
+            val exit = K2JVMCompiler().exec(java.io.PrintStream(errBuf), *args)
+            assertTrue(exit != ExitCode.OK, "Expected compile failure for $name, but compiled cleanly")
+        }
     }
 }
