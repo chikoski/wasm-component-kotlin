@@ -17,7 +17,7 @@
 | ツール / ライブラリ | バージョン | 用途と方針 |
 | :--- | :--- | :--- |
 | **Chicory** | `1.7.5` | `runtime-chicory`（実行時）および `tooling`（ビルド時コンパイラ、分解ツール実行用 WASI） |
-| **Wasmtime / `wasmtime-environ`** | `=48.0.8`（LTS） | `rust-bridge` の `wasmtime` と `decomposer` の `wasmtime-environ` を同じ LTS の同じパッチ版に固定（[ADR-0010](../adr/0010-wasmtime-lts.md)） |
+| **Wasmtime / `wasmtime-environ`** | `=48.0.10`（LTS） | `rust-bridge` の `wasmtime` と `decomposer` の `wasmtime-environ` を同じ LTS の同じパッチ版に固定（[ADR-0010](../adr/0010-wasmtime-lts.md)） |
 | **Rust ツールチェーン** | `1.97.0` | `rust-bridge/rust-toolchain.toml` と `decomposer/rust-toolchain.toml` で固定（[#38](https://github.com/chikoski/wasm-component-kotlin/issues/38)） |
 | **`wasm-tools`** | `1.258.0` | CI とローカルの `integration-tests` / CLI で使用（`cargo install wasm-tools --version 1.258.0 --locked`）。Gradle プラグインのみの利用では不要 |
 
