@@ -32,9 +32,11 @@ flowchart TD
 | `ast` | `wit.json`（`wasm-tools component wit --json` 形式）のデシリアライズモデル（`WitResolve`） | 21 |
 | `generator` | KotlinPoet によるホストバインディング生成（`WitToKotlinPoetConverter`）と interface マニフェスト（`InterfaceManifest`） | 21 |
 | `cli` | `wasm2kt` コマンド（`generate` と `bridge` サブコマンド） | 21 |
-| `tooling` | コンポーネント分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`）、`<Name>Component` 生成（`ComponentCodegen`）、未対応機能検査（`PlanCheck`）、型付きブリッジ生成（`TypedBridge`） | 21 |
+| `tooling` | コンポーネント分解（`Decomposer`）、AOT コンパイル（`CoreModuleCompiler`、`AotComponentCompiler`）、`<Name>Component` 生成（`ComponentCodegen`、`DirectAotComponentEmitter`）、未対応機能検査（`PlanCheck`）、型付きブリッジ生成（`TypedBridge`） | 21 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン。Gradle Worker の独立クラスローダーで `tooling` を実行（[ADR-0004](../adr/0004-isolated-tooling-classloader.md)） | 21 |
 | `runtime-api` | 生成コードと各バックエンドの契約（`ComponentBackend`、`Linker`、`HostResourceTable`、バイナリ形式の `WitWriter` / `WitReader`） | 17（Android API 26 互換） |
+| `runtime-canonical` | バックエンド間で共有する Canonical ABI 検証・文字変換・資源ハンドルの共通層（`DirectCanonicalAbi`、`CanonicalAbi`、`ComponentGuard`、`HandleTable`） | 17（Android API 26 互換） |
+| `runtime-aot` | 自作 `AOT` バックエンド向けの実行時基盤（`AotComponentFactory`、`AotComponentRuntime`、`AotMappedImportBridge`、`LinearMemory`、`AotComponentBackend`） | 17（Android API 26 互換） |
 | `runtime-chicory` | `plan.json` を再生して Canonical ABI の lift / lower を行う純 JVM バックエンド（`ChicoryComponent`） | 17（Android API 26 互換） |
 | `runtime-wasmtime` | Wasmtime ブリッジの Kotlin 側（`FfmWasmtimeBridge`、`JniWasmtimeBridge`、`BridgeLibrary`） | 21（`--enable-preview`） |
 | `decomposer/` | `wasmtime-environ` を使って `.wasm` を core モジュールと `plan.json`・`wit.json` に分解する Rust ツール。`wasm32-wasip1` にビルドしたバイナリを `tooling` に同梱（[ADR-0002](../adr/0002-wasmtime-environ-decomposer.md)） | — |
@@ -62,6 +64,12 @@ Chicory 本体は `InterpreterFallback.SILENT` 指定により、JVM の 64 KB �
 この制約を緩和するため、`CoreModuleCompiler` は [ADR-0021](../adr/0021-split-large-chicory-methods.md) に基づいて `JvmMethodSplitter` を呼び出します。`JvmMethodSplitter` は 7,500 JVM バイトを超える `func_<N>` 形式の生成メソッドを静的な補助メソッドへ分割します。一方で、Chicory が 64 KB 上限でインタプリタへ落とした関数は分割対象外です。Chicory の `com.dylibso.chicory.compiler.internal.CompilerUtil` が単一メソッドとして生成する `call_dispatch_0` ディスパッチャも分割対象外として残ります。`call_dispatch_0` が 8,000 バイトを超える場合は、デスクトップ JVM に `-XX:-DontCompileHugeMethods` を指定すると JIT コンパイルの対象に含められます。
 
 分割後も上限を超える箇所は、Gradle タスクの `wasm2ktCompileWarnings<Cap>` が 3 種類の警告として出力します。対象となるのは、Chicory の 64 KB 上限によるインタプリタフォールバック関数数、ART の 16,383 DEX コード単位に相当する保守的閾値である 21,000 JVM バイト以上のメソッド数、HotSpot の 8,000 バイト上限を超えるメソッド数の 3 つです。
+
+## 4.5 自作 AOT バックエンドの直接配線
+
+[ADR-0023](../adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の `AOT` バックエンドでは、`ChicoryWasmAdapter` が Core Wasm モジュールを型付き IR へ変換し、`AotCoreCompiler` が直接 `CoreNInstance` 系の JVM バイトコードと静的データセグメントの `.data` ファイルを出力します。`DirectAotComponentEmitter` は `plan.json` のインスタンス化手順とホスト呼び出し境界を静的な Kotlin コードへ展開し、`WitToKotlinPoetConverter` の直接結合モードで生成した `Session` と直結させます。
+
+生成された `<Name>Component` は `AotComponentFactory` を実装し、`openSession` や `withSession` の型引数レベルで `ComponentBackendFactory` と区別されます。エクスポート関数とローカルのホスト import は `DirectCanonicalAbi` と `AotComponentRuntime` を通じて `LinearMemory` へ直接アクセスし、外部ライブラリ共有向けの `with` マッピングがある interface だけを `AotMappedImportBridge` 経由で `Linker` へ接続します。これにより、実行時の `plan.json`、`.meta`、および未利用のワイヤ層を排除した構成のまま R8 による呼び出し経路単位のコード削減を可能にしています。なお、非同期コンポーネントの対応は後続課題の `#188` で進めます。
 
 ## 5. Wasmtime バックエンド (`runtime-wasmtime` + `rust-bridge`)
 

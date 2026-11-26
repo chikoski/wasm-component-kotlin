@@ -1,5 +1,6 @@
 package wasm2kt
 
+import com.github.ajalt.clikt.core.parse
 import org.jetbrains.kotlin.cli.common.ExitCode
 import org.jetbrains.kotlin.cli.jvm.K2JVMCompiler
 import org.junit.jupiter.api.Test
@@ -283,5 +284,379 @@ class AotGeneratedBindingsTest {
             """,
         )
         assertEquals("true,102,[10, 20, 30, 42]", out)
+    }
+
+    @Test
+    fun `ADR-0014 mapped external library interfaces run seamlessly on Phase 2 AOT`(@TempDir tempDir: Path) {
+        val wasmToolsBin = System.getenv("WASM_TOOLS_BIN")?.takeIf { it.isNotBlank() }
+            ?: Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools").takeIf { Files.isExecutable(it) }?.toString()
+            ?: "wasm-tools"
+        val libPkg = "com.example.aot.mappedlib"
+        val appPkg = "com.example.aot.mappedapp"
+        val sameNameWit = Paths.get(requireNotNull(javaClass.getResource("/fixtures/same-name.wit")).toURI())
+
+        val libSrc = tempDir.resolve("lib-src")
+        val libClasses = tempDir.resolve("lib-classes")
+        wasm2kt.cli.GenerateCommand().parse(
+            listOf("--wasm-tools-path", wasmToolsBin, "--interfaces-only", "-o", libSrc.toString(), "--resources-output", libClasses.toString(), "-p", libPkg, sameNameWit.toString()),
+        )
+        val libPkgDir = libSrc.resolve(libPkg.replace('.', '/'))
+        Files.writeString(
+            libPkgDir.resolve("Hosts.kt"),
+            """
+            package $libPkg
+
+            import $libPkg.example.fs.types.ErrorCode as FsErrorCode
+            import $libPkg.example.fs.types.Types as FsTypes
+            import $libPkg.example.http.types.ErrorCode as HttpErrorCode
+            import $libPkg.example.http.types.Tally
+            import $libPkg.example.http.types.Types as HttpTypes
+
+            class CountingTally(private var value: UInt) : Tally {
+                override fun get(): UInt { value += 10u; return value }
+                override fun close() {}
+            }
+            class LibraryHttpTypes : HttpTypes {
+                override fun newTally(start: UInt): Tally = CountingTally(start)
+                override fun describe(e: HttpErrorCode): String = "host-http:${'$'}{e.code}"
+            }
+            class LibraryFsTypes : FsTypes {
+                override fun describe(e: FsErrorCode): String = when (e) {
+                    is FsErrorCode.Missing -> "host-fs:missing:${'$'}{e.value}"
+                    FsErrorCode.Denied -> "host-fs:denied"
+                }
+            }
+            """.trimIndent(),
+        )
+        val libSources = generatedSources(libSrc)
+        val libCp = System.getProperty("java.class.path")
+        Files.createDirectories(libClasses)
+        val libExit = K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters", "-jvm-target", "17", "-no-stdlib",
+            "-classpath", libCp,
+            "-d", libClasses.toString(),
+            *libSources.toTypedArray(),
+        )
+        assertEquals(ExitCode.OK, libExit, "Library sources must compile")
+
+        val aotOut = AotComponentBuild.run(
+            component = fixture("same-name"),
+            componentName = "same-name",
+            packageName = appPkg,
+            workDir = tempDir.resolve("app-aot"),
+            libraryClasspath = listOf(libClasses),
+        )
+        val harnessPath = tempDir.resolve("MappedHarness.kt")
+        Files.writeString(
+            harnessPath,
+            """
+            package $appPkg
+
+            import $libPkg.LibraryFsTypes
+            import $libPkg.LibraryHttpTypes
+            import $libPkg.example.fs.types.add as addFs
+            import $libPkg.example.http.types.add as addHttp
+            import $appPkg.exports.example.fs.types.ErrorCode as GuestFsErrorCode
+            import $appPkg.exports.example.fs.types.describe as describeFs
+            import $appPkg.exports.example.http.types.ErrorCode as GuestHttpErrorCode
+            import $appPkg.exports.example.http.types.Tally as GuestTally
+            import $appPkg.exports.example.http.types.describe as describeHttp
+
+            context(_: Session)
+            private fun exercise(): String {
+                val run = run(7u)
+                val http = describeHttp(GuestHttpErrorCode(3u))
+                val fs = describeFs(GuestFsErrorCode.Missing("x")) + "," + describeFs(GuestFsErrorCode.Denied)
+                val tally = GuestTally(5u).use { it.get(); it.get() }
+                return "${'$'}run;${'$'}http;${'$'}fs;tally=${'$'}tally"
+            }
+
+            fun run(): String {
+                val directImports = imports(
+                    exampleHttpTypes = { LibraryHttpTypes() },
+                    exampleFsTypes = { LibraryFsTypes() },
+                )
+                val directOut = withSession(SameNameComponent, directImports) {
+                    exercise()
+                }
+                val baseFactory = wasm2kt.runtime.ImportsFactory {
+                    wasm2kt.runtime.Linker().apply {
+                        addHttp(LibraryHttpTypes())
+                        addFs(LibraryFsTypes())
+                    }
+                }
+                val viaBaseOut = withSession(SameNameComponent, imports(base = baseFactory)) {
+                    exercise()
+                }
+                check(directOut == viaBaseOut) { "Mismatch: ${'$'}directOut vs ${'$'}viaBaseOut" }
+                return directOut
+            }
+            """.trimIndent(),
+        )
+        val appClasses = tempDir.resolve("app-classes")
+        Files.createDirectories(appClasses)
+        val appCp = listOf(
+            System.getProperty("java.class.path"),
+            libClasses.toString(),
+            aotOut.classesDir.toString(),
+        ).joinToString(File.pathSeparator)
+        val appExit = K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters", "-jvm-target", "17", "-no-stdlib",
+            "-classpath", appCp,
+            "-d", appClasses.toString(),
+            *(generatedSources(aotOut.kotlinDir) + harnessPath.toString()).toTypedArray(),
+        )
+        assertEquals(ExitCode.OK, appExit, "Mapped Phase 2 AOT app must compile")
+
+        val urls = arrayOf(
+            appClasses.toUri().toURL(),
+            libClasses.toUri().toURL(),
+            aotOut.classesDir.toUri().toURL(),
+            aotOut.resourcesDir.toUri().toURL(),
+        )
+        val result = URLClassLoader(urls, javaClass.classLoader).use { loader ->
+            loader.loadClass("$appPkg.MappedHarnessKt").getDeclaredMethod("run").invoke(null) as String
+        }
+        assertEquals(
+            "host-http:7|host-fs:missing:f7|host-fs:denied|tally=17;guest-http:3;guest-fs:missing:x,guest-fs:denied;tally=7",
+            result,
+        )
+    }
+
+    @Test
+    fun `Phase 2 AOT enforces exception, poison, rollback, and reentrancy boundaries`(@TempDir tempDir: Path) {
+        val pkgAbi = "com.example.aot.bindings.abiedge"
+        val abiOut = buildCompileAndRun(
+            tempDir.resolve("abi"),
+            "abi-edge",
+            pkgAbi,
+            """
+            package $pkgAbi
+
+            import wasm2kt.runtime.ComponentTrapException
+
+            fun run(): String {
+                var reentrantSession: Session? = null
+                var innerReentrantEx: Throwable? = null
+                val checks = mutableListOf<String>()
+
+                fun expectTrappedAndPoisoned(label: String, block: context(Session) () -> Unit) {
+                    withSession(AbiEdgeComponent, imports(world = { object : Imports { override fun ping() {} } })) {
+                        val ex = kotlin.runCatching { block() }.exceptionOrNull()
+                        val after = kotlin.runCatching { charFrom(0x41u) }.exceptionOrNull()
+                        check(ex is ComponentTrapException) { "${'$'}label: expected ComponentTrapException, got ${'$'}ex" }
+                        check(after is ComponentTrapException) { "${'$'}label: expected poison after trap, got ${'$'}after" }
+                        checks += "${'$'}label=true"
+                    }
+                }
+
+                // 1. Guest lift traps (invalid scalar, invalid discriminants, OOB/bad UTF-8/UTF-16, bad realloc, may_leave) -> poison
+                expectTrappedAndPoisoned("charTrap") { charFrom(0xD800u) }
+                expectTrappedAndPoisoned("optionDiscTrap") { optionFrom(2u) }
+                expectTrappedAndPoisoned("resultDiscTrap") { resultFrom(2u) }
+                expectTrappedAndPoisoned("oobStringTrap") { stringAt(0u, 1000000u) }
+                expectTrappedAndPoisoned("badUtf8Trap") { stringAt(0x100u, 3u) }
+                expectTrappedAndPoisoned("badUtf16Trap") { utf16At(0x310u, 2u) }
+                expectTrappedAndPoisoned("reallocAlignTrap") {
+                    setMode(1u)
+                    listLen(listOf(1u, 2u))
+                }
+                expectTrappedAndPoisoned("reallocOobTrap") {
+                    setMode(2u)
+                    listLen(listOf(1u, 2u))
+                }
+                expectTrappedAndPoisoned("mayLeaveTrap") {
+                    setMode(3u)
+                    listLen(listOf(1u, 2u))
+                }
+
+                // 2. Reentrant call during host import traps directly AND poisons
+                openSession(
+                    AbiEdgeComponent,
+                    imports(world = {
+                        object : Imports {
+                            override fun ping() {
+                                innerReentrantEx = reentrantSession?.let { s ->
+                                    kotlin.runCatching { context(s) { charFrom(0x41u) } }.exceptionOrNull()
+                                }
+                            }
+                        }
+                    }),
+                ).use { session ->
+                    reentrantSession = session
+                    context(session) {
+                        val outer = kotlin.runCatching { callPing() }.exceptionOrNull()
+                        check(innerReentrantEx is ComponentTrapException) { "Expected direct ComponentTrapException inside reentrant ping, got ${'$'}innerReentrantEx" }
+                        check(outer == null) { "Expected caught inner trap not to escape ping, got ${'$'}outer" }
+                        val after = kotlin.runCatching { charFrom(0x41u) }.exceptionOrNull()
+                        check(after is ComponentTrapException) { "Expected poison after reentrant trap, got ${'$'}after" }
+                        checks += "reentrant=true"
+                    }
+                }
+
+                // 3. Host import exception preserves original type AND poisons
+                reentrantSession = null
+                withSession(
+                    AbiEdgeComponent,
+                    imports(world = {
+                        object : Imports {
+                            override fun ping() {
+                                throw UnsupportedOperationException("host-boom")
+                            }
+                        }
+                    }),
+                ) {
+                    val e = kotlin.runCatching { callPing() }.exceptionOrNull()
+                    check(e is UnsupportedOperationException && e.message == "host-boom") { "Host exception altered: ${'$'}e" }
+                    val after = kotlin.runCatching { charFrom(0x41u) }.exceptionOrNull()
+                    check(after is ComponentTrapException) { "Expected poison after host exception, got ${'$'}after" }
+                    checks += "hostExPreserved=true"
+                }
+
+                return checks.joinToString(",")
+            }
+            """,
+        )
+        assertEquals(
+            "charTrap=true,optionDiscTrap=true,resultDiscTrap=true,oobStringTrap=true,badUtf8Trap=true,badUtf16Trap=true,reallocAlignTrap=true,reallocOobTrap=true,mayLeaveTrap=true,reentrant=true,hostExPreserved=true",
+            abiOut,
+        )
+
+        // 4. Host invalid values (surrogates in strings) rejected with IAE WITHOUT poisoning
+        val pkgTypes = "com.example.aot.bindings.types"
+        val typesOut = buildCompileAndRun(
+            tempDir.resolve("types"),
+            "types",
+            pkgTypes,
+            """
+            package $pkgTypes
+
+            fun run(): String {
+                withSession(TypesComponent) {
+                    val badHigh = kotlin.runCatching { echoName("\uD800") }.exceptionOrNull()
+                    check(badHigh is IllegalArgumentException) { "Expected IAE for lone high surrogate, got ${'$'}badHigh" }
+                    val badLow = kotlin.runCatching { echoName("a\uDC00") }.exceptionOrNull()
+                    check(badLow is IllegalArgumentException) { "Expected IAE for lone low surrogate, got ${'$'}badLow" }
+                    // Session remains completely usable!
+                    check(echoName("ok") == "ok")
+                    val flags = echoFlagged(Flagged("k", 9u, "v"))
+                    check(flags == Flagged("k", 9u, "v"))
+                    val astral = CodePoint.of("\uD83D\uDE00")
+                    check(echoChar(astral) == astral)
+                }
+                return "ok"
+            }
+            """,
+        )
+        assertEquals("ok", typesOut)
+
+        // 5. host-res: closed guest resource throws ISE without poisoning; borrowed vs unborrowed drop-in-call boundaries
+        val pkgHostRes = "com.example.aot.bindings.hostres_edge"
+        val hrOut = buildCompileAndRun(
+            tempDir.resolve("hostres_edge"),
+            "host-res",
+            pkgHostRes,
+            """
+            package $pkgHostRes
+
+            import $pkgHostRes.exports.example.host_res.guest_api.Counter
+            import $pkgHostRes.example.host_res.store.Blob
+            import $pkgHostRes.example.host_res.store.Store
+            import wasm2kt.runtime.ComponentTrapException
+
+            class MemBlob(var data: ByteArray) : Blob {
+                override fun size(): UInt = data.size.toUInt()
+                override fun append(more: ByteArray) { data += more }
+                override fun read(): ByteArray = data
+            }
+            class SimpleTicket(private val id: UInt) : Ticket {
+                override fun id(): UInt = id
+            }
+
+            fun run(): String {
+                var onLog: (() -> Unit)? = null
+                val imp = imports(
+                    exampleHostResStore = {
+                        object : Store {
+                            override fun newBlob(init: ByteArray): Blob = MemBlob(init)
+                            override fun blobMerge(a: Blob, b: Blob): Blob = MemBlob((a as MemBlob).data + (b as MemBlob).data)
+                            override fun log(msg: String) { onLog?.invoke() }
+                            override fun find(name: String): Blob? = null
+                        }
+                    },
+                    world = { object : Imports { override fun newTicket(id: UInt) = SimpleTicket(id) } },
+                )
+                withSession(HostResComponent, imp) {
+                    val b = MemBlob(byteArrayOf(1, 2, 3))
+                    check(consume(b) == 3u)
+                    // Closed guest resource throws IllegalStateException WITHOUT poisoning!
+                    val c0 = Counter(10)
+                    c0.close()
+                    val useClosedErr = kotlin.runCatching { c0.value() }.exceptionOrNull()
+                    check(useClosedErr is IllegalStateException) { "Expected ISE on closed Counter, got ${'$'}useClosedErr" }
+                    val cFresh = Counter(7)
+                    check(cFresh.value() == 7)
+                    cFresh.close()
+
+                    // Dropping currently borrowed guest resource mid-poke throws ISE WITHOUT poisoning;
+                    // dropping an unborrowed guest resource with a destructor mid-poke traps & poisons.
+                    val c = Counter(5)
+                    val cUnborrowed = Counter(8)
+                    var borrowedDropErr: Throwable? = null
+                    var unborrowedDropErr: Throwable? = null
+                    onLog = {
+                        borrowedDropErr = kotlin.runCatching { c.close() }.exceptionOrNull()
+                        unborrowedDropErr = kotlin.runCatching { cUnborrowed.close() }.exceptionOrNull()
+                    }
+                    kotlin.runCatching { c.poke() }
+                    onLog = null
+                    check(borrowedDropErr is IllegalStateException) { "Expected ISE on borrowed drop-in-call, got ${'$'}borrowedDropErr" }
+                    check(unborrowedDropErr is ComponentTrapException) { "Expected ComponentTrapException on unborrowed dtor drop-in-call, got ${'$'}unborrowedDropErr" }
+                    val afterDropTrap = kotlin.runCatching { Counter(1) }.exceptionOrNull()
+                    check(afterDropTrap is ComponentTrapException) { "Expected poison after dtor drop-in-call trap, got ${'$'}afterDropTrap" }
+                }
+                return "ok"
+            }
+            """,
+        )
+        assertEquals("ok", hrOut)
+
+        val pkgRes = "com.example.aot.bindings.resedge"
+        val resOut = buildCompileAndRun(
+            tempDir.resolve("resedge"),
+            "res-edge",
+            pkgRes,
+            """
+            package $pkgRes
+
+            import $pkgRes.exports.example.res_edge.api.*
+
+            fun run(): String {
+                openSession(ResEdgeComponent).use { s1 ->
+                    openSession(ResEdgeComponent).use { s2 ->
+                        val c1 = context(s1) { make(11u) }
+                        val c2 = context(s2) { make(22u) }
+                        // Cross-session rejected BEFORE guest call, c1 stays usable
+                        val cross = kotlin.runCatching { context(s2) { peek(c1) } }.exceptionOrNull()
+                        check(cross is IllegalStateException) { "Expected cross-session ISE, got ${'$'}cross" }
+                        check(context(s1) { peek(c1) } == 11u)
+                        // Passing same owned resource twice is rejected without poisoning, c1 stays usable
+                        val dbl = kotlin.runCatching { context(s1) { take2(c1, c1) } }.exceptionOrNull()
+                        check(dbl is IllegalStateException) { "Expected double-move ISE, got ${'$'}dbl" }
+                        check(context(s1) { peek(c1) } == 11u)
+                        val h1 = context(s1) { take(c1) }
+                        check(context(s1) { repRaw(h1) } == 11u)
+                        check(c1.isClosed)
+                        val h2 = context(s2) { take(c2) }
+                        check(context(s2) { repRaw(h2) } == 22u)
+                    }
+                }
+                return "ok"
+            }
+            """,
+        )
+        assertEquals("ok", resOut)
     }
 }

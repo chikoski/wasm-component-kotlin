@@ -83,10 +83,20 @@ fun main(args: Array<String>) {
         val aotPkg = "$pkg.aot"
         val aotStarted = System.nanoTime()
         val aotCompiled = AotComponentCompiler.compile(decomposed, aotClasses, aotResources, aotPkg)
+        // Phase 1 ComponentBackend compatibility wrapper (for side-by-side Phase 1 vs Phase 2 comparison).
         AotComponentCodegen.generateComponentOnly(
             outputDir = aotKotlin,
-            componentName = "$name-aot",
+            componentName = "$name-aot-p1",
             packageName = pkg,
+            compiled = aotCompiled,
+            internalPackage = aotPkg,
+        )
+        // Phase 2 direct-wired World DSL + <Name>AotComponent (ADR-0023).
+        AotComponentCodegen.generate(
+            decomposedDir = decomposed,
+            outputDir = aotKotlin,
+            componentName = "$name-aot",
+            packageName = "${pkg}_aot",
             compiled = aotCompiled,
             internalPackage = aotPkg,
         )

@@ -64,10 +64,12 @@ wasm2kt {
 | 生成物 | 出力先 | 内容 |
 | :--- | :--- | :--- |
 | Kotlin バインディング | `build/wasm2kt/<name>/kotlin/` | WIT から生成された型、`Session`、`withSession`、`openSession`、`imports(...)`、エクスポート関数です |
-| `<Name>Component` | 同上、`packageName` 直下 | `ComponentBackendFactory` の実装オブジェクトです |
+| `<Name>Component` | 同上、`packageName` 直下 | `CHICORY` では `ComponentBackendFactory`、`AOT` では `AotComponentFactory` の実装オブジェクトです |
 | `wasm2kt-<name>.jar` | `build/wasm2kt/<name>/wasm2kt-<name>.jar` | コンパイル済み core モジュールと資源を収めた jar で、`implementation` に自動追加されます |
 
-`wasm2kt-<name>.jar` の中身は選択したバックエンドによって異なります。`CHICORY` では core クラス群に加えて `.meta` ファイルと `plan.json` を同梱します。`AOT` では ASM で生成した `CoreNInstance` 系クラス群と静的データセグメントの `.data` ファイルのみを収め、`.meta` や `plan.json` は含みません。プラグインはあわせて Kotlin コンパイルタスクに `-Xcontext-parameters` を自動で追加します。
+`wasm2kt-<name>.jar` の中身は選択したバックエンドによって異なります。`CHICORY` では core クラス群に加えて `.meta` ファイルと `plan.json` を同梱します。`AOT` では ASM で生成した `CoreNInstance` 系クラス群と静的データセグメントの `.data` ファイルのみを収め、`.meta` や `plan.json` は含みません。また `AOT` を選択したコンポーネントでは `openSession`、`withSession`、および `withSessionBlocking` が `AotComponentFactory` だけを受け取る型になり、`ComponentBackendFactory` や `Path` を渡すとコンパイル時に拒否されます。プラグインはあわせて Kotlin コンパイルタスクに `-Xcontext-parameters` を自動で追加します。
+
+`AOT` バックエンドは現在、同期コンポーネントのみに対応しています。非同期機能を使うコンポーネントに対して `Wasm2KtBackend.AOT` を指定すると、後続課題 `#188` の完了までは検査タスクでビルドエラーになります。
 
 ---
 

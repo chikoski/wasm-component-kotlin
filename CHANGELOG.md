@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* World DSL と自作 AOT バックエンドの静的 Canonical ABI 直結
 * Gradle プラグインの AOT バックエンド切替と R8・ART 比較の追加
 * `plan.json` からの静的コンポーネント配線生成と `ComponentBackend` 互換層の実装
 * Core Wasm の JVM バイトコード直接生成と適合テストの追加
@@ -62,6 +63,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#187](https://github.com/chikoski/wasm-component-kotlin/issues/187) に対応し、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 2 として、生成される World DSL と静的コンパイル済み AOT バックエンドを直接結ぶ静的 Canonical ABI 配線を実装しました。`:runtime-canonical` にはワイヤ層へ依存しない `DirectCanonicalAbi` を分離し、`@InternalWasm2KtApi` の内部トップレベル関数群である `trap`、`unsigned`、`checkRange`、`Utf8` を `CanonicalAbiKt` から `DirectCanonicalAbiKt` へ移しました。`:runtime-aot` には `AotComponentFactory`、`AotComponentRuntime`、および `with` 指定済み外部ライブラリ向けの隔離ブリッジ `AotMappedImportBridge` を追加しています。`:generator` と `DirectAotComponentEmitter` により、生成済み `Session` の内部メソッドから `CoreNInstance` の関数と `LinearMemory` を直接呼び出すコードを生成し、`WitWriter`、`WitReader`、および `ComponentBackend.invoke` の往復を省きました。あわせて `openSession`、`withSession`、および `withSessionBlocking` が `AotComponentFactory` のみを受け取る署名となり、Android Release ビルド時に R8 で未使用エクスポートとワイヤ層クラス群を除去できます。非同期コンポーネントの対応は後続の `#188` へ残しています。
 
 [#186](https://github.com/chikoski/wasm-component-kotlin/issues/186) に対応し、`io.github.wasm2kt` プラグインへ `Wasm2KtBackend.CHICORY` を既定としたまま `Wasm2KtBackend.AOT` を選択できる切替機構を追加しました。未対応機能の検証を `Wasm2KtCheckTask` へ分離したため、`CHICORY` と `AOT` の切り替え後も `Wasm2KtDecomposeTask` のキャッシュを共有できます。全コンポーネントが `AOT` の場合は `runtime-chicory` を `implementation` に追加せず、`addWasiDependency` 指定時の互換警告および非同期コンポーネントのビルド時拒否を行います。あわせてベンチマークと Android サンプルへ `AOT` 経路を組み込み、R8 APK サイズ、`dex2oat64`、初回起動、ARM64 NaN 保存、および実行時間の計測結果を [performance.md](docs/explanation/performance.md) にまとめました。
 

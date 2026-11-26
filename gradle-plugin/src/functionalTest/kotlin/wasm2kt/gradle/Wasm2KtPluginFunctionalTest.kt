@@ -1152,6 +1152,22 @@ class Wasm2KtPluginFunctionalTest {
             val names = zip.entries().asSequence().map { it.name }.toList()
             assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in release APK: $names")
         }
+        val mappingFile = dir.resolve("build/outputs/mapping/release/mapping.txt")
+        assertTrue(mappingFile.exists(), "Expected R8 mapping.txt at $mappingFile")
+        val keptLines = mappingFile.readLines().filter { " -> " in it && !it.startsWith(" ") && !it.contains("R8\$\$REMOVED") }
+        val forbiddenWirePrefixes = listOf(
+            "wasm2kt.runtime.WitWriter ",
+            "wasm2kt.runtime.WitReader ",
+            "wasm2kt.runtime.ComponentBackend ",
+            "wasm2kt.runtime.Linker ",
+            "wasm2kt.runtime.canonical.CanonicalAbi ",
+            "wasm2kt.runtime.canonical.Lowerer ",
+            "wasm2kt.runtime.canonical.Lifter ",
+            "wasm2kt.runtime.canonical.FuncType ",
+            "wasm2kt.runtime.canonical.WitType ",
+        )
+        val survivingWire = keptLines.filter { line -> forbiddenWirePrefixes.any { line.startsWith(it) } }
+        assertTrue(survivingWire.isEmpty(), "Expected R8 to prune wire/dynamic classes in pure Phase 2 AOT APK, but kept: $survivingWire")
 
         val second = runner(
             dir,

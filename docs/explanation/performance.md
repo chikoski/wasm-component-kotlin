@@ -263,12 +263,75 @@ Phase 1 の `AOT` バックエンドにはいくつかの技術的制約と設�
 
 ---
 
-## 8. 再計測の手順
+## 8. Phase 2 静的直結 AOT の実測結果
+
+`#187` により、World DSL から生成済みの Core Wasm 関数を直接呼び出す静的 Canonical ABI 配線を導入しました。Phase 2 の `AOT` では `WitWriter`、`WitReader`、および `ComponentBackend.invoke` を通らず、`DirectCanonicalAbi` と生成済み Lower や Lift コードが直接 `LinearMemory` と Core Wasm 関数を結ぶ構造です。
+
+### 8.1 Host JVM における Phase 2 と Phase 1 の定常呼び出し比較
+
+Apple Silicon macOS 環境の OpenJDK 21.0.13 で、Phase 2 経路の `aot/dsl` と Phase 1 経路の `aot-p1/dsl`、および `chicory-aot/dsl` や Wasmtime を同一プロセス設定で計測しました。
+
+| 呼び出し | `aot/dsl` | `aot-p1/dsl` | `chicory-aot/dsl` | `chicory-interp/dsl` | `wasmtime-ffm/dsl` | `wasmtime-jni/dsl` |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `add(s32, s32)` | 14.8 ns | 183.5 ns | 196.7 ns | 270.2 ns | 736.6 ns | 660.8 ns |
+| `echo-name` 5 文字 | 77.9 ns | 339.7 ns | 453.6 ns | 4.15 µs | 895.4 ns | 820.1 ns |
+| `echo-bytes` 16 B | 42.3 ns | 326.3 ns | 408.3 ns | 3.85 µs | 1.24 µs | 1.18 µs |
+| `echo-bytes` 1 KiB | 73.6 ns | 342.5 ns | 443.1 ns | 3.60 µs | 19.63 µs | 19.44 µs |
+| `echo-bytes` 64 KiB | 3.01 µs | 9.61 µs | 12.08 µs | 15.53 µs | 1.11 ms | 1.10 ms |
+| `echo-blob` 1 KiB record | 214.5 ns | 669.9 ns | 797.9 ns | 8.39 µs | 20.44 µs | 19.87 µs |
+| `lcg-sum` 100 万回 | 311.2 µs | 311.3 µs | 314.2 µs | 60.95 ms | 332.3 µs | 331.7 µs |
+| `regex-count` 16 B | 41.9 µs | 43.2 µs | 132.6 µs | 2.74 ms | 10.8 µs | 10.7 µs |
+| `regex-count` 14 KiB | 178.1 µs | 174.1 µs | 371.7 µs | 8.25 ms | 54.3 µs | 52.6 µs |
+| `json-roundtrip` 13 KiB | 376.3 µs | 374.6 µs | 621.0 µs | 25.56 ms | 109.0 µs | 108.4 µs |
+| `sort-bytes` 64 KiB | 579.4 µs | 585.1 µs | 4.64 ms | 92.47 ms | 1.38 ms | 1.38 ms |
+
+`add(s32, s32)` は `aot-p1/dsl` の `183.5 ns` から `14.8 ns` へ短縮しました。`echo-bytes` の `1 KiB` や `echo-blob` といった境界の往復が重い呼び出しでも、バイナリ直列化と中間ボックス化を省いたことで呼び出しオーバーヘッドが小さくなっています。一方で、`regex-count` や `json-roundtrip` のように Wasm 内部の計算が支配的な処理は、Phase 1 と Phase 2 で実行時間はほぼ同等です。
+
+### 8.2 R8 による未使用エクスポートとワイヤ層の除去
+
+Phase 2 で `Session` と `<Name>Component` を直接結んだことで、Android のリリースビルド時に R8 がアプリから呼ばれないエクスポートと到達不能な Core Wasm 関数を除去できるようになりました。`isMinifyEnabled = true` の空の `Activity` を用いて、`heavy.wasm` と `png-glitch-component.wasm` の R8 縮小結果を計測しました。
+
+| 対象アプリと公開呼び出し構成 | リリース APK | 非圧縮 DEX | DEX クラス数 | DEX メソッド ID | 残存するワイヤ系クラス | 残存する `__export_` メソッド |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| `heavy` で `lcgSum` のみ呼び出し | 153,084 B | 26,224 B | 15 | 54 | 0 件 | `__export_2_lcgSum` のみ |
+| `heavy` で全 4 エクスポート呼び出し | 791,673 B | 1,324,716 B | 23 | 1,039 | 0 件 | 全 4 種 |
+| `png-glitch` で `validateRecipe` のみ呼び出し | 1,274,059 B | 2,407,276 B | 42 | 1,587 | 0 件 | `__export_10_validateRecipe` のみ |
+
+`heavy` で `lcgSum` のみを呼ぶ構成では、全 4 エクスポートを呼ぶ構成と比べて `classes.dex` が `1,324,716 B` から `26,224 B` へ減少し、メソッド数も `1,039` 件から `54` 件へ減りました。`WitWriter`、`WitReader`、`ComponentBackend`、`Linker`、`CanonicalAbi`、`FuncType`、`WitType` といった動的ワイヤ系のクラスも APK に残りません。ただし、`elem` セグメント経由で関数テーブルへ登録される間接呼び出し対象関数は、モジュール初期化処理 `<init>` から参照されるため、現状でも R8 による到達不能判定の対象外として残ります。
+
+### 8.3 初回起動と Android 16 ARM64 ART での実測
+
+Host JVM での 9 回実行中央値における Phase 1 `aot-p1` と Phase 2 `aot` の初回起動比較を以下に示します。
+
+| 対象とフェーズ | `aot-p1` | `aot` |
+| :--- | ---: | ---: |
+| `arithmetic` 初回 open | 18.65 ms | 5.24 ms |
+| `arithmetic` 初回 total | 41.44 ms | 24.48 ms |
+| `heavy` 初回 open | 26.47 ms | 12.95 ms |
+| `heavy` 初回 total | 49.92 ms | 34.27 ms |
+
+ローカルの ARM64 Android 16 エミュレーター `Medium_Phone_API_36.1` 上で、`CHICORY` と Phase 2 `AOT` を `ColdStartProbe` および `CallBenchmark` で比較した結果は以下のとおりです。
+
+| ART 計測項目 | `CHICORY` | Phase 2 `AOT` |
+| :--- | ---: | ---: |
+| `arithmetic` 初回 open / 合計 | 3.687 ms / 3.836 ms | 0.185 ms / 0.238 ms |
+| `heavy` 初回 open / 合計 | 80.531 ms / 84.646 ms | 4.952 ms / 5.607 ms |
+| `CallBenchmark` `add` 中央値 | 864.3 ns | 11.6 ns |
+| `CallBenchmark` `echoName5` 中央値 | 7,124.8 ns | 500.2 ns |
+| `CallBenchmark` `echoBytes1024` 中央値 | 1,325.2 ns | 2,193.5 ns |
+| `CallBenchmark` `echoBlob1024` 中央値 | 2,462.2 ns | 655.9 ns |
+
+ART 上の `echoBytes1024` は最小値が Phase 2 で `748.4 ns`、`CHICORY` で `1,184.4 ns` だったものの、中央値は `CHICORY` のほうが小さく出ました。`lcgSum1e6` 以降の重い計算ベンチマーク比較前にエミュレーター側の ADB 接続が切断されたため、ART 上での定常計算ベンチマークの完全なペア比較は後続計測に残っています。なお、Phase 2 `AOT` も引き続き同期コンポーネントのみに対応しており、非同期コンポーネントの対応は `#188` で進めます。
+
+---
+
+## 9. 再計測の手順
 
 ```bash
 ./gradlew -Pwasm2kt.bench :benchmarks:bench        # 定常状態（JVM）。-Pwasm2kt.bench.filter=<正規表現> で絞り込み可
 ./gradlew -Pwasm2kt.bench :benchmarks:benchTyped   # 型付きブリッジの計測（cargo でビルド）
 ./gradlew -Pwasm2kt.bench :benchmarks:coldStart    # 初回インスタンス化（JVM）
 ./gradlew -Pwasm2kt.bench :benchmarks:profile -Pwasm2kt.bench.filter=regex
+./gradlew :gradle-plugin:functionalTest --tests "*Wasm2KtPluginFunctionalTest*"  # R8 のワイヤ層クラス除去を含む検証
 ./gradlew -p samples/android :benchmark:assembleReleaseAndroidTest && samples/android/benchmark/run-on-device.sh
 ```

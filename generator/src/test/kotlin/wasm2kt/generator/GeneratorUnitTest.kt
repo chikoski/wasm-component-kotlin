@@ -457,4 +457,61 @@ class GeneratorUnitTest {
         }
         assertTrue("example:res" in conflictErr.message.orEmpty(), conflictErr.message)
     }
+
+    private fun generateAot(name: String): Pair<Map<String, String>, AotWorldModel> {
+        val converter = WitToKotlinPoetConverter(resolve(name), "com.example.aot", aotDirectMode = true)
+        val files = converter.generate().associate { file ->
+            val rel = file.packageName.removePrefix("com.example.aot").removePrefix(".").replace('.', '/')
+            (if (rel.isEmpty()) "" else "$rel/") + file.name to file.content
+        }
+        return files to requireNotNull(converter.aotModel) { "aotModel must be populated in aotDirectMode" }
+    }
+
+    @Test
+    fun `aotDirectMode omits wire codecs, Linker, WasmtimeSession, and uses AotComponentFactory`() {
+        val (files, model) = generateAot("roundtrip")
+        val allText = files.values.joinToString("\n")
+        for (forbidden in listOf("WitWriter", "WitReader", "WasmtimeSession", "BackendWasmtimeSession", "HostResourceBoundSession", "ComponentBackendFactory", "Linker", "ImportsFactory")) {
+            assertFalse(forbidden in allText, "Unmapped AOT mode must not reference $forbidden")
+        }
+        val world = files.getValue("RoundtripWorld")
+        assertTrue("AotComponentFactory<AotImports, Session>" in world, world)
+        assertTrue("internal abstract fun __export_" in world, world)
+        assertTrue("fun imports(exampleRoundtripEnvProvider: () -> EnvProvider): AotImports" in world, world)
+        assertFalse(model.hasMappedImports)
+        assertFalse(model.hasHostResources)
+        assertTrue("example:roundtrip/math-api@0.1.0#scale" in model.exports, "exports=${model.exports.keys}")
+        assertTrue("example:roundtrip/env-provider@0.1.0#get-multiplier" in model.imports, "imports=${model.imports.keys}")
+
+        val (hostResFiles, hostResModel) = generateAot("host-res")
+        assertTrue(hostResModel.hasHostResources)
+        assertTrue(hostResModel.hasGuestResources)
+        val hostResWorld = hostResFiles.getValue("HostResWorld")
+        assertTrue("internal abstract fun __dropResource(handle: Int)" in hostResWorld, hostResWorld)
+        assertTrue("session?.__dropResource(handle)" in hostResFiles.getValue("exports/example/host_res/guest_api/GuestApi"), "missing __dropResource in guest resource close()")
+
+        val (typesFiles, typesModel) = generateAot("types")
+        assertFalse(typesModel.hasImports)
+        assertTrue("imports: AotImports = AotImports.EMPTY" in typesFiles.getValue("TypesWorld"), typesFiles.getValue("TypesWorld"))
+    }
+
+    @Test
+    fun `aotDirectMode keeps Linker only for mapped ADR-0014 library interfaces`() {
+        val resolve = resolve("host-res")
+        val converter = WitToKotlinPoetConverter(
+            resolve,
+            "com.example.mappedaot",
+            interfaceMappings = mapOf("example:host-res/store@0.1.0" to "com.example.hostlib"),
+            aotDirectMode = true,
+        )
+        val files = converter.generate().associate { it.name to it.content }
+        val world = files.getValue("HostResWorld")
+        val model = converter.aotModel!!
+        assertTrue(model.hasMappedImports)
+        assertTrue("example:host-res/store@0.1.0#[resource-drop]blob" in model.mappedResourceDropKeys)
+        assertTrue("base: ImportsFactory" in world, world)
+        assertTrue("internal val mappedLinker: ImportsFactory" in world, world)
+        assertTrue("internal val world: () -> Imports" in world, world)
+        assertFalse("exampleHostResStore: () -> Store" in world.substringAfter("class AotImports").substringBefore("companion").substringBefore("fun imports"))
+    }
 }
