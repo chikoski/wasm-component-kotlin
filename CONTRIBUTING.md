@@ -64,7 +64,7 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decom
 
 * **JVM 17 と Android API 26 の維持**: `runtime-api`、`runtime-canonical`、`runtime-aot`、および `runtime-chicory` には JVM 17 を超える API や `java.lang.foreign` を持ち込まないでください。また Android API 26 に存在しない API も使えません（`./gradlew check` の `animalsnifferMain` で検査されます）
 * **`plan.json` のバージョン**: `plan.json` のスキーマを変更するときは、`decomposer/src/main.rs` の `PLAN_VERSION` と `ComponentPlan.SUPPORTED_VERSION` を同時に上げ、`decomposer/build-wasm.sh` と `decomposer/regenerate-fixtures.sh` を実行してください
-* **Wasmtime の LTS 固定**: `decomposer` の `wasmtime-environ` と `rust-bridge` の `wasmtime` は、同じ LTS の同じパッチ版（現在は `=48.0.8`）に揃えます（[ADR-0010](docs/adr/0010-wasmtime-lts.md)）
+* **Wasmtime の LTS 固定**: `decomposer` の `wasmtime-environ` と `rust-bridge` の `wasmtime` は、同じ LTS の同じパッチ版（現在は `=48.0.10`）に揃えます（[ADR-0010](docs/adr/0010-wasmtime-lts.md)）
 * **Gradle プラグインのクラスローダー分離**: `gradle-plugin` では設定時（configuration time）に `tooling` のクラスや Kotlin Gradle Plugin の型を直接参照しないでください（[ADR-0004](docs/adr/0004-isolated-tooling-classloader.md)）
 * **両バックエンドの整合性**:
   * 値のバイナリ形式（`WitWriter` / `WitReader`）、関数名の解決、ホスト import のキーは両バックエンドで揃えます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)、[ADR-0015](docs/adr/0015-binary-value-boundary.md)）。Chicory 側の挙動を変えたら `ChicoryDifferentialTest` と `ConformanceTest` を通してください。なお、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づくオプトイン AOT バックエンドの Phase 2 完了時に、AOT 選択時の例外条件を本更新する予定です
