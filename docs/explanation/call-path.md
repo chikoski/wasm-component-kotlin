@@ -109,8 +109,12 @@ Chicory・Wasmtime ともに同じ順序で処理します。
 3. 生成された `HostFunction` が `WitReader` から引数をデコードし、ホストの実装を呼び出し、戻り値を `WitWriter` に書き込む
 4. バックエンドが `WitWriter` のバイト列を読み取ってゲストへ lower する
 
-### 3.4 AOT バックエンドの直接経路
+### 3.4 AOT バックエンドの経路
 
-[ADR-0023](../adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 2 で生成される `AOT` 向けワールド DSL は、`WitWriter`、`WitReader`、`ComponentBackend.invoke`、および `Linker` を経由せず、生成された `Session` の内部抽象メソッドを通じて `<Name>Component.Instance` 内の `__export_*` メソッドを直接呼び出します。`__export_*` はコンパイル済みの型情報を基に `DirectCanonicalAbi` や `LinearMemory` へ直接 Lower と Lift のコードを展開し、`CoreNInstance` の関数を静的呼び出しで実行します。
+[ADR-0023](../adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の `AOT` バックエンドでは、同期コンポーネントと非同期コンポーネントで呼び出し経路を切り替えます。いずれの場合も、コアモジュール自体の実行はビルド時に生成した `CoreNInstance` クラス群と `LinearMemory` 上で行われます。
 
-ホスト import についても、ワールドローカルな関数やインライン interface は生成済みアダプタのローカル関数から `AotImports` の具象プロバイダを直接呼び出します。一方で、外部ライブラリとの間で共有される `with` 指定済み interface のみに限っては、`AotMappedImportBridge` を隔離層として `Linker` 経由のディスパッチを維持します。これにより、`with` 指定を含まない一般的な同期コンポーネントの実行バイナリからはワイヤ層や `Linker` を完全に切り離せます。
+同期コンポーネントでは、`WitWriter`、`WitReader`、`ComponentBackend.invoke`、および `Linker` を経由せず、生成された `Session` の内部メソッドを通じて `<Name>Component.Instance` 内のエクスポート実装を直接呼び出します。エクスポート関数とローカルのホスト import は `DirectCanonicalAbi` と `LinearMemory` へ直接 Lower と Lift を行い、外部ライブラリと共有される `with` 指定済み interface のみ `AotMappedImportBridge` を通じて `Linker` へ接続します。
+
+非同期コンポーネントと WASI 0.3 コンポーネントでは、`BackendWasmtimeSession` と `WitWriter`・`WitReader` を経由して `AotComponentBackend` を呼び出します。`AotComponentBackend` は `AsyncBackendHost` を介して `:runtime-canonical` の共有 `AsyncAbi` と連携し、ホスト import も `callHostAsyncAware` を通じて `suspend fun` や WASI 0.3 ホスト実装へ接続されます。
+
+このように同期コンポーネントと非同期コンポーネントで配線が分離されているため、非同期機能を使わない純粋な同期コンポーネントの実行バイナリでは、R8 によって `WitWriter`、`Linker`、および `AsyncAbi` 関連クラスをすべて除去できます。

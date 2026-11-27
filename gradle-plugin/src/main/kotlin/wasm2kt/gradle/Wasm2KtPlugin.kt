@@ -138,12 +138,6 @@ class Wasm2KtPlugin : Plugin<Project> {
                 }
             }
             if (extension.addWasiDependency.get()) {
-                if (backends == setOf(Wasm2KtBackend.AOT)) {
-                    project.logger.warn(
-                        "wasm2kt: addWasiDependency is enabled while all components use the AOT backend; " +
-                            "WASI 0.3 uses async component features that the AOT backend does not support yet",
-                    )
-                }
                 if (!extension.useLibraryInterfaces.get()) {
                     project.logger.warn(
                         "wasm2kt: addWasiDependency is enabled while useLibraryInterfaces is false; " +

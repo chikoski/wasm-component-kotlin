@@ -89,9 +89,12 @@ open class AotComponentRuntime(
         mappedDropHandler = handler
     }
 
+    /** Hook notified once when the component instance transitions to poisoned. */
+    open fun onPoison() {}
+
     /** Wraps generated core module instantiation (`start` and active segments) in [ComponentGuard.guest]. */
     fun initComponent(block: () -> Unit) {
-        withHostResources { guard.guest { block() } }
+        withHostResources { guard.guest(onPoison = ::onPoison) { block() } }
     }
 
     fun registerResourceDtor(resource: Int, dtor: AotResourceDtor) {
@@ -106,7 +109,7 @@ open class AotComponentRuntime(
     fun enterDirect(): Int {
         guard.checkUsable()
         if (guard.entered) {
-            guard.poison("Cannot reenter component instance: called while another call into it is in progress")
+            guard.poison("Cannot reenter component instance: called while another call into it is in progress", ::onPoison)
         }
         guard.entered = true
         return syncCallStack.size
@@ -117,20 +120,20 @@ open class AotComponentRuntime(
         guard.entered = false
     }
 
-    inline fun <T> guardGuest(block: () -> T): T = guard.guest(block = block)
+    inline fun <T> guardGuest(block: () -> T): T = guard.guest(onPoison = ::onPoison, block = block)
 
     inline fun <T> guardHostImport(block: () -> T): T = guard.hostImport(block)
 
     inline fun runPostReturn(block: () -> Unit) {
-        guard.guest { guard.withoutLeaving(block) }
+        guard.guest(onPoison = ::onPoison) { guard.withoutLeaving(block) }
     }
 
-    fun checkMayLeave(what: String) = guard.checkMayLeave(what)
+    fun checkMayLeave(what: String) = guard.checkMayLeave(what, ::onPoison)
 
-    fun poison(message: String): Nothing = guard.poison(message)
+    fun poison(message: String): Nothing = guard.poison(message, ::onPoison)
 
     fun alloc(mem: LinearMemory, realloc: AotRealloc, align: Int, size: Int): Int =
-        guard.guest {
+        guard.guest(onPoison = ::onPoison) {
             val ptr = guard.withoutLeaving { realloc.realloc(0, 0, align, size) }
             DirectCanonicalAbi.checkReallocResult(mem, ptr, align, size)
         }
@@ -171,18 +174,24 @@ open class AotComponentRuntime(
         return DirectCanonicalAbi.packPtrLen(ptr, bytes.size)
     }
 
-    fun dropResource(handle: Int) {
+    open fun dropResource(handle: Int) = dropHostHandle(handle)
+
+    protected fun dropHostHandle(handle: Int) {
         guard.checkUsable()
         val h = hostHandles[handle] ?: throw IllegalStateException("Resource handle $handle not found or already consumed")
         check(h.lends == 0) { "Resource handle $handle is borrowed by a call in progress and cannot be dropped" }
         if (guard.entered && hasDestructor(h.table)) {
-            guard.poison("Cannot reenter component instance: dropping resource handle $handle runs its destructor during another call")
+            guard.poison("Cannot reenter component instance: dropping resource handle $handle runs its destructor during another call", ::onPoison)
         }
         hostHandles.remove(handle)
-        withHostResources { guard.guest { destroy(h.table, h.rep) } }
+        withHostResources { guard.guest(onPoison = ::onPoison) { destroy(h.table, h.rep) } }
     }
 
-    fun close() {
+    protected fun clearHostHandles() {
+        hostHandles.clear()
+    }
+
+    open fun close() {
         guard.closed = true
         hostHandles.clear()
         syncCallStack.clear()
@@ -274,13 +283,15 @@ open class AotComponentRuntime(
 
     // ---------------------------------------------------------------- resource tables & destruction
 
-    private fun handleTable(instanceIndex: Int): HandleTable =
+    protected open fun handleTableForInstance(instanceIndex: Int): HandleTable =
         handleTables.getOrPut(instanceIndex) { HandleTable() }
 
     protected fun resourceTable(tableIndex: Int): ResourceTable {
         val instIdx = resourceTablesByIndex[tableIndex]?.instance ?: 0
-        return ResourceTable(handleTable(instIdx), tableIndex)
+        return ResourceTable(handleTableForInstance(instIdx), tableIndex)
     }
+
+    protected fun resourceTableDesc(tableIndex: Int): AotResourceTableDesc? = resourceTablesByIndex[tableIndex]
 
     protected fun isDefinedHere(tableIndex: Int): Boolean = resourceTablesByIndex[tableIndex]?.imported == false
 
@@ -305,23 +316,37 @@ open class AotComponentRuntime(
         }
     }
 
-    fun newResourceContext(direction: AbiDirection): DirectResourceContext = DirectResourceContext(direction)
+    fun newResourceContext(direction: AbiDirection, borrowScope: (() -> BorrowScope)? = null): DirectResourceContext =
+        DirectResourceContext(direction, borrowScope)
 
     @InternalWasm2KtApi
-    inner class DirectResourceContext(private val direction: AbiDirection) {
+    inner class DirectResourceContext(
+        private val direction: AbiDirection,
+        private val borrowScope: (() -> BorrowScope)? = null,
+    ) {
         private var moves: LinkedHashSet<Int>? = null
         private var hostMoves: MutableList<Int>? = null
         private var lent: MutableList<HostHandle>? = null
         private var borrowsIn: MutableList<Triple<Int, Int, ResourceHandle>>? = null
         private var inserted: MutableList<Pair<Int, Int>>? = null
+        private var rollbackActions: MutableList<() -> Unit>? = null
 
-        private fun insert(table: Int, rep: Int, own: Boolean): Int =
-            resourceTable(table).insert(rep, own, scope = null).also {
+        fun recordRollback(action: () -> Unit) {
+            val list = rollbackActions ?: ArrayList<() -> Unit>(2).also { rollbackActions = it }
+            list.add(action)
+        }
+
+        private fun insert(table: Int, rep: Int, own: Boolean, scope: BorrowScope? = null): Int =
+            resourceTable(table).insert(rep, own, scope = scope).also {
                 val list = inserted ?: ArrayList<Pair<Int, Int>>(2).also { inserted = it }
                 list.add(table to it)
             }
 
         fun rollbackLowering() {
+            rollbackActions?.let { list ->
+                for (i in list.size - 1 downTo 0) list[i]()
+                list.clear()
+            }
             inserted?.let { list ->
                 for (i in list.size - 1 downTo 0) {
                     val (t, h) = list[i]
@@ -348,7 +373,7 @@ open class AotComponentRuntime(
                 for (i in list.indices) {
                     val (t, h, slot) = list[i]
                     if (resourceTable(t).slotOrNull(h) === slot) {
-                        guard.poison("Borrowed resource handle $h was not dropped before the call returned")
+                        guard.poison("Borrowed resource handle $h was not dropped before the call returned", ::onPoison)
                     }
                 }
                 list.clear()
@@ -362,6 +387,7 @@ open class AotComponentRuntime(
             }
             hostMoves?.clear()
             inserted?.clear()
+            rollbackActions?.clear()
         }
 
         fun releaseLends() {
@@ -411,9 +437,14 @@ open class AotComponentRuntime(
         fun lowerBorrow(table: Int, id: Int): Int {
             if (isImported(table)) {
                 check(direction == AbiDirection.HOST_TO_GUEST) { "Host imports cannot return borrow<T>" }
-                val handle = insert(table, id, own = false)
-                val list = borrowsIn ?: ArrayList<Triple<Int, Int, ResourceHandle>>(2).also { borrowsIn = it }
-                list.add(Triple(table, handle, checkNotNull(resourceTable(table).slotOrNull(handle))))
+                val scope = borrowScope?.invoke()
+                val handle = insert(table, id, own = false, scope = scope)
+                if (scope != null) {
+                    scope.numBorrows++
+                } else {
+                    val list = borrowsIn ?: ArrayList<Triple<Int, Int, ResourceHandle>>(2).also { borrowsIn = it }
+                    list.add(Triple(table, handle, checkNotNull(resourceTable(table).slotOrNull(handle))))
+                }
                 return handle
             }
             requireDefinedResource(table)

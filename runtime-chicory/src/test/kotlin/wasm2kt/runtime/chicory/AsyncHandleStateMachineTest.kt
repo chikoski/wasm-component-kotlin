@@ -19,6 +19,7 @@ import wasm2kt.runtime.HostFunction
 import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.ErrorContext
 import wasm2kt.runtime.canonical.InternalWasm2KtApi
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger

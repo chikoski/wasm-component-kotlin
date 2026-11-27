@@ -1031,7 +1031,13 @@ internal object AotModuleClassEmitter {
             access = Opcodes.ACC_PUBLIC or Opcodes.ACC_FINAL or Opcodes.ACC_SUPER
             name = instanceInternalName
             superName = "java/lang/Object"
-            interfaces = mutableListOf(AotNames.CORE_INSTANCE_IFACE_INTERNAL)
+            interfaces = mutableListOf(
+                if (options.emitRawCallDispatch) {
+                    AotNames.RAW_CALLABLE_CORE_INSTANCE_IFACE_INTERNAL
+                } else {
+                    AotNames.CORE_INSTANCE_IFACE_INTERNAL
+                },
+            )
             sourceFile = "core${ir.moduleIndex}.wasm"
         }
         if (importsIfaceInternal != null) {
@@ -1130,6 +1136,17 @@ internal object AotModuleClassEmitter {
             funcTargets = funcTargets,
             maxBucketSize = minOf(64, options.maxDispatchBucketSize),
         )
+
+        if (options.emitRawCallDispatch) {
+            // RawCallableCoreModule.invokeRaw(int funcIndex, long[] args): long[]
+            emitInvokeRaw(
+                cn = cn,
+                ir = ir,
+                instanceInternalName = instanceInternalName,
+                funcTargets = funcTargets,
+                maxBucketSize = minOf(64, options.maxDispatchBucketSize),
+            )
+        }
 
         return cn
     }
@@ -1764,17 +1781,18 @@ internal object AotModuleClassEmitter {
                 cn.methods.add(hm)
                 ChunkTarget(chunk.first(), chunk.last(), instanceInternalName, hName)
             }
-            emitInvokeIndirectRouter(cn, instanceInternalName, desc, chunks, insns, maxFanout = maxBucketSize, helperCounter = helperCounter)
+            emitDispatchChunkRouter(cn, instanceInternalName, desc, "invokeIndirect", chunks, insns, maxFanout = maxBucketSize, helperCounter = helperCounter)
         }
         mn.maxStack = 64
         mn.maxLocals = 6
         cn.methods.add(mn)
     }
 
-    private fun emitInvokeIndirectRouter(
+    private fun emitDispatchChunkRouter(
         cn: ClassNode,
         instanceInternalName: String,
         desc: String,
+        methodPrefix: String,
         chunks: List<ChunkTarget>,
         insns: InsnList,
         maxFanout: Int,
@@ -1782,15 +1800,15 @@ internal object AotModuleClassEmitter {
     ) {
         if (chunks.size > maxFanout) {
             val grouped = chunks.chunked(maxFanout).map { sub ->
-                val hName = "invokeIndirect\$r${helperCounter[0]++}"
+                val hName = "$methodPrefix\$r${helperCounter[0]++}"
                 val hm = MethodNode(Opcodes.ACC_PRIVATE, hName, desc, null, null)
-                emitInvokeIndirectRouter(cn, instanceInternalName, desc, sub, hm.instructions, maxFanout, helperCounter)
+                emitDispatchChunkRouter(cn, instanceInternalName, desc, methodPrefix, sub, hm.instructions, maxFanout, helperCounter)
                 hm.maxStack = 16
                 hm.maxLocals = 3
                 cn.methods.add(hm)
                 ChunkTarget(sub.first().minFunc, sub.last().maxFunc, instanceInternalName, hName)
             }
-            emitInvokeIndirectRouter(cn, instanceInternalName, desc, grouped, insns, maxFanout, helperCounter)
+            emitDispatchChunkRouter(cn, instanceInternalName, desc, methodPrefix, grouped, insns, maxFanout, helperCounter)
             return
         }
         fun emitTree(lo: Int, hi: Int) {
@@ -1902,6 +1920,187 @@ internal object AotModuleClassEmitter {
         }
         insns.add(dfltLbl)
         emitTrapInstruction(insns, "indirect call target function not callable")
+    }
+
+    // ---------------------------------------------------------------- RawCallableCoreModule.invokeRaw
+
+    private fun emitInvokeRaw(
+        cn: ClassNode,
+        ir: IrModule,
+        instanceInternalName: String,
+        funcTargets: Map<Int, CompiledFunctionTarget>,
+        maxBucketSize: Int,
+    ) {
+        val desc = "(I[J)[J"
+        val mn = MethodNode(Opcodes.ACC_PUBLIC, "invokeRaw", desc, null, null)
+        val insns = mn.instructions
+        val candidates = (0 until ir.totalFunctionCount).toList()
+        if (candidates.isEmpty()) {
+            emitTrapInstruction(insns, "module has no callable functions")
+            mn.maxStack = 4
+            mn.maxLocals = 3
+            cn.methods.add(mn)
+            return
+        }
+
+        if (candidates.size <= maxBucketSize) {
+            emitInvokeRawLeafSwitch(insns, instanceInternalName, candidates, funcTargets)
+        } else {
+            val helperCounter = intArrayOf(0)
+            val chunks = candidates.chunked(maxBucketSize).map { chunk ->
+                val hName = "invokeRaw\$b${helperCounter[0]++}"
+                val hm = MethodNode(Opcodes.ACC_PRIVATE, hName, desc, null, null)
+                emitInvokeRawLeafSwitch(hm.instructions, instanceInternalName, chunk, funcTargets)
+                hm.maxStack = 64
+                hm.maxLocals = 6
+                cn.methods.add(hm)
+                ChunkTarget(chunk.first(), chunk.last(), instanceInternalName, hName)
+            }
+            emitDispatchChunkRouter(cn, instanceInternalName, desc, "invokeRaw", chunks, insns, maxFanout = maxBucketSize, helperCounter = helperCounter)
+        }
+        mn.maxStack = 64
+        mn.maxLocals = 6
+        cn.methods.add(mn)
+    }
+
+    private fun emitInvokeRawLeafSwitch(
+        insns: InsnList,
+        instanceInternalName: String,
+        candidates: List<Int>,
+        funcTargets: Map<Int, CompiledFunctionTarget>,
+    ) {
+        val dfltLbl = LabelNode()
+        val caseLabels = Array(candidates.size) { LabelNode() }
+        val min = candidates.first()
+        val max = candidates.last()
+        val span = max.toLong() - min.toLong() + 1L
+
+        insns.add(VarInsnNode(Opcodes.ILOAD, 1))
+        if (span <= candidates.size.toLong() * 2L + 16L && span <= 256L) {
+            val map = candidates.withIndex().associate { (i, fnIdx) -> fnIdx to caseLabels[i] }
+            val tableLabels = Array(span.toInt()) { offset -> map[min + offset] ?: dfltLbl }
+            insns.add(TableSwitchInsnNode(min, max, dfltLbl, *tableLabels))
+        } else {
+            insns.add(LookupSwitchInsnNode(dfltLbl, candidates.toIntArray(), caseLabels))
+        }
+
+        for (i in candidates.indices) {
+            val fnIdx = candidates[i]
+            val target = funcTargets.getValue(fnIdx)
+            val ft = target.funcType
+            val directCount = AotNames.countDirectParams(ft.params)
+            insns.add(caseLabels[i])
+
+            if (directCount < ft.params.size) {
+                val spillCounter = WasmBytecodeEmitter.TypeSlotCounters()
+                for (p in directCount until ft.params.size) {
+                    val vt = ft.params[p]
+                    val sIdx = spillCounter.next(vt)
+                    insns.add(VarInsnNode(Opcodes.ALOAD, 2))
+                    WasmBytecodeEmitter.pushInt(insns, p)
+                    insns.add(InsnNode(Opcodes.LALOAD))
+                    emitUnpackLongToType(insns, vt)
+                    emitStoreTopIntoSpill(insns, instanceInternalName, 0, vt, sIdx, 3)
+                }
+            }
+            for (p in 0 until directCount) {
+                insns.add(VarInsnNode(Opcodes.ALOAD, 2))
+                WasmBytecodeEmitter.pushInt(insns, p)
+                insns.add(InsnNode(Opcodes.LALOAD))
+                emitUnpackLongToType(insns, ft.params[p])
+            }
+            insns.add(VarInsnNode(Opcodes.ALOAD, 0))
+            insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, target.ownerInternalName, target.methodName, target.methodDescriptor, false))
+
+            when (ft.results.size) {
+                0 -> {
+                    insns.add(InsnNode(Opcodes.ACONST_NULL))
+                    insns.add(InsnNode(Opcodes.ARETURN))
+                }
+                1 -> {
+                    emitPackTypeToLong(insns, ft.results[0])
+                    insns.add(VarInsnNode(Opcodes.LSTORE, 3))
+                    insns.add(InsnNode(Opcodes.ICONST_1))
+                    insns.add(org.objectweb.asm.tree.IntInsnNode(Opcodes.NEWARRAY, Opcodes.T_LONG))
+                    insns.add(InsnNode(Opcodes.DUP))
+                    insns.add(InsnNode(Opcodes.ICONST_0))
+                    insns.add(VarInsnNode(Opcodes.LLOAD, 3))
+                    insns.add(InsnNode(Opcodes.LASTORE))
+                    insns.add(InsnNode(Opcodes.ARETURN))
+                }
+                else -> {
+                    val tupleClass = target.multiValueClassInternalName!!
+                    insns.add(VarInsnNode(Opcodes.ASTORE, 3))
+                    WasmBytecodeEmitter.pushInt(insns, ft.results.size)
+                    insns.add(org.objectweb.asm.tree.IntInsnNode(Opcodes.NEWARRAY, Opcodes.T_LONG))
+                    insns.add(VarInsnNode(Opcodes.ASTORE, 4))
+                    for (r in ft.results.indices) {
+                        insns.add(VarInsnNode(Opcodes.ALOAD, 4))
+                        WasmBytecodeEmitter.pushInt(insns, r)
+                        insns.add(VarInsnNode(Opcodes.ALOAD, 3))
+                        insns.add(FieldInsnNode(Opcodes.GETFIELD, tupleClass, "v$r", AotNames.jvmDesc(ft.results[r])))
+                        emitPackTypeToLong(insns, ft.results[r])
+                        insns.add(InsnNode(Opcodes.LASTORE))
+                    }
+                    insns.add(VarInsnNode(Opcodes.ALOAD, 4))
+                    insns.add(InsnNode(Opcodes.ARETURN))
+                }
+            }
+        }
+        insns.add(dfltLbl)
+        emitTrapInstruction(insns, "raw call target function index out of bounds")
+    }
+
+    private fun emitUnpackLongToType(insns: InsnList, vt: IrValType) {
+        when (vt) {
+            IrValType.I32 -> insns.add(InsnNode(Opcodes.L2I))
+            IrValType.I64 -> {}
+            IrValType.F32 -> {
+                insns.add(InsnNode(Opcodes.L2I))
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, "java/lang/Float", "intBitsToFloat", "(I)F", false))
+            }
+            IrValType.F64 -> {
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, "java/lang/Double", "longBitsToDouble", "(J)D", false))
+            }
+            IrValType.FUNCREF, IrValType.EXTERNREF -> {
+                val okLbl = LabelNode()
+                insns.add(InsnNode(Opcodes.LCONST_0))
+                insns.add(InsnNode(Opcodes.LCMP))
+                insns.add(JumpInsnNode(Opcodes.IFEQ, okLbl))
+                insns.add(LdcInsnNode("Cannot marshal non-null ref across LongArray boundary"))
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, AotNames.TRAP_SUPPORT_INTERNAL, "trap", "(Ljava/lang/String;)Ljava/lang/Void;", false))
+                insns.add(InsnNode(Opcodes.POP))
+                insns.add(okLbl)
+                insns.add(InsnNode(Opcodes.ACONST_NULL))
+            }
+        }
+    }
+
+    private fun emitPackTypeToLong(insns: InsnList, vt: IrValType) {
+        when (vt) {
+            IrValType.I32 -> insns.add(InsnNode(Opcodes.I2L))
+            IrValType.I64 -> {}
+            IrValType.F32 -> {
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, "java/lang/Float", "floatToRawIntBits", "(F)I", false))
+                insns.add(InsnNode(Opcodes.I2L))
+            }
+            IrValType.F64 -> {
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, "java/lang/Double", "doubleToRawLongBits", "(D)J", false))
+            }
+            IrValType.FUNCREF, IrValType.EXTERNREF -> {
+                val nullLbl = LabelNode()
+                val endLbl = LabelNode()
+                insns.add(JumpInsnNode(Opcodes.IFNULL, nullLbl))
+                insns.add(LdcInsnNode("Cannot marshal non-null ref across LongArray boundary"))
+                insns.add(MethodInsnNode(Opcodes.INVOKESTATIC, AotNames.TRAP_SUPPORT_INTERNAL, "trap", "(Ljava/lang/String;)Ljava/lang/Void;", false))
+                insns.add(InsnNode(Opcodes.POP))
+                insns.add(InsnNode(Opcodes.LCONST_0))
+                insns.add(JumpInsnNode(Opcodes.GOTO, endLbl))
+                insns.add(nullLbl)
+                insns.add(InsnNode(Opcodes.LCONST_0))
+                insns.add(endLbl)
+            }
+        }
     }
 
     // ---------------------------------------------------------------- Boxing, Trap, Bytecode Metrics

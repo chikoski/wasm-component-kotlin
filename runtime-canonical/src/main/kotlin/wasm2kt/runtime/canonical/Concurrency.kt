@@ -1,16 +1,9 @@
 @file:OptIn(InternalWasm2KtApi::class)
 
-package wasm2kt.runtime.chicory
+package wasm2kt.runtime.canonical
 
 import wasm2kt.runtime.HostResourceTable
-import wasm2kt.runtime.canonical.BorrowScope
-import wasm2kt.runtime.canonical.HandleTable
-import wasm2kt.runtime.canonical.InternalWasm2KtApi
-import wasm2kt.runtime.canonical.ResourceHandle
-import wasm2kt.runtime.canonical.trap
-import wasm2kt.runtime.canonical.unsigned
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
@@ -33,12 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger
 // synchronous task may not block, ADR-0018).
 
 /** Thrown in a guest thread that is abandoned because its instance trapped or was closed. */
-internal class AbandonedThreadError : Error("The component instance was closed or trapped")
+@InternalWasm2KtApi
+class AbandonedThreadError : Error("The component instance was closed or trapped")
 
 // ------------------------------------------------------------------- stack switching
 
 /** A suspended computation: the rest of a guest thread's execution (the reference's `Continuation`). */
-internal class Continuation(val store: AsyncStore, internal var start: (() -> GuestThread?)?) {
+@InternalWasm2KtApi
+class Continuation(val store: AsyncStore, internal var start: (() -> GuestThread?)?) {
     val go = Semaphore(0)
 
     @Volatile
@@ -46,7 +41,8 @@ internal class Continuation(val store: AsyncStore, internal var start: (() -> Gu
 }
 
 /** The resumer's side of a resumed continuation (the reference's `Handler`). */
-internal class Handler(var currentThread: GuestThread, val hostResources: HostResourceTable?) {
+@InternalWasm2KtApi
+class Handler(var currentThread: GuestThread, val hostResources: HostResourceTable?) {
     val done = Semaphore(0)
     var cont: Continuation? = null
     var result: GuestThread? = null
@@ -56,7 +52,8 @@ internal class Handler(var currentThread: GuestThread, val hostResources: HostRe
     var blocker: GuestThread? = null
 }
 
-internal object StackSwitching {
+@InternalWasm2KtApi
+object StackSwitching {
     private val handler = ThreadLocal<Handler?>()
 
     private val threadIds = AtomicInteger()
@@ -69,7 +66,7 @@ internal object StackSwitching {
         0, Int.MAX_VALUE, 30, TimeUnit.SECONDS, java.util.concurrent.SynchronousQueue(),
         ThreadFactory { r ->
             // Compiled guest code runs on the JVM stack; give it as much room as a main thread.
-            Thread(null, r, "wasm2kt-chicory-guest-${threadIds.incrementAndGet()}", 8L shl 20).apply { isDaemon = true }
+            Thread(null, r, "wasm2kt-guest-${threadIds.incrementAndGet()}", 8L shl 20).apply { isDaemon = true }
         },
     )
 
@@ -185,12 +182,14 @@ internal object StackSwitching {
 // ------------------------------------------------------------------- tables
 
 /** The reference's `ErrorContext`. Error contexts are shared, not moved, between instances. */
-internal class ErrorContext(val debugMessage: String)
+@InternalWasm2KtApi
+class ErrorContext(val debugMessage: String)
 
 // ------------------------------------------------------------------- instances and the store
 
 /** The reference's `ComponentInstance`: the async state of one (sub)component instance. */
-internal class ComponentInstanceState(val index: Int, val store: AsyncStore) {
+@InternalWasm2KtApi
+class ComponentInstanceState(val index: Int, val store: AsyncStore) {
     val handles = HandleTable()
     val threads = HandleTable()
     var backpressure = 0
@@ -199,7 +198,8 @@ internal class ComponentInstanceState(val index: Int, val store: AsyncStore) {
 }
 
 /** The reference's `Store`: the threads waiting to run, across the instances of one component. */
-internal class AsyncStore {
+@InternalWasm2KtApi
+class AsyncStore {
     val waiting = ArrayList<GuestThread>()
 
     /** Threads currently running guest code for this store, interrupted when it is abandoned. */
@@ -227,11 +227,14 @@ internal class AsyncStore {
 }
 
 /** The current thread of the running guest code, or null when the host is running. */
-internal fun currentThreadOrNull(): GuestThread? = StackSwitching.currentHandler()?.currentThread
+@InternalWasm2KtApi
+fun currentThreadOrNull(): GuestThread? = StackSwitching.currentHandler()?.currentThread
 
-internal fun currentThread(): GuestThread = currentThreadOrNull() ?: trap("This built-in can only be called during a Component Model task")
+@InternalWasm2KtApi
+fun currentThread(): GuestThread = currentThreadOrNull() ?: trap("This built-in can only be called during a Component Model task")
 
-internal fun currentTask(): Task = currentThread().task
+@InternalWasm2KtApi
+fun currentTask(): Task = currentThread().task
 
 // ------------------------------------------------------------------- threads
 
@@ -239,7 +242,8 @@ internal fun currentTask(): Task = currentThread().task
  * The reference's `Thread`. A thread created for a synchronous guest-to-guest call made by a fused
  * adapter ([nested]) has no continuation of its own: it runs on its caller's stack.
  */
-internal class GuestThread(val task: Task, body: (() -> Unit)?) {
+@InternalWasm2KtApi
+class GuestThread(val task: Task, body: (() -> Unit)?) {
     /** The continuation to resume, while the thread is blocked. */
     var cont: Continuation? = body?.let { b -> StackSwitching.contNew(task.inst.store) { b(); null } }
 
@@ -362,13 +366,14 @@ internal class GuestThread(val task: Task, body: (() -> Unit)?) {
  * flat arguments; [onResolve] receives its flat results (as the core function or `task.return`
  * produced them), or null when the task was cancelled.
  */
-internal class Task(
+@InternalWasm2KtApi
+class Task(
     val inst: ComponentInstanceState,
     val ftAsync: Boolean,
     val optsAsync: Boolean,
     val hasCallback: Boolean,
     /** Checks a `task.return`: its result type and options must match the lift's. */
-    val checkReturn: (Trampoline.Async, CanonOptions) -> Boolean,
+    val checkReturn: (AsyncTrampolineSpec, AsyncCanonOptions) -> Boolean,
     val onStart: () -> LongArray,
     val onResolve: (LongArray?) -> Unit,
 ) : BorrowScope {
@@ -478,7 +483,8 @@ internal class Task(
 
 // ------------------------------------------------------------------- waitables
 
-internal object EventCode {
+@InternalWasm2KtApi
+object EventCode {
     const val NONE = 0
     const val SUBTASK = 1
     const val STREAM_READ = 2
@@ -488,9 +494,11 @@ internal object EventCode {
     const val TASK_CANCELLED = 6
 }
 
-internal class Event(val code: Int, val p1: Int, val p2: Int)
+@InternalWasm2KtApi
+class Event(val code: Int, val p1: Int, val p2: Int)
 
-internal open class Waitable {
+@InternalWasm2KtApi
+open class Waitable {
     private var pendingEvent: (() -> Event)? = null
     var wset: WaitableSet? = null
     var hasSyncWaiter = false
@@ -526,7 +534,8 @@ internal open class Waitable {
     }
 }
 
-internal class WaitableSet {
+@InternalWasm2KtApi
+class WaitableSet {
     val elems = ArrayList<Waitable>()
     var numWaiting = 0
 
@@ -558,7 +567,8 @@ internal class WaitableSet {
 }
 
 /** The reference's `Subtask`: a call the guest made, from the caller's side. */
-internal class Subtask : Waitable() {
+@InternalWasm2KtApi
+class Subtask : Waitable() {
     object State {
         const val STARTING = 0
         const val STARTED = 1
@@ -604,18 +614,22 @@ internal class Subtask : Waitable() {
  * Values in flight between two buffers of a stream or future copy: [count] values whose bytes, in
  * the binary format of [wasm2kt.runtime.WitWriter], are [bytes]; handles they contain refer to [objects].
  */
-internal class CopiedValues(val count: Int, val bytes: ByteArray, val objects: List<Any>)
+@InternalWasm2KtApi
+class CopiedValues(val count: Int, val bytes: ByteArray, val objects: List<Any>)
 
-internal interface StreamBuffer {
+@InternalWasm2KtApi
+interface StreamBuffer {
     val progress: Int
     fun remain(): Int
 }
 
-internal interface ReadableBuffer : StreamBuffer {
+@InternalWasm2KtApi
+interface ReadableBuffer : StreamBuffer {
     fun read(n: Int): CopiedValues
 }
 
-internal interface WritableBuffer : StreamBuffer {
+@InternalWasm2KtApi
+interface WritableBuffer : StreamBuffer {
     fun write(vs: CopiedValues)
 }
 
@@ -624,7 +638,8 @@ internal interface WritableBuffer : StreamBuffer {
  * it ([index] in its handles, typed by the plan's stream or future table [table]); null while it is
  * being passed, or when the host holds it.
  */
-internal abstract class End(val isStream: Boolean, val isReadable: Boolean, var table: Int, var owner: ComponentInstanceState?) : Waitable() {
+@InternalWasm2KtApi
+abstract class End(val isStream: Boolean, val isReadable: Boolean, var table: Int, var owner: ComponentInstanceState?) : Waitable() {
     enum class EndState { IDLE, COPYING, CANCELLING_COPY, DONE }
 
     var state = EndState.IDLE
@@ -758,11 +773,13 @@ internal abstract class End(val isStream: Boolean, val isReadable: Boolean, var 
     }
 }
 
-internal object CopyResult {
+@InternalWasm2KtApi
+object CopyResult {
     const val COMPLETED = 0
     const val DROPPED = 1
     const val CANCELLED = 2
 }
 
 /** The value returned by an async built-in that has not completed yet. */
-internal const val BLOCKED = -1
+@InternalWasm2KtApi
+const val BLOCKED = -1

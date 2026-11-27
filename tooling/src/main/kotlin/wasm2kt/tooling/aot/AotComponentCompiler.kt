@@ -16,10 +16,12 @@ class CompiledAotComponent internal constructor(
  * Build-time AOT compiler driver for a decomposed WebAssembly component (`plan.json` + `coreN.wasm`).
  *
  * Emits `.class` files and raw `.data` binary resources without writing `plan.json` or `.meta`
- * resources to the runtime classpath. Async components (`usesAsync == true`) are rejected at build
- * time per ADR-0023 Phase 1.
+ * resources to the runtime classpath. Supports both synchronous (ADR-0023 Phase 1/2) and async /
+ * WASI 0.3 components (Phase 3).
  */
 object AotComponentCompiler {
+    private val RAW_CALL_TRAMPOLINES = setOf("prepare-call", "sync-start-call", "async-start-call")
+
     fun compile(
         decomposedDir: Path,
         classesDir: Path,
@@ -29,7 +31,7 @@ object AotComponentCompiler {
     ): CompiledAotComponent {
         Files.createDirectories(classesDir)
         Files.createDirectories(resourcesDir)
-        return compileModules(decomposedDir) { ir, baseSimpleName ->
+        return compileModules(decomposedDir) { ir, baseSimpleName, rawCallable ->
             AotCoreCompiler.compileToDirectory(
                 ir = ir,
                 classesDir = classesDir,
@@ -37,7 +39,7 @@ object AotComponentCompiler {
                 packageName = packageName,
                 baseSimpleName = baseSimpleName,
                 dataResourcePath = null,
-                options = options,
+                options = if (rawCallable) options.copy(emitRawCallDispatch = true) else options,
             )
         }
     }
@@ -52,25 +54,31 @@ object AotComponentCompiler {
         decomposedDir: Path,
         packageName: String,
         options: AotCompileOptions = AotCompileOptions(),
-    ): CompiledAotComponent = compileModules(decomposedDir) { ir, baseSimpleName ->
+    ): CompiledAotComponent = compileModules(decomposedDir) { ir, baseSimpleName, rawCallable ->
         AotCoreCompiler.compile(
             ir = ir,
             packageName = packageName,
             baseSimpleName = baseSimpleName,
             dataResourcePath = null,
-            options = options,
+            options = if (rawCallable) options.copy(emitRawCallDispatch = true) else options,
         )
     }
 
     private inline fun compileModules(
         decomposedDir: Path,
-        compileModule: (IrModule, String) -> CompiledAotModule,
+        compileModule: (IrModule, String, Boolean) -> CompiledAotModule,
     ): CompiledAotComponent {
         val plan = BuildPlan.fromDirectory(decomposedDir)
-        if (plan.usesAsync) {
-            throw IllegalStateException(
-                "The AOT backend does not support async components yet (usesAsync = true); use the CHICORY backend for async components.",
-            )
+        val rawCallableModules = HashSet<Int>()
+        for (init in plan.initializers) {
+            if (init !is BuildInitializer.Instantiate) continue
+            for (arg in init.args) {
+                val def = arg.def as? BuildCoreDef.Trampoline ?: continue
+                val tr = plan.trampolines[def.index] as? BuildTrampoline.Async ?: continue
+                if (tr.kind in RAW_CALL_TRAMPOLINES) {
+                    rawCallableModules.add(init.module)
+                }
+            }
         }
         val compiledModules = LinkedHashMap<Int, CompiledAotModule>(plan.modules.size)
         val irModules = LinkedHashMap<Int, IrModule>(plan.modules.size)
@@ -78,7 +86,7 @@ object AotComponentCompiler {
             val wasmBytes = Files.readAllBytes(decomposedDir.resolve(mod.file))
             val ir = ChicoryWasmAdapter.convert(wasmBytes, moduleIndex = mod.index)
             irModules[mod.index] = ir
-            compiledModules[mod.index] = compileModule(ir, "Core${mod.index}")
+            compiledModules[mod.index] = compileModule(ir, "Core${mod.index}", mod.index in rawCallableModules)
         }
         return CompiledAotComponent(plan, compiledModules, irModules)
     }

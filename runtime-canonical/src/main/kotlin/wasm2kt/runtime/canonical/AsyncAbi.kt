@@ -1,10 +1,7 @@
 @file:OptIn(InternalWasm2KtApi::class)
 
-package wasm2kt.runtime.chicory
+package wasm2kt.runtime.canonical
 
-import com.dylibso.chicory.runtime.ExportFunction
-import com.dylibso.chicory.runtime.Instance
-import com.dylibso.chicory.runtime.WasmFunctionHandle
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -25,21 +22,6 @@ import wasm2kt.runtime.HostResourceTable
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitWriter
-import wasm2kt.runtime.canonical.AbiContext
-import wasm2kt.runtime.canonical.CanonicalAbi
-import wasm2kt.runtime.canonical.CanonicalMemory
-import wasm2kt.runtime.canonical.HandleTable
-import wasm2kt.runtime.canonical.HostValueException
-import wasm2kt.runtime.canonical.InternalWasm2KtApi
-import wasm2kt.runtime.canonical.Lifter
-import wasm2kt.runtime.canonical.Lowerer
-import wasm2kt.runtime.canonical.ResourceHandle
-import wasm2kt.runtime.canonical.StringEncoding
-import wasm2kt.runtime.canonical.UnsupportedWitTypeException
-import wasm2kt.runtime.canonical.WitType
-import wasm2kt.runtime.canonical.checkRange
-import wasm2kt.runtime.canonical.trap
-import wasm2kt.runtime.canonical.unsigned
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.LinkedBlockingQueue
@@ -48,12 +30,12 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resumeWithException
 
 /**
- * The Component Model async ABI for one [ChicoryComponentInstance] (#16, ADR-0018): host calls into a
- * component that uses it run as tasks on [store], and the async built-ins and the fused adapters'
- * async intrinsics are implemented here, following the reference definitions (see [Concurrency.kt]).
+ * The Component Model async ABI (#16, ADR-0018, ADR-0023 Phase 3): host calls into a component
+ * that uses it run as tasks on [store], and the async built-ins and fused adapters' async
+ * intrinsics are implemented here symmetrically for Chicory and AOT via [AsyncBackendHost].
  */
-internal class AsyncAbi(private val c: ChicoryComponentInstance) {
-    private val plan get() = c.plan
+@InternalWasm2KtApi
+class AsyncAbi(private val host: AsyncBackendHost) {
     private val errorMessageTuple = WitType.Tuple(listOf(WitType.Str))
 
     val store = AsyncStore()
@@ -79,7 +61,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         callee: (LongArray) -> LongArray,
         callback: ((LongArray) -> LongArray)?,
         postReturn: ((LongArray) -> Unit)?,
-        checkReturn: (Trampoline.Async, CanonOptions) -> Boolean,
+        checkReturn: (AsyncTrampolineSpec, AsyncCanonOptions) -> Boolean,
         onStart: () -> LongArray,
         onResolve: (LongArray?) -> Unit,
         createdTask: (Task) -> Unit = {},
@@ -130,7 +112,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val flatResults = callee(flatArgs)
             task.return_(flatResults)
             store.onSwitch(thread)
-            postReturn?.let { pr -> c.withoutLeaving { pr(flatResults) } }
+            postReturn?.let { pr -> host.withoutLeaving { pr(flatResults) } }
             task.exitImplicitThread()
             return
         }
@@ -217,7 +199,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             synchronized(this) {
                 queue.add(block)
                 if (thread == null) {
-                    thread = Thread(null, ::loop, "wasm2kt-chicory-session", 8L shl 20).apply {
+                    thread = Thread(null, ::loop, "wasm2kt-session", 8L shl 20).apply {
                         isDaemon = true
                         start()
                     }
@@ -297,7 +279,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val previous = HostResourceTable.currentOrNull()
         val previousBackend = ComponentBackend.currentOrNull()
         hostResources?.let { HostResourceTable.setCurrent(it) }
-        ComponentBackend.setCurrent(c)
+        ComponentBackend.setCurrent(host.backend)
         try {
             while (true) {
                 completeHostReads()
@@ -307,7 +289,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     pumpHostWriters()
                     return
                 }
-                if (c.guest { store.tick() }) {
+                if (host.guest { store.tick() }) {
                     // Let queued work (a resumed call, a host import that finished) have its turn.
                     if (loop.hasQueued()) {
                         post { drain() }
@@ -333,7 +315,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             }
             if ((pendingCalls.isNotEmpty() || hostReads.isNotEmpty()) && hostWork == 0 && !loop.hasQueued() && !hostCanRead) {
                 val waiting = pendingCalls.joinToString { "'${it.name}'" }.ifEmpty { "a stream or future the host reads" }
-                c.poison("deadlock detected: $waiting cannot finish because every task is waiting")
+                host.poison("deadlock detected: $waiting cannot finish because every task is waiting")
             }
         } catch (e: Throwable) {
             failAll(if (e is HostValueException) e.cause!! else e)
@@ -387,15 +369,16 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * A host call of an export of a component that uses the async ABI (ADR-0019): suspends until the
      * task returns. Cancelling the coroutine requests the task's cancellation.
      */
-    suspend fun invokeSuspending(export: PlanExport, functionName: String, args: WitReader): WitReader = withContext(loop + c.asContextElement()) {
-        c.checkUsable()
+    suspend fun invokeSuspending(export: AsyncExportSpec, args: WitReader): WitReader = withContext(loop + host.asContextElement()) {
+        host.checkUsable()
         if (hostResources == null) hostResources = HostResourceTable.currentOrNull()
+        val functionName = export.qualifiedName
         suspendCancellableCoroutine { cont ->
             val call = PendingCall(functionName, cont)
             pendingCalls += call
             val task = try {
-                c.guest {
-                    startExport(export, functionName, args) { result ->
+                host.guest {
+                    startExport(export, args) { result ->
                         if (pendingCalls.remove(call)) cont.resumeWith(result)
                     }
                 }
@@ -408,7 +391,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     if (call in pendingCalls && !call.cancelled) {
                         call.cancelled = true
                         try {
-                            c.guest { if (task.state != Task.State.RESOLVED) task.requestCancellation() }
+                            host.guest { if (task.state != Task.State.RESOLVED) task.requestCancellation() }
                         } catch (e: Throwable) {
                             failAll(e)
                         }
@@ -421,28 +404,30 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     /** A blocking host call ([wasm2kt.runtime.ComponentBackend.invoke]): [invokeSuspending] on this thread. */
-    fun invoke(export: PlanExport, functionName: String, args: WitReader): WitReader {
+    fun invoke(export: AsyncExportSpec, args: WitReader): WitReader {
+        val functionName = export.qualifiedName
         // A synchronous host import calling back into the component (the spec's may_enter).
-        if (StackSwitching.currentHandler() != null) c.poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
+        if (StackSwitching.currentHandler() != null) host.poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
         check(!onLoopThread()) { "'$functionName' was called synchronously from a suspending host import; call it from the coroutine instead" }
-        return runBlocking { invokeSuspending(export, functionName, args) }
+        return runBlocking { invokeSuspending(export, args) }
     }
 
     /** Starts the task of a host call; [done] receives its results once it returns. */
-    private fun startExport(export: PlanExport, functionName: String, args: WitReader, done: (Result<WitReader>) -> Unit): Task {
+    private fun startExport(export: AsyncExportSpec, args: WitReader, done: (Result<WitReader>) -> Unit): Task {
+        val functionName = export.qualifiedName
         val type = export.type
-        val opts = plan.options.getValue(export.options)
+        val opts = host.canonOptions(export.optionsIndex)
         val inst = state(opts.instance)
         lateinit var task: Task
-        val cx = c.context(opts, ChicoryComponentInstance.Direction.HOST_TO_GUEST) { task }
+        val cx = host.context(export.optionsIndex, AbiBoundaryDirection.HOST_TO_GUEST) { task }
         val paramTypes = type.paramTypes
-        val flatParamCount = c.mapChicoryUnsupported { type.flatParamCount }
+        val flatParamCount = host.mapUnsupported { type.flatParamCount }
         val onStart = {
             // Lowering the host's arguments: errors in the values are the host's, not traps (ADR-0007).
             val coreArgs: LongArray
             try {
                 val lowerer = Lowerer(cx, args)
-                coreArgs = c.mapChicoryUnsupported {
+                coreArgs = host.mapUnsupported {
                     if (flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
                         longArrayOf(lowerer.storeTuple(type.paramTuple).toLong())
                     } else if (flatParamCount == 0) {
@@ -484,7 +469,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 val results = writerFor(type.results)
                 val lifter = Lifter(cx, results)
                 val limit = if (opts.async) CanonicalAbi.MAX_FLAT_PARAMS else CanonicalAbi.MAX_FLAT_RESULTS
-                c.mapChicoryUnsupported {
+                host.mapUnsupported {
                     if (type.flatResultCount > limit) {
                         lifter.loadTuple(flat[0].toInt(), type.resultTuple)
                     } else {
@@ -497,9 +482,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
         return canonLift(
             inst, type.async, opts.async,
-            callee = c.coreFunction(export.func).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } },
-            callback = opts.callback?.let { cb -> c.callbacks.getValue(cb).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } } },
-            postReturn = opts.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r) } },
+            callee = export.callee,
+            callback = opts.callback,
+            postReturn = opts.postReturn,
             checkReturn = { tr, trOpts -> tr.results == type.results && sameLiftOptions(trOpts, opts) },
             onStart = onStart,
             onResolve = onResolve,
@@ -508,7 +493,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     /** As in Wasmtime: a `task.return` that needs no memory may leave it out. */
-    private fun sameLiftOptions(a: CanonOptions, b: CanonOptions) = a.stringEncoding == b.stringEncoding && (a.memory == null || a.memory == b.memory)
+    private fun sameLiftOptions(a: AsyncCanonOptions, b: AsyncCanonOptions) =
+        a.stringEncoding == b.stringEncoding && (a.memoryIndex == null || a.memoryIndex == b.memoryIndex)
 
     // ------------------------------------------------------------------- host imports
 
@@ -519,7 +505,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      */
     private fun launchHostImport(fn: AsyncHostFunction, args: WitReader, results: WitWriter, onDone: (Throwable?) -> Unit): Job {
         val resources = HostResourceTable.currentOrNull()
-        val context = c.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
+        val context = host.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
         hostWork++
         val job = scope.launch(context) { fn.call(args, results) }
         job.invokeOnCompletion { cause ->
@@ -535,13 +521,13 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     private fun writerFor(types: List<*>): WitWriter =
         if (types.isEmpty()) WitWriter(0) else WitWriter()
 
-    /** The guest's arguments for a call of host import [t], lifted into the binary format. */
-    private fun liftImportArgs(t: Trampoline.LowerImport, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
-        val args = writerFor(t.type.params)
+    /** The guest's arguments for a call of a host import, lifted into the binary format. */
+    private fun liftImportArgs(type: FuncType, cx: AbiContext, coreArgs: LongArray, maxFlat: Int): WitWriter {
+        val args = writerFor(type.params)
         val lifter = Lifter(cx, args)
-        val paramTypes = t.type.paramTypes
-        if (t.type.flatParamCount > maxFlat) {
-            lifter.loadTuple(coreArgs[0].toInt(), t.type.paramTuple)
+        val paramTypes = type.paramTypes
+        if (type.flatParamCount > maxFlat) {
+            lifter.loadTuple(coreArgs[0].toInt(), type.paramTuple)
         } else {
             val reader = Lifter.FlatReader(coreArgs)
             paramTypes.forEach { lifter.liftFlat(it, reader) }
@@ -563,18 +549,17 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * A guest calling a host import with `async` lowering. A suspending host function runs in a
      * coroutine while the guest goes on; a blocking one completes the call at once.
      */
-    fun callHostAsync(t: Trampoline.LowerImport, coreArgs: LongArray): LongArray {
-        val opts = plan.options.getValue(t.options)
-        val cx = c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST)
-        val key = plan.imports.getValue(t.import).dispatchKey
-        val args = liftImportArgs(t, cx, coreArgs, CanonicalAbi.MAX_FLAT_ASYNC_PARAMS)
-        val retPtr = if (t.type.results.isNotEmpty()) coreArgs[coreArgs.size - 1].toInt() else null
-        val fn = if (t.type.async) c.asyncHostImport(t.import) else null
+    fun callHostAsync(importIndex: Int, type: FuncType, optionsIndex: Int, coreArgs: LongArray): LongArray {
+        val cx = host.context(optionsIndex, AbiBoundaryDirection.GUEST_TO_HOST)
+        val key = host.importDispatchKey(importIndex)
+        val args = liftImportArgs(type, cx, coreArgs, CanonicalAbi.MAX_FLAT_ASYNC_PARAMS)
+        val retPtr = if (type.results.isNotEmpty()) coreArgs[coreArgs.size - 1].toInt() else null
+        val fn = if (type.async) host.asyncHostImport(importIndex) else null
         if (fn == null) {
-            val results = writerFor(t.type.results)
-            c.bind { c.guard.hostImport { c.hostImport(t.import).call(args.toReader(), results) } }
+            val results = writerFor(type.results)
+            host.bind { host.guard.hostImport { host.hostImport(importIndex).call(args.toReader(), results) } }
             val reader = results.toReader()
-            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
+            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(type.resultTuple, retPtr)
             checkImportResults(reader, key)
             return longArrayOf(Subtask.State.RETURNED.toLong())
         }
@@ -582,19 +567,19 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         val subtask = Subtask()
         subtask.state = Subtask.State.STARTED
         val subtaski = caller.task.inst.handles.add(subtask)
-        val results = writerFor(t.type.results)
+        val results = writerFor(type.results)
         val job = launchHostImport(fn, args.toReader(), results) { cause ->
             if (subtask.resolved()) return@launchHostImport
             when {
                 cause == null -> {
                     try {
-                        c.guest {
+                        host.guest {
                             val reader = results.toReader()
-                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(t.type.resultTuple, retPtr)
+                            if (retPtr != null) Lowerer(cx, reader).storeTupleAt(type.resultTuple, retPtr)
                             checkImportResults(reader, key)
                         }
                     } catch (e: Throwable) {
-                        failAll(c.asTrap(e))
+                        failAll(host.asTrap(e))
                         return@launchHostImport
                     }
                     subtask.resolve(Subtask.State.RETURNED, LongArray(0))
@@ -602,7 +587,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 cause is CancellationException && subtask.cancellationRequested ->
                     subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, LongArray(0))
                 else -> {
-                    failAll(runCatching { c.guest { importFailed(key, cause) } }.exceptionOrNull()!!)
+                    failAll(runCatching { host.guest { importFailed(key, cause) } }.exceptionOrNull()!!)
                     return@launchHostImport
                 }
             }
@@ -618,15 +603,16 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     /**
      * A guest calling a host import synchronously. For an `async func` with a suspending host
      * function, the guest's thread waits (other tasks run meanwhile); a task that may not block runs
-     * the host function to completion on its thread instead. Returns null when [fn] does not apply.
+     * the host function to completion on its thread instead. Returns false when suspending dispatch
+     * does not apply.
      */
-    fun callHostSync(t: Trampoline.LowerImport, invoke: (HostFunction) -> Unit): Boolean {
-        if (!t.type.async) return false
-        val fn = c.asyncHostImport(t.import) ?: return false
+    fun callHostSync(importIndex: Int, type: FuncType, invoke: (HostFunction) -> Unit): Boolean {
+        if (!type.async) return false
+        val fn = host.asyncHostImport(importIndex) ?: return false
         val thread = currentThreadOrNull()
         if (thread == null || !thread.task.mayBlock()) {
             invoke(HostFunction { a, r ->
-                val context = c.asContextElement() + (HostResourceTable.currentOrNull()?.asContextElement() ?: EmptyCoroutineContext)
+                val context = host.asContextElement() + (HostResourceTable.currentOrNull()?.asContextElement() ?: EmptyCoroutineContext)
                 runBlocking(context) { fn.call(a, r) }
             })
             return true
@@ -640,7 +626,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     finished = true
                 }
                 thread.waitUntil { finished }
-                outcome?.let { importFailed(plan.imports.getValue(t.import).dispatchKey, it) }
+                outcome?.let { importFailed(host.importDispatchKey(importIndex), it) }
             },
         )
         return true
@@ -648,19 +634,10 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     // ------------------------------------------------------------------- intrinsics
 
-    /** `context-get-i32-0` and friends: the current thread's context slots. */
-    fun intrinsic(name: String): WasmFunctionHandle {
-        val slot = name.last() - '0'
-        return when {
-            name.startsWith("context-get") -> WasmFunctionHandle { _, _ ->
-                longArrayOf(unsigned(currentThreadOrNull()?.storage?.get(slot) ?: 0))
-            }
-            name.startsWith("context-set") -> WasmFunctionHandle { _, args ->
-                currentThreadOrNull()?.storage?.set(slot, args[0].toInt())
-                null
-            }
-            else -> WasmFunctionHandle { _, _ -> throw UnsupportedOperationException("Intrinsic '$name' is not supported by the Chicory backend") }
-        }
+    fun contextGet(slot: Int): Int = currentThreadOrNull()?.storage?.get(slot) ?: 0
+
+    fun contextSet(slot: Int, value: Int) {
+        currentThreadOrNull()?.storage?.set(slot, value)
     }
 
     /**
@@ -676,47 +653,47 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
     }
 
-    private fun checkMayLeave(what: String) = c.checkMayLeave(what)
+    private fun checkMayLeave(what: String) = host.checkMayLeave(what)
 
     private fun memoryOf(options: Int?): CanonicalMemory {
-        val opts = options?.let { plan.options.getValue(it) } ?: throw IllegalStateException("This built-in needs canonical options")
-        return opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This built-in needs a memory")
+        val opts = options?.let { host.canonOptions(it) } ?: throw IllegalStateException("This built-in needs canonical options")
+        return opts.memory() ?: throw IllegalStateException("This built-in needs a memory")
     }
 
-    fun trampoline(t: Trampoline.Async): WasmFunctionHandle = when (t.kind) {
-        "backpressure-inc" -> WasmFunctionHandle { _, _ ->
+    fun invokeTrampoline(t: AsyncTrampolineSpec, instance: AsyncCoreInstance?, args: LongArray): LongArray? = when (t.kind) {
+        "backpressure-inc" -> {
             val inst = state(t.instance!!)
             if (inst.backpressure == 0xFFFF) trap("backpressure counter overflow")
             inst.backpressure++
             null
         }
-        "backpressure-dec" -> WasmFunctionHandle { _, _ ->
+        "backpressure-dec" -> {
             val inst = state(t.instance!!)
             if (inst.backpressure == 0) trap("backpressure counter underflow")
             inst.backpressure--
             null
         }
-        "task-return" -> WasmFunctionHandle { _, args ->
+        "task-return" -> {
             val task = currentTask()
             checkMayLeave("task.return")
             if (!task.optsAsync) trap("task.return can only be called by an async-lifted export")
-            if (!task.checkReturn(t, plan.options.getValue(t.options!!))) trap("invalid task.return signature and/or options for the current task")
+            if (!task.checkReturn(t, host.canonOptions(t.options!!))) trap("invalid task.return signature and/or options for the current task")
             task.return_(args)
             store.onSwitch(currentThreadOrNull())
             null
         }
-        "task-cancel" -> WasmFunctionHandle { _, _ ->
+        "task-cancel" -> {
             val task = currentTask()
             checkMayLeave("task.cancel")
             if (!task.optsAsync) trap("task.cancel can only be called by an async-lifted export")
             task.cancel()
             null
         }
-        "waitable-set-new" -> WasmFunctionHandle { _, _ ->
+        "waitable-set-new" -> {
             checkMayLeave("waitable-set.new")
             longArrayOf(state(t.instance!!).handles.add(WaitableSet()).toLong())
         }
-        "waitable-set-wait" -> WasmFunctionHandle { _, args ->
+        "waitable-set-wait" -> {
             checkMayLeave("waitable-set.wait")
             val inst = state(t.instance!!)
             val wset = inst.handles.get(args[0].toInt()) as? WaitableSet ?: trap("Handle is not a waitable set")
@@ -727,7 +704,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             thread.cancellable = false
             unpackEvent(memoryOf(t.options), args[1].toInt(), event)
         }
-        "waitable-set-poll" -> WasmFunctionHandle { _, args ->
+        "waitable-set-poll" -> {
             checkMayLeave("waitable-set.poll")
             val inst = state(t.instance!!)
             val wset = inst.handles.get(args[0].toInt()) as? WaitableSet ?: trap("Handle is not a waitable set")
@@ -735,7 +712,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val event = if (t.cancellable && task.deliverPendingCancel()) Event(EventCode.TASK_CANCELLED, 0, 0) else wset.poll()
             unpackEvent(memoryOf(t.options), args[1].toInt(), event)
         }
-        "waitable-set-drop" -> WasmFunctionHandle { _, args ->
+        "waitable-set-drop" -> {
             checkMayLeave("waitable-set.drop")
             val inst = state(t.instance!!)
             val wset = inst.handles.getOrNull(args[0].toInt()) as? WaitableSet ?: trap("Handle is not a waitable set")
@@ -743,7 +720,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             inst.handles.remove(args[0].toInt())
             null
         }
-        "waitable-join" -> WasmFunctionHandle { _, args ->
+        "waitable-join" -> {
             checkMayLeave("waitable.join")
             val inst = state(t.instance!!)
             val w = inst.handles.get(args[0].toInt()) as? Waitable ?: trap("Handle is not a waitable")
@@ -756,7 +733,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             }
             null
         }
-        "subtask-drop" -> WasmFunctionHandle { _, args ->
+        "subtask-drop" -> {
             checkMayLeave("subtask.drop")
             val inst = state(t.instance!!)
             val s = inst.handles.get(args[0].toInt()) as? Subtask ?: trap("Handle is not a subtask")
@@ -764,8 +741,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             inst.handles.remove(args[0].toInt())
             null
         }
-        "subtask-cancel" -> WasmFunctionHandle { _, args -> longArrayOf(subtaskCancel(t, args[0].toInt()).toLong()) }
-        "stream-new", "future-new" -> WasmFunctionHandle { _, _ ->
+        "subtask-cancel" -> longArrayOf(subtaskCancel(t, args[0].toInt()).toLong())
+        "stream-new", "future-new" -> {
             checkMayLeave(t.kind.replace('-', '.'))
             val stream = t.kind == "stream-new"
             val table = t.table!!
@@ -775,69 +752,67 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             w.index = inst.handles.add(w)
             longArrayOf(unsigned(r.index!!) or (unsigned(w.index!!) shl 32))
         }
-        "stream-read", "stream-write", "future-read", "future-write" -> WasmFunctionHandle { _, args ->
+        "stream-read", "stream-write", "future-read", "future-write" -> {
             val stream = t.kind.startsWith("stream")
             val read = t.kind.endsWith("read")
             longArrayOf(unsigned(copy(t, stream, read, args[0].toInt(), args[1].toInt(), if (stream) args[2].toInt() else 1)))
         }
-        "stream-cancel-read", "stream-cancel-write", "future-cancel-read", "future-cancel-write" -> WasmFunctionHandle { _, args ->
+        "stream-cancel-read", "stream-cancel-write", "future-cancel-read", "future-cancel-write" -> {
             longArrayOf(unsigned(cancelCopy(t, t.kind.startsWith("stream"), t.kind.endsWith("read"), args[0].toInt())))
         }
-        "stream-drop-readable", "stream-drop-writable", "future-drop-readable", "future-drop-writable" -> WasmFunctionHandle { _, args ->
+        "stream-drop-readable", "stream-drop-writable", "future-drop-readable", "future-drop-writable" -> {
             dropEnd(t, t.kind.startsWith("stream"), t.kind.endsWith("readable"), args[0].toInt())
             null
         }
-        "error-context-new" -> WasmFunctionHandle { _, args ->
+        "error-context-new" -> {
             checkMayLeave("error-context.new")
-            val opts = plan.options.getValue(t.options!!)
             val w = WitWriter()
-            Lifter(c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST), w)
+            Lifter(host.context(t.options!!, AbiBoundaryDirection.GUEST_TO_HOST), w)
                 .liftFlat(WitType.Str, Lifter.FlatReader(longArrayOf(args[0], args[1])))
             val message = w.toReader().string()
             longArrayOf(state(t.instance!!).handles.add(ErrorContext(message)).toLong())
         }
-        "error-context-debug-message" -> WasmFunctionHandle { _, args ->
+        "error-context-debug-message" -> {
             checkMayLeave("error-context.debug-message")
             val e = state(t.instance!!).handles.get(args[0].toInt()) as? ErrorContext ?: trap("Handle is not an error context")
-            val opts = plan.options.getValue(t.options!!)
             val w = WitWriter().apply { string(e.debugMessage) }
-            Lowerer(c.context(opts, ChicoryComponentInstance.Direction.GUEST_TO_HOST), w.toReader())
+            Lowerer(host.context(t.options!!, AbiBoundaryDirection.GUEST_TO_HOST), w.toReader())
                 .storeTupleAt(errorMessageTuple, args[1].toInt())
             null
         }
-        "error-context-drop" -> WasmFunctionHandle { _, args ->
+        "error-context-drop" -> {
             checkMayLeave("error-context.drop")
             val inst = state(t.instance!!)
             if (inst.handles.getOrNull(args[0].toInt()) !is ErrorContext) trap("Handle is not an error context")
             inst.handles.remove(args[0].toInt())
             null
         }
-        "thread-index" -> WasmFunctionHandle { _, _ ->
+        "thread-index" -> {
             checkMayLeave("thread.index")
             longArrayOf((currentThread().index ?: 0).toLong())
         }
-        "thread-new-indirect" -> WasmFunctionHandle { _, args -> longArrayOf(threadNewIndirect(t, args[0].toInt(), args[1])) }
-        "thread-resume-later" -> WasmFunctionHandle { _, args ->
+        "thread-new-indirect" -> longArrayOf(threadNewIndirect(t, args[0].toInt(), args[1]))
+        "thread-resume-later" -> {
             checkMayLeave("thread.resume-later")
             val other = otherThread(args[0].toInt())
             if (!other.suspended()) trap("thread.resume-later: the thread is not suspended")
             other.resumeLater()
             null
         }
-        "thread-yield" -> WasmFunctionHandle { _, _ ->
+        "thread-yield" -> {
             checkMayLeave("thread.yield")
             val thread = currentThread()
             suspension(t) { thread.yield() }
             longArrayOf(cancelled(t))
         }
-        "thread-suspend" -> WasmFunctionHandle { _, _ ->
+        "thread-suspend" -> {
             checkMayLeave("thread.suspend")
             val thread = currentThread()
             checkBlocking()
             suspension(t) { thread.suspend() }
             longArrayOf(cancelled(t))
         }
-        "thread-suspend-then-resume", "thread-yield-then-resume" -> WasmFunctionHandle { _, args ->
+        "thread-suspend-then-resume", "thread-yield-then-resume" -> {
             checkMayLeave(t.kind.replace("thread-", "thread."))
             val thread = currentThread()
             val other = otherThread(args[0].toInt())
@@ -851,7 +826,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             }
             longArrayOf(cancelled(t))
         }
-        "thread-suspend-then-promote", "thread-yield-then-promote" -> WasmFunctionHandle { _, args ->
+        "thread-suspend-then-promote", "thread-yield-then-promote" -> {
             checkMayLeave(t.kind.replace("thread-", "thread."))
             val thread = currentThread()
             if (args[0].toInt() == thread.index) trap("A thread cannot switch to itself")
@@ -864,42 +839,38 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             }
             longArrayOf(cancelled(t))
         }
-        "prepare-call" -> WasmFunctionHandle { instance, args ->
-            prepareCall(t, instance, args)
+        "prepare-call" -> {
+            prepareCall(t, args)
             null
         }
-        "sync-start-call" -> WasmFunctionHandle { instance, args -> startCall(t, instance, args[0], args[1].toInt(), 0, 0, sync = true) }
-        "async-start-call" -> WasmFunctionHandle { instance, args ->
-            startCall(t, instance, args[0], args[1].toInt(), args[2].toInt(), args[3].toInt(), sync = false)
-        }
-        "enter-sync-call" -> WasmFunctionHandle { _, args ->
+        "sync-start-call" -> startCall(t, instance!!, args[0], args[1].toInt(), 0, 0, sync = true)
+        "async-start-call" -> startCall(t, instance!!, args[0], args[1].toInt(), args[2].toInt(), args[3].toInt(), sync = false)
+        "enter-sync-call" -> {
             enterSyncCall(args[1].toInt() != 0, args[2].toInt())
             null
         }
-        "exit-sync-call" -> WasmFunctionHandle { _, _ ->
+        "exit-sync-call" -> {
             exitSyncCall()
             null
         }
-        "stream-transfer", "future-transfer" -> WasmFunctionHandle { _, args ->
+        "stream-transfer", "future-transfer" -> {
             val stream = t.kind == "stream-transfer"
             val src = args[1].toInt()
             val dst = args[2].toInt()
             val end = liftAsyncValue(state(transmitTable(src, stream).instance), src, args[0].toInt(), stream)
             longArrayOf(lowerAsyncValue(end, dst, stream).toLong())
         }
-        "error-context-transfer" -> WasmFunctionHandle { _, args ->
+        "error-context-transfer" -> {
             val e = state(errorContextInstance(args[1].toInt())).handles.get(args[0].toInt()) as? ErrorContext
                 ?: trap("Handle is not an error context")
             longArrayOf(state(errorContextInstance(args[2].toInt())).handles.add(e).toLong())
         }
-        "resource-transfer-own" -> WasmFunctionHandle { _, args ->
+        "resource-transfer-own" -> {
             val rep = liftOwn(args[1].toInt(), args[0].toInt())
-            longArrayOf(c.table(args[2].toInt()).insert(rep, own = true).toLong())
+            longArrayOf(host.resourceTable(args[2].toInt()).insert(rep, own = true).toLong())
         }
-        "resource-transfer-borrow" -> WasmFunctionHandle { _, args -> longArrayOf(transferBorrow(args[0].toInt(), args[1].toInt(), args[2].toInt()).toLong()) }
-        else -> WasmFunctionHandle { _, _ ->
-            throw UnsupportedOperationException("Component intrinsic not supported by the Chicory backend: ${t.kind}")
-        }
+        "resource-transfer-borrow" -> longArrayOf(transferBorrow(args[0].toInt(), args[1].toInt(), args[2].toInt()).toLong())
+        else -> throw UnsupportedAsyncIntrinsicException(t.kind)
     }
 
     private fun unpackEvent(memory: CanonicalMemory, ptr: Int, e: Event): LongArray {
@@ -915,7 +886,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     /** Runs a suspension; a `cancellable` one lets a cancellation request resume the thread. */
-    private inline fun suspension(t: Trampoline.Async, block: () -> Unit) {
+    private inline fun suspension(t: AsyncTrampolineSpec, block: () -> Unit) {
         val thread = currentThread()
         thread.cancellable = t.cancellable
         try {
@@ -926,22 +897,17 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     /** The result of a cancellable suspension: 1 when a pending cancellation was delivered. */
-    private fun cancelled(t: Trampoline.Async): Long =
+    private fun cancelled(t: AsyncTrampolineSpec): Long =
         if (t.cancellable && currentTask().deliverPendingCancel()) 1 else 0
 
-    private fun threadNewIndirect(t: Trampoline.Async, fi: Int, closure: Long): Long {
+    private fun threadNewIndirect(t: AsyncTrampolineSpec, fi: Int, closure: Long): Long {
         val task = currentTask()
         checkMayLeave("thread.new-indirect")
-        val table = c.tables[t.table!!] ?: throw IllegalStateException("thread.new-indirect: unknown table ${t.table}")
-        if (fi < 0 || fi >= table.size()) trap("thread.new-indirect: table index $fi out of bounds")
-        val funcIdx = table.ref(fi)
-        if (funcIdx < 0) trap("thread.new-indirect: uninitialized table element $fi")
-        val owner = table.instance(fi)
-        val type = owner.type(owner.functionType(funcIdx))
-        if (type.params().size != 1 || type.returns().isNotEmpty()) trap("thread.new-indirect: the start function has the wrong type")
+        val table = host.table(t.table!!) ?: throw IllegalStateException("thread.new-indirect: unknown table ${t.table}")
+        val startFn = table.newThreadStart(fi, closure)
         lateinit var newThread: GuestThread
         newThread = GuestThread(task) {
-            owner.getMachine().call(funcIdx, longArrayOf(closure))
+            startFn()
             task.unregisterThread(newThread)
         }
         task.registerThread(newThread)
@@ -950,7 +916,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     // ------------------------------------------------------------------- subtasks
 
-    private fun subtaskCancel(t: Trampoline.Async, i: Int): Int {
+    private fun subtaskCancel(t: AsyncTrampolineSpec, i: Int): Int {
         val thread = currentThread()
         checkMayLeave("subtask.cancel")
         val subtask = thread.task.inst.handles.get(i) as? Subtask ?: trap("Handle is not a subtask")
@@ -987,7 +953,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     private val prepared = HashMap<GuestThread, PreparedCall>()
 
-    private fun prepareCall(t: Trampoline.Async, instance: Instance, args: LongArray) {
+    private fun prepareCall(t: AsyncTrampolineSpec, args: LongArray) {
         val thread = currentThread()
         prepared[thread] = PreparedCall(
             start = args[0], return_ = args[1], calleeInstance = args[3].toInt(), taskReturnType = args[4].toInt(),
@@ -1001,7 +967,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * caller lowered it `async` or whose callee lifted it `async`): the reference's `canon_lower` on
      * the caller's side and `canon_lift` on the callee's.
      */
-    private fun startCall(t: Trampoline.Async, instance: Instance, callee: Long, paramCount: Int, resultCount: Int, flags: Int, sync: Boolean): LongArray {
+    private fun startCall(t: AsyncTrampolineSpec, instance: AsyncCoreInstance, callee: Long, paramCount: Int, resultCount: Int, flags: Int, sync: Boolean): LongArray {
         val caller = currentThread()
         val p = prepared.remove(caller) ?: throw IllegalStateException("start-call without prepare-call")
         val subtask = Subtask()
@@ -1045,15 +1011,15 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
         val calleeInst = state(p.calleeInstance)
         val calleeAsyncLift = sync || (flags and START_FLAG_ASYNC_CALLEE) != 0
-        val callback = t.callback?.let { cb -> c.callbacks.getValue(cb).let { f -> { a: LongArray -> f.apply(*a) ?: LongArray(0) } } }
-        val postReturn = t.postReturn?.let { pr -> { r: LongArray -> c.postReturns.getValue(pr).apply(*r); Unit } }
+        val callback = t.callback?.let { host.callback(it) }
+        val postReturn = t.postReturn?.let { host.postReturn(it) }
         val task = canonLift(
             calleeInst, p.calleeAsync, if (sync) true else calleeAsyncLift,
             callee = { a -> callRef(instance, callee, a) },
             callback = callback,
             postReturn = postReturn,
             checkReturn = { tr, opts ->
-                tr.resultsIndex == p.taskReturnType && (opts.memory == null || opts.memory == p.memory) && encodingCode(opts.stringEncoding) == p.stringEncoding
+                tr.resultsIndex == p.taskReturnType && (opts.memoryIndex == null || opts.memoryIndex == p.memory) && encodingCode(opts.stringEncoding) == p.stringEncoding
             },
             onStart = onStart,
             onResolve = onResolve,
@@ -1081,8 +1047,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return longArrayOf((subtask.state or (subtaski shl 4)).toLong())
     }
 
-    private fun callRef(instance: Instance, ref: Long, args: LongArray): LongArray =
-        instance.getMachine().call(ref.toInt(), args) ?: LongArray(0)
+    private fun callRef(instance: AsyncCoreInstance, ref: Long, args: LongArray): LongArray =
+        instance.callRef(ref.toInt(), args)
 
     private fun encodingCode(e: StringEncoding): Int = when (e) {
         StringEncoding.UTF8 -> 0
@@ -1145,9 +1111,9 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         }
     }
 
-    internal fun syncCallDepth(): Int = syncCalls.get().size
+    fun syncCallDepth(): Int = syncCalls.get().size
 
-    internal fun cleanupSyncCalls(baseDepth: Int) {
+    fun cleanupSyncCalls(baseDepth: Int) {
         val frames = syncCalls.get()
         while (frames.size > baseDepth) {
             finishSyncCall(frames.removeAt(frames.size - 1), StackSwitching.currentHandler())
@@ -1156,8 +1122,8 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     // ------------------------------------------------------------------- resources between instances
 
-    private fun liftOwn(table: Int, handle: Int): Int {
-        val t = c.table(table)
+    fun liftOwn(table: Int, handle: Int): Int {
+        val t = host.resourceTable(table)
         val h = t.slotOrNull(handle) ?: trap("Unknown resource handle $handle")
         if (!h.own) trap("Cannot pass borrowed resource handle $handle as own")
         if (h.numLends != 0) trap("Cannot pass resource handle $handle as own while it is lent")
@@ -1166,26 +1132,25 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
     }
 
     private fun transferBorrow(handle: Int, srcTable: Int, dstTable: Int): Int {
-        val h = c.table(srcTable).slotOrNull(handle) ?: trap("Unknown resource handle $handle")
+        val h = host.resourceTable(srcTable).slotOrNull(handle) ?: trap("Unknown resource handle $handle")
         val scope = currentThreadOrNull()?.task
         if (h.own && scope != null) {
             h.numLends++
             scope.lenders.add(h)
         }
-        val dst = plan.resourceTables[dstTable]
+        val dst = host.resourceTableInfo(dstTable)
         // Borrowing into the instance that defines the resource passes its representation.
-        val definedIn = plan.initializers.filterIsInstance<Initializer.Resource>().firstOrNull { it.resource == dst?.resource }?.instance
-        if (dst != null && !dst.imported && definedIn == dst.instance) return h.rep
+        if (dst != null && !dst.imported && dst.definedInInstance >= 0 && dst.definedInInstance == dst.instance) return h.rep
         scope?.let { it.numBorrows++ }
-        return c.table(dstTable).insert(h.rep, own = false, scope = scope)
+        return host.resourceTable(dstTable).insert(h.rep, own = false, scope = scope)
     }
 
     // ------------------------------------------------------------------- streams and futures
 
-    private fun transmitTable(table: Int, stream: Boolean): TransmitTableInfo =
-        (if (stream) plan.streamTables[table] else plan.futureTables[table]) ?: throw IllegalStateException("Unknown ${if (stream) "stream" else "future"} table $table")
+    private fun transmitTable(table: Int, stream: Boolean): AsyncTransmitTableInfo =
+        host.transmitTableInfo(table, stream)
 
-    private fun errorContextInstance(table: Int): Int = plan.errorContextTables[table] ?: 0
+    private fun errorContextInstance(table: Int): Int = host.errorContextInstance(table)
 
     private inner class GuestEnd(stream: Boolean, readable: Boolean, table: Int, owner: ComponentInstanceState?) : End(stream, readable, table, owner) {
         override val elementIsPlain: Boolean
@@ -1206,7 +1171,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return r to w
     }
 
-    private fun endOf(t: Trampoline.Async, stream: Boolean, readable: Boolean, i: Int): Pair<ComponentInstanceState, End> {
+    private fun endOf(t: AsyncTrampolineSpec, stream: Boolean, readable: Boolean, i: Int): Pair<ComponentInstanceState, End> {
         val inst = state(transmitTable(t.table!!, stream).instance)
         val end = inst.handles.get(i) as? End ?: trap("Handle is not a ${if (stream) "stream" else "future"} end")
         if (end.isStream != stream || end.isReadable != readable) trap("Handle is not the ${if (readable) "readable" else "writable"} end of a ${if (stream) "stream" else "future"}")
@@ -1214,13 +1179,13 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return inst to end
     }
 
-    private fun copy(t: Trampoline.Async, stream: Boolean, read: Boolean, i: Int, ptr: Int, length: Int): Int {
+    private fun copy(t: AsyncTrampolineSpec, stream: Boolean, read: Boolean, i: Int, ptr: Int, length: Int): Int {
         checkMayLeave(t.kind.replace('-', '.'))
         val (inst, end) = endOf(t, stream, read, i)
         if (end.state != End.EndState.IDLE) {
             trap(if (end.state == End.EndState.DONE) "the other end was dropped or the future was already written" else "a copy is already in progress")
         }
-        val opts = plan.options.getValue(t.options!!)
+        val opts = host.canonOptions(t.options!!)
         if (end.inWaitableSet() && !opts.async) trap("A synchronous copy cannot use an end that is in a waitable set")
         val element = transmitTable(t.table!!, stream).element
         val buffer = GuestBuffer(element, opts, inst, ptr, length)
@@ -1238,7 +1203,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return e.p2
     }
 
-    private fun cancelCopy(t: Trampoline.Async, stream: Boolean, readable: Boolean, i: Int): Int {
+    private fun cancelCopy(t: AsyncTrampolineSpec, stream: Boolean, readable: Boolean, i: Int): Int {
         checkMayLeave(t.kind.replace('-', '.'))
         val (_, end) = endOf(t, stream, readable, i)
         if (end.state != End.EndState.COPYING) trap("No copy is in progress")
@@ -1256,7 +1221,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return end.getPendingEvent().p2
     }
 
-    private fun dropEnd(t: Trampoline.Async, stream: Boolean, readable: Boolean, i: Int) {
+    private fun dropEnd(t: AsyncTrampolineSpec, stream: Boolean, readable: Boolean, i: Int) {
         checkMayLeave(t.kind.replace('-', '.'))
         val (inst, end) = endOf(t, stream, readable, i)
         if (end.copyingOrCancelling()) trap("Cannot drop an end while a copy is in progress")
@@ -1345,7 +1310,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return h
     }
 
-    /** Values the host passes in a stream or future it created ([newStream] / [newFuture]). */
+    /** Values the host passes in a stream or future it created ([newHostStream] / [newHostFuture]). */
     private class HostSource(val stream: Boolean, val chunks: Flow<WitStreamChunk>)
 
     /**
@@ -1367,7 +1332,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
 
     private fun startHostWriter(writer: HostWriter, source: HostSource) {
         val resources = HostResourceTable.currentOrNull()
-        val context = c.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
+        val context = host.asContextElement() + (resources?.asContextElement() ?: EmptyCoroutineContext)
         val closed = java.util.concurrent.atomic.AtomicBoolean(false)
         fun closeSource() {
             if (!writer.rolledBack && closed.compareAndSet(false, true)) {
@@ -1391,7 +1356,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                     val buffer = HostReadableBuffer(chunk, writer.element)
                     writer.buffer = buffer
                     try {
-                        c.guest {
+                        host.guest {
                             if (writer.end.hasPendingEvent()) writer.end.getPendingEvent()
                             writer.end.copy(buffer)
                         }
@@ -1435,7 +1400,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
             val buffer = w.buffer
             if (buffer != null && buffer.remain() > 0 && w.end.buffer == null && w.end.state == End.EndState.IDLE) {
                 // A copy took part of the chunk: offer the rest, as a guest writes again.
-                c.guest { w.end.copy(buffer) }
+                host.guest { w.end.copy(buffer) }
                 changed = true
                 continue
             }
@@ -1523,7 +1488,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * suspends until the component writes values or drops its end (ADR-0019).
      */
     suspend fun hostReadSuspending(handle: Int, maxCount: Int, stream: Boolean): WitReader? = withContext(loop) {
-        c.checkUsable()
+        host.checkUsable()
         val what = if (stream) "stream" else "future"
         val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown $what handle $handle")
         require(end.isStream == stream && end.isReadable) { "Handle $handle is not the readable end of a $what" }
@@ -1542,7 +1507,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         suspendCancellableCoroutine { cont ->
             hostReads += HostRead(handle, end, buffer, stream, cont)
             try {
-                c.guest { end.copy(buffer) }
+                host.guest { end.copy(buffer) }
             } catch (e: Throwable) {
                 hostReads.removeAll { it.cont === cont }
                 throw e
@@ -1551,7 +1516,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
                 post {
                     if (hostReads.removeAll { it.cont === cont } && end.copyingOrCancelling()) {
                         // Take the buffer back, as `stream.cancel-read` does; values already copied are lost.
-                        runCatching { c.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() } }
+                        runCatching { host.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() } }
                     }
                 }
             }
@@ -1565,7 +1530,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         return runBlocking { hostReadSuspending(handle, maxCount, stream) }
     }
 
-    internal fun hasActiveHostRead(handle: Int): Boolean = onSession { hostReads.any { it.handle == handle } }
+    fun hasActiveHostRead(handle: Int): Boolean = onSession { hostReads.any { it.handle == handle } }
 
     fun hostDropReadable(handle: Int) = onSession {
         val end = hostObjects[handle] as? End ?: throw IllegalArgumentException("Unknown stream or future handle $handle")
@@ -1574,12 +1539,12 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         if (cancelled.isNotEmpty()) {
             hostReads.removeAll(cancelled)
             if (end.copyingOrCancelling()) {
-                c.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() }
+                host.guest { end.cancel(); if (end.hasPendingEvent()) end.getPendingEvent() }
             }
         }
         check(hostReads.none { it.handle == handle }) { "The stream or future $handle is being read" }
         hostObjects.remove(handle)
-        c.guest { end.drop() }
+        host.guest { end.drop() }
         drain()
     }
 
@@ -1681,7 +1646,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      */
     private inner class GuestBuffer(
         private val element: WitType?,
-        private val opts: CanonOptions,
+        private val opts: AsyncCanonOptions,
         private val inst: ComponentInstanceState,
         private var ptr: Int,
         private val length: Int,
@@ -1694,7 +1659,7 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
         init {
             if (unsigned(length) > HandleTable.MAX_LENGTH) trap("Stream buffer length exceeds the maximum")
             if (element != null) {
-                val memory = opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
+                val memory = opts.memory() ?: throw IllegalStateException("This copy needs a memory")
                 checkRange(memory, ptr, unsigned(length) * size, element.align, "stream buffer")
             }
         }
@@ -1728,20 +1693,20 @@ internal class AsyncAbi(private val c: ChicoryComponentInstance) {
      * by representation, streams, futures and error contexts through [lifted] / [lowered].
      */
     private inner class TransferContext(
-        private val opts: CanonOptions,
+        private val opts: AsyncCanonOptions,
         private val inst: ComponentInstanceState,
         private val lifted: MutableList<Any>?,
         private val lowered: List<Any>?,
     ) : AbiContext {
-        override val memory: CanonicalMemory get() = opts.memory?.let { c.canonicalMemories.getValue(it) } ?: throw IllegalStateException("This copy needs a memory")
+        override val memory: CanonicalMemory get() = opts.memory() ?: throw IllegalStateException("This copy needs a memory")
         override val encoding: StringEncoding get() = opts.stringEncoding
 
         override fun realloc(align: Int, size: Int): Int {
-            val f: ExportFunction = opts.realloc?.let { c.reallocs.getValue(it) } ?: throw IllegalStateException("This copy needs cabi_realloc")
-            return c.withoutLeaving { f.apply(0, 0, align.toLong(), size.toLong())[0].toInt() }
+            val f = opts.realloc ?: throw IllegalStateException("This copy needs cabi_realloc")
+            return host.withoutLeaving { f(align, size) }
         }
 
-        override fun lowerOwn(table: Int, id: Int): Int = c.table(table).insert(id, own = true)
+        override fun lowerOwn(table: Int, id: Int): Int = host.resourceTable(table).insert(id, own = true)
         override fun lowerBorrow(table: Int, id: Int): Int = trap("A stream or future cannot carry borrow handles")
         override fun liftOwn(table: Int, handle: Int): Int = this@AsyncAbi.liftOwn(table, handle)
         override fun liftBorrow(table: Int, handle: Int): Int = trap("A stream or future cannot carry borrow handles")

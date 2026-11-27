@@ -20,6 +20,9 @@ import java.util.Arrays
  *
  * Code generated for Core Wasm must read [data] via this object's methods (or reload the backing
  * array after calls and `memory.grow`) rather than caching a local array reference across [grow].
+ * Under Component Model async execution, all accesses and `memory.grow` resizes are serialized
+ * across threads through `SessionLoop` and `StackSwitching` handoff barriers, so [data] and [pages]
+ * are always visible across guest continuation threads without per-load volatile reads.
  */
 @InternalWasm2KtApi
 class LinearMemory(

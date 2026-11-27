@@ -23,6 +23,7 @@ data class AotCompileOptions(
     val maxDispatchBucketSize: Int = 96,
     val emitLineNumbers: Boolean = true,
     val verifyClasses: Boolean = false,
+    val emitRawCallDispatch: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_TARGET_METHOD_BYTES: Int = 7_500
@@ -145,6 +146,7 @@ internal object AotNames {
     const val SPILL_FRAME_INTERNAL = "$RUNTIME_PACKAGE/AotSpillFrame"
     const val SPILL_FRAME_DESC = "L$SPILL_FRAME_INTERNAL;"
     const val CORE_INSTANCE_IFACE_INTERNAL = "$RUNTIME_PACKAGE/CoreModuleInstance"
+    const val RAW_CALLABLE_CORE_INSTANCE_IFACE_INTERNAL = "$RUNTIME_PACKAGE/RawCallableCoreModule"
     const val DISPATCH_SUPPORT_INTERNAL = "$RUNTIME_PACKAGE/AotDispatchSupport"
     const val TRAP_SUPPORT_INTERNAL = "$RUNTIME_PACKAGE/AotTrapSupport"
     const val NUMERICS_INTERNAL = "$RUNTIME_PACKAGE/WasmNumerics"

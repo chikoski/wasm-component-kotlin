@@ -1,5 +1,36 @@
-# Known failures of the Component Model reference tests (values/, resources/) on the AOT backend (#185).
+# Known failures of the Component Model reference tests on the AOT backend (#185, #188), with the reason.
 # `<file>` skips a whole file, `<file>:<line>` one command (the line of the command in the .wast).
 # A listed command that passes fails AotConformanceTest, so remove it once fixed.
 
-values/variants.wast:83  # uses Component Model async ABI (canon task.return / async lift & lower); AOT async support is tracked in #188
+# wasmtime-environ 48 (ADR-0010) compiles a call from a component instance into itself or an ancestor
+# to an unconditional trap ("cannot enter component instance"); newer Component Model versions allow it.
+async/cancel-delivery.wast:515  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-resumed-callback-switch.wast:151  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-resumed-callback-switch.wast:331  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-subtask.wast:261  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:97  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:281  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:460  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:607  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/cancel-targeted-resume.wast:699  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/dtor-context-is-zero.wast:53  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:239  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:240  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:241  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:242  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:243  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:244  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:245  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:246  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/during-sync-call-blocking-ops.wast:247  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:42  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:60  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:99  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:100  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:151  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:198  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:237  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:346  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:521  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:658  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48
+async/reentrance.wast:786  # reentrance into the same or an ancestor instance traps in wasmtime-environ 48

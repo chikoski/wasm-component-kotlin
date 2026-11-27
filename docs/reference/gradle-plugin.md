@@ -37,12 +37,12 @@ wasm2kt {
 | :--- | :--- | :--- | :--- |
 | `backend` | `Property<Wasm2KtBackend>` | `Wasm2KtBackend.CHICORY` | 個別指定がないコンポーネントに適用する既定のバックエンドです |
 | `addRuntimeDependency` | `Property<Boolean>` | `true` | 登録されたコンポーネントのバックエンドに応じて `runtime-chicory` と `runtime-aot` の必要な方だけを `implementation` に追加します |
-| `failOnUnsupportedFeatures` | `Property<Boolean>` | `false` | 検査タスクが未対応の型や組み込み関数を検出したときに警告ではなくビルド失敗とします。なお `AOT` の非同期拒否は本設定にかかわらず常に失敗します |
+| `failOnUnsupportedFeatures` | `Property<Boolean>` | `false` | 検査タスクが未対応の型や組み込み関数を検出したときに警告ではなくビルド失敗とします |
 | `useLibraryInterfaces` | `Property<Boolean>` | `true` | クラスパス上の `META-INF/wasm2kt/interfaces/*.json` を読み取り、重複する interface のコード生成を省略します |
-| `addWasiDependency` | `Property<Boolean>` | `false` | `io.github.wasm2kt:runtime-wasi` を `implementation` に追加します。すべてのコンポーネントが `AOT` の場合は互換性の警告を出力します |
+| `addWasiDependency` | `Property<Boolean>` | `false` | `io.github.wasm2kt:runtime-wasi` を `implementation` に追加します |
 | `components` | `NamedDomainObjectContainer<Wasm2KtComponent>` | 空 | ビルド対象のコンポーネント定義を登録するコンテナです |
 
-`addRuntimeDependency` が有効で、登録したすべてのコンポーネントが `Wasm2KtBackend.AOT` を選択した場合、`runtime-chicory` は `implementation` へ追加されません。混在構成では `runtime-chicory` と `runtime-aot` の双方が追加されます。WASI 0.3 は `AOT` で未対応の非同期機能を利用するため、全コンポーネントが `AOT` の状態で `addWasiDependency` を有効にすると設定時に警告を出します。
+`addRuntimeDependency` が有効で、登録したすべてのコンポーネントが `Wasm2KtBackend.AOT` を選択した場合、`runtime-chicory` は `implementation` へ追加されません。混在構成では `runtime-chicory` と `runtime-aot` の双方が追加されます。`addWasiDependency` を有効にした場合、WASI 0.3 コンポーネントは `CHICORY` と `AOT` の双方で追加設定なしに動作します。
 
 ### `Wasm2KtComponent`（`components.register("<name>")`）のプロパティ・メソッド
 
@@ -64,12 +64,10 @@ wasm2kt {
 | 生成物 | 出力先 | 内容 |
 | :--- | :--- | :--- |
 | Kotlin バインディング | `build/wasm2kt/<name>/kotlin/` | WIT から生成された型、`Session`、`withSession`、`openSession`、`imports(...)`、エクスポート関数です |
-| `<Name>Component` | 同上、`packageName` 直下 | `CHICORY` では `ComponentBackendFactory`、`AOT` では `AotComponentFactory` の実装オブジェクトです |
+| `<Name>Component` | 同上、`packageName` 直下 | `CHICORY` と `AOT` 非同期では `ComponentBackendFactory`、`AOT` 同期では `AotComponentFactory` の実装オブジェクトです |
 | `wasm2kt-<name>.jar` | `build/wasm2kt/<name>/wasm2kt-<name>.jar` | コンパイル済み core モジュールと資源を収めた jar で、`implementation` に自動追加されます |
 
-`wasm2kt-<name>.jar` の中身は選択したバックエンドによって異なります。`CHICORY` では core クラス群に加えて `.meta` ファイルと `plan.json` を同梱します。`AOT` では ASM で生成した `CoreNInstance` 系クラス群と静的データセグメントの `.data` ファイルのみを収め、`.meta` や `plan.json` は含みません。また `AOT` を選択したコンポーネントでは `openSession`、`withSession`、および `withSessionBlocking` が `AotComponentFactory` だけを受け取る型になり、`ComponentBackendFactory` や `Path` を渡すとコンパイル時に拒否されます。プラグインはあわせて Kotlin コンパイルタスクに `-Xcontext-parameters` を自動で追加します。
-
-`AOT` バックエンドは現在、同期コンポーネントのみに対応しています。非同期機能を使うコンポーネントに対して `Wasm2KtBackend.AOT` を指定すると、後続課題 `#188` の完了までは検査タスクでビルドエラーになります。
+`wasm2kt-<name>.jar` の中身は選択したバックエンドによって異なります。`CHICORY` では core クラス群に加えて `.meta` ファイルと `plan.json` を同梱します。`AOT` では ASM で生成した `CoreNInstance` 系クラス群と静的データセグメントの `.data` ファイルのみを収め、`.meta` や `plan.json` は含みません。同期コンポーネントに `AOT` を選択した場合、`openSession`、`withSession`、および `withSessionBlocking` は `AotComponentFactory` だけを受け取る型になり、`ComponentBackendFactory` や `Path` を渡すとコンパイル時に拒否されます。非同期コンポーネントと WASI 0.3 コンポーネントに `AOT` を選択した場合、生成される `<Name>Component` が `ComponentBackendFactory` を実装して内部で `AotComponentBackend` を構成するため、既存の非同期セッション API をそのまま利用できます。プラグインはあわせて Kotlin コンパイルタスクに `-Xcontext-parameters` を自動で追加します。
 
 ---
 
@@ -80,12 +78,12 @@ wasm2kt {
 | タスク名 | 型 | 内容 |
 | :--- | :--- | :--- |
 | `wasm2ktDecompose<Cap>` | `Wasm2KtDecomposeTask` | 同梱の `wasm2kt-decompose.wasm` で `.wasm` を `core*.wasm`・`plan.json`・`wit.json` に分解します |
-| `wasm2ktCheck<Cap>` | `Wasm2KtCheckTask` | 分解結果を選択バックエンドに対して検証し、未対応機能や `AOT` の非同期使用を検査します |
+| `wasm2ktCheck<Cap>` | `Wasm2KtCheckTask` | 分解結果を選択バックエンドに対して検証し、未対応機能を検査します |
 | `wasm2ktCompile<Cap>` | `Wasm2KtCompileTask` | 選択バックエンドに応じて Chicory AOT または自前 AOT コンパイラで JVM バイトコードを生成し、jar を出力します |
 | `wasm2ktGenerate<Cap>` | `Wasm2KtGenerateTask` | Kotlin バインディングとバックエンドに応じた `<Name>Component` 静的配線を生成します |
 | `wasm2ktCheckWarnings<Cap>` / `wasm2ktCompileWarnings<Cap>` | `Wasm2KtWarningsTask` | キャッシュヒット時を含めて検査およびコンパイル時の警告をビルドごとに再表示します |
 
-未対応機能の検査を `wasm2ktCheck<Cap>` に分離しているため、同じ `.wasm` ファイルのまま `CHICORY` と `AOT` を切り替えても `wasm2ktDecompose<Cap>` のキャッシュは共有されます。`wasm2ktCheck<Cap>` は [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) の未対応機能検査に加えて、`Wasm2KtBackend.AOT` で `usesAsync = true` のコンポーネントを検出すると `failOnUnsupportedFeatures` の値にかかわらずビルドをエラーで停止します。[#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) の再表示機構により、検査結果とコンパイル結果がキャッシュから復元されたビルドでも警告が出力されます。
+未対応機能の検査を `wasm2ktCheck<Cap>` に分離しているため、同じ `.wasm` ファイルのまま `CHICORY` と `AOT` を切り替えても `wasm2ktDecompose<Cap>` のキャッシュは共有されます。`wasm2ktCheck<Cap>` は [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) の未対応機能検査を実行し、`Wasm2KtBackend.AOT` でも同期コンポーネントと非同期コンポーネントの双方を受け付けます。[#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) の再表示機構により、検査結果とコンパイル結果がキャッシュから復元されたビルドでも警告が出力されます。
 
 Chicory バックエンドの `wasm2ktCompile<Cap>` は [ADR-0021](../adr/0021-split-large-chicory-methods.md) に基づいて `JvmMethodSplitter` を実行し、7,500 JVM バイトを超える `func_<N>` メソッドを自動分割します。`call_dispatch_0` などにより 8,000 バイト上限の警告が出た場合でも、デスクトップやサーバーの JVM であれば `-XX:-DontCompileHugeMethods` を指定することで JIT コンパイルの対象にできます。一方の `AOT` バックエンドでは構造化 CFG 上で事前に IR 分割を行うため、64 KB インタプリタフォールバック自体は存在せず、`AotComponentCompiler.warningsFor` は Android ART の命令上限と HotSpot の 8,000 バイト上限の双方を超過したメソッドのみを警告として報告します。
 
