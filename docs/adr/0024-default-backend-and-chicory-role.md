@@ -1,7 +1,7 @@
 # 0024. Gradle プラグインの既定バックエンドの切り替えと Chicory バックエンドの位置づけ
 
-* ステータス: 提案
-* 日付: 2026-11-27 提案、2026-11-28 改訂
+* ステータス: 承認
+* 日付: 2026-11-27 提案、2026-11-28 承認
 * 関連: [ADR-0001](0001-chicory-backend-for-android.md)、[ADR-0005](0005-async-and-wasi03-chicory-only.md)、[ADR-0014](0014-interface-mappings.md)、[ADR-0015](0015-binary-value-boundary.md)、[ADR-0018](0018-async-abi-on-chicory.md)、[ADR-0021](0021-split-large-chicory-methods.md)、[ADR-0023](0023-custom-wasm-compiler-and-static-jvm-backend.md)、Issue #180、Issue #188、Issue #205、Issue #206
 
 ## 背景
