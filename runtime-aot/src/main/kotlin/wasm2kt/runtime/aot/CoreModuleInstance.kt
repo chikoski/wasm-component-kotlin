@@ -14,6 +14,16 @@ interface CoreModuleInstance {
 }
 
 /**
+ * Extended contract implemented by compiled fused-adapter core modules that call `prepare-call`,
+ * `sync-start-call`, or `async-start-call`, allowing `AsyncAbi` to invoke any imported or defined
+ * function by raw core index using flat `LongArray` ABI values.
+ */
+@InternalWasm2KtApi
+interface RawCallableCoreModule : CoreModuleInstance {
+    fun invokeRaw(funcIndex: Int, args: LongArray): LongArray?
+}
+
+/**
  * Fallback dispatch support when a `call_indirect` table entry points to a foreign core module
  * instance or a [HostTrampoline].
  */

@@ -51,18 +51,50 @@ class AotComponentBuildTest {
     }
 
     @Test
-    fun `AotComponentCompiler rejects async components at build time`(@TempDir dir: Path) {
+    fun `AotComponentCompiler and AotComponentBuild support async components without Chicory or plan resources`(@TempDir dir: Path) {
+        val forbiddenPrefixes = listOf(
+            "kotlinx/serialization/",
+            "com/dylibso/chicory/",
+            "wasm2kt/runtime/chicory/",
+        )
         for (asyncName in listOf("async-stream", "async-import", "async-pipeline")) {
-            val e = assertFailsWith<IllegalStateException>(asyncName) {
-                AotComponentCompiler.compile(
-                    decomposedDir = componentsDir.resolve(asyncName),
-                    classesDir = dir.resolve("$asyncName-classes"),
-                    resourcesDir = dir.resolve("$asyncName-resources"),
-                    packageName = "com.example.async.$asyncName".replace('-', '_'),
-                )
+            val workDir = dir.resolve(asyncName)
+            val output = AotComponentBuild.runFromDecomposed(
+                decomposedDir = componentsDir.resolve(asyncName),
+                componentName = asyncName,
+                packageName = "com.example.async.$asyncName".replace('-', '_'),
+                workDir = workDir,
+            )
+
+            val resourceFiles = walkFiles(output.resourcesDir)
+            assertTrue(
+                resourceFiles.none { it.name == "plan.json" || it.name.endsWith(".meta") },
+                "$asyncName resources must not contain plan.json or .meta, found $resourceFiles",
+            )
+
+            val ktFiles = walkFiles(output.kotlinDir).filter { it.name.endsWith(".kt") }
+            assertTrue(ktFiles.isNotEmpty(), "$asyncName must emit Kotlin files")
+            for (kt in ktFiles) {
+                val text = Files.readString(kt)
+                assertTrue("com.dylibso.chicory" !in text, "$kt must not reference chicory")
+                assertTrue("wasm2kt.runtime.chicory" !in text, "$kt must not reference runtime.chicory")
+                assertTrue("kotlinx.serialization" !in text, "$kt must not reference kotlinx.serialization")
             }
-            assertTrue("async" in e.message!!.lowercase(), "Expected async rejection message for $asyncName, got ${e.message}")
-            assertTrue("AOT" in e.message!!, "Expected AOT rejection message for $asyncName, got ${e.message}")
+
+            val compiledKtDir = workDir.resolve("compiled-kotlin")
+            compileKotlin(ktFiles, output.classesDir, compiledKtDir)
+            val allClasses = (walkFiles(output.classesDir) + walkFiles(compiledKtDir)).filter { it.name.endsWith(".class") }
+            assertTrue(allClasses.isNotEmpty())
+            for (cls in allClasses) {
+                for (entry in readConstantPoolUtf8s(Files.readAllBytes(cls))) {
+                    for (forbidden in forbiddenPrefixes) {
+                        assertTrue(
+                            forbidden !in entry,
+                            "Class $cls constant pool entry '$entry' references forbidden '$forbidden'",
+                        )
+                    }
+                }
+            }
         }
     }
 

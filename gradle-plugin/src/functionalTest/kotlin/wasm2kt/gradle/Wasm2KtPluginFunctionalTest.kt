@@ -916,40 +916,15 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `AOT backend rejects async components even when failOnUnsupportedFeatures is false`(@TempDir dir: File) {
-        Files.copy(fixtures.resolve("async-stream.wasm"), dir.resolve("async-stream.wasm").toPath())
-        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"async-aot\"\n$ISOLATED_BUILD_CACHE")
-        dir.resolve("build.gradle.kts").writeText(
+    fun `AOT backend runs async components without Chicory or plan resources`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("async-pipeline.wasm"), dir.resolve("async-pipeline.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
             """
-            import wasm2kt.gradle.Wasm2KtBackend
-
-            plugins { id("io.github.wasm2kt") }
-            repositories {
-                maven(url = uri("${testRepo.replace("\\", "/")}"))
-                mavenCentral()
-            }
-            wasm2kt {
-                backend.set(Wasm2KtBackend.AOT)
-                failOnUnsupportedFeatures.set(false)
-                components {
-                    register("async-app") {
-                        source.set(file("async-stream.wasm"))
-                        packageName.set("com.example.async")
-                    }
-                }
-            }
+            rootProject.name = "async-aot"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
             """.trimIndent(),
         )
-
-        val failed = runner(dir, "wasm2ktGenerateAsyncApp").buildAndFail()
-        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktCheckAsyncApp")?.outcome)
-        assertTrue("AOT backend does not support" in failed.output && "async" in failed.output, failed.output)
-    }
-
-    @Test
-    fun `addWasiDependency warns when all components use AOT backend`(@TempDir dir: File) {
-        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
-        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"wasi-aot-warn\"\n$ISOLATED_BUILD_CACHE")
         dir.resolve("build.gradle.kts").writeText(
             """
             import wasm2kt.gradle.Wasm2KtBackend
@@ -957,6 +932,106 @@ class Wasm2KtPluginFunctionalTest {
             plugins {
                 kotlin("jvm") version "$kotlinVersion"
                 id("io.github.wasm2kt")
+                application
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.AOT)
+                components {
+                    register("async-pipeline") {
+                        source.set(file("async-pipeline.wasm"))
+                        packageName.set("com.example.asyncpipeline")
+                    }
+                }
+            }
+            application { mainClass.set("com.example.asyncpipeline.MainKt") }
+            tasks.register("printClasspath") {
+                val cp = configurations.runtimeClasspath.map { files -> files.map { it.name }.sorted() }
+                doLast { println("CP=" + cp.get().joinToString(",")) }
+            }
+            """.trimIndent(),
+        )
+        val src = dir.resolve("src/main/kotlin/com/example/asyncpipeline").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            package com.example.asyncpipeline
+
+            import com.example.asyncpipeline.example.async_pipeline.enricher.Enricher
+            import kotlinx.coroutines.async
+            import kotlinx.coroutines.delay
+            import kotlinx.coroutines.flow.asFlow
+            import kotlinx.coroutines.flow.flowOf
+            import kotlinx.coroutines.flow.map
+            import kotlinx.coroutines.flow.toList
+
+            fun main() {
+                val hostImports = imports(
+                    exampleAsyncPipelineEnricher = {
+                        object : Enricher {
+                            override suspend fun formatItem(id: UInt, payload: String): String {
+                                delay(10)
+                                return "#${'$'}id:${'$'}{payload.uppercase()}"
+                            }
+                        }
+                    },
+                )
+                withSessionBlocking(AsyncPipelineComponent, hostImports) {
+                    val numbers = produceNumbers(10u, 4u).toList()
+                    val doubledSum = sumStream(numbers.asFlow().map { it * 2u })
+                    val (formattedFlow, countDeferred) = processItems(flowOf("alpha", "beta", "gamma"))
+                    val collected = async { formattedFlow.toList() }
+                    val total = async { countDeferred.await() }
+                    val formatted = collected.await()
+                    val processedCount = total.await()
+                    println("AOT_ASYNC numbers=${'$'}numbers,doubledSum=${'$'}doubledSum,count=${'$'}processedCount,formatted=${'$'}formatted")
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "run", "printClasspath", "--configuration-cache", "--build-cache").build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":run")?.outcome)
+        assertTrue(
+            "AOT_ASYNC numbers=[10, 11, 12, 13],doubledSum=92,count=3,formatted=[#1:ALPHA, #2:BETA, #3:GAMMA]" in result.output,
+            result.output,
+        )
+        val cpLine = result.output.lines().first { it.startsWith("CP=") }
+        assertTrue("runtime-aot" in cpLine, "Expected runtime-aot on classpath: $cpLine")
+        assertFalse("runtime-chicory" in cpLine, "Unexpected runtime-chicory on AOT async classpath: $cpLine")
+        assertFalse("chicory" in cpLine, "Unexpected chicory artifact on AOT async classpath: $cpLine")
+
+        val asyncJar = dir.resolve("build/wasm2kt/async-pipeline/wasm2kt-async-pipeline.jar")
+        assertTrue(asyncJar.isFile)
+        ZipFile(asyncJar).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertTrue(names.any { it.endsWith(".class") }, "Expected AOT .class entries in jar: $names")
+            assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in AOT async jar: $names")
+        }
+    }
+
+    @Test
+    fun `addWasiDependency wires runtime-wasi and runs WASI 0_3 component on AOT without warning`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("wasi-03.wasm"), dir.resolve("wasi-03.wasm").toPath())
+        val workDir = dir.resolve("work").apply { mkdirs() }
+        workDir.resolve("input.txt").writeText("gradle wasi aot")
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "wasi-aot-consumer"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+                application
             }
             repositories {
                 maven(url = uri("${testRepo.replace("\\", "/")}"))
@@ -966,17 +1041,79 @@ class Wasm2KtPluginFunctionalTest {
                 backend.set(Wasm2KtBackend.AOT)
                 addWasiDependency.set(true)
                 components {
-                    register("roundtrip") {
-                        source.set(file("roundtrip.wasm"))
-                        packageName.set("com.example.rt")
+                    register("wasi-app") {
+                        source.set(file("wasi-03.wasm"))
+                        packageName.set("com.example.wasiapp")
                     }
                 }
+            }
+            application { mainClass.set("com.example.MainKt") }
+            tasks.register("printClasspath") {
+                val cp = configurations.runtimeClasspath.map { files -> files.map { it.name }.sorted() }
+                doLast { println("CP=" + cp.get().joinToString(",")) }
+            }
+            """.trimIndent(),
+        )
+        val src = dir.resolve("src/main/kotlin/com/example").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            package com.example
+
+            import com.example.wasiapp.WasiAppComponent
+            import com.example.wasiapp.example.wasi_app.audit.Audit
+            import com.example.wasiapp.imports
+            import com.example.wasiapp.runSummary
+            import com.example.wasiapp.withSession
+            import kotlinx.coroutines.runBlocking
+            import wasm2kt.wasi.wasi03Imports
+            import java.io.ByteArrayOutputStream
+            import java.nio.file.Paths
+
+            fun main() {
+                val stdoutBuf = ByteArrayOutputStream()
+                val steps = mutableListOf<String>()
+                val wasiBase = wasi03Imports {
+                    args("wasi-app", "--from-gradle-aot")
+                    env("WASI_PLUGIN" to "aot")
+                    stdin("hi-aot-plugin".encodeToByteArray())
+                    stdout = stdoutBuf
+                    mounts {
+                        readWrite("/work", Paths.get("${workDir.absolutePath.replace("\\", "\\\\")}"))
+                    }
+                }
+                val appImports = imports(
+                    base = wasiBase,
+                    exampleWasiAppAudit = {
+                        object : Audit {
+                            override fun recordStep(tag: String) {
+                                steps += tag
+                            }
+                        }
+                    },
+                )
+                val summary = withSession(WasiAppComponent, appImports) {
+                    runBlocking { runSummary() }
+                }
+                println("SUMMARY=" + summary)
+                println("STDOUT=" + stdoutBuf.toString(Charsets.UTF_8))
+                println("STEPS=" + steps.joinToString(","))
             }
             """.trimIndent(),
         )
 
-        val result = runner(dir, "help").build()
-        assertTrue("addWasiDependency is enabled while all components use the AOT backend" in result.output, result.output)
+        val result = runner(dir, "run", "printClasspath").build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":run")?.outcome)
+        assertFalse("addWasiDependency is enabled while all components use the AOT backend" in result.output, result.output)
+        val generatedPkg = dir.resolve("build/wasm2kt/wasi-app/kotlin/com/example/wasiapp")
+        assertTrue(generatedPkg.resolve("RootWorld.kt").isFile, generatedPkg.list().orEmpty().joinToString())
+        assertTrue(!generatedPkg.resolve("wasi").exists(), "WASI interfaces must come from runtime-wasi")
+        assertTrue("fs=[mount=/work,read_ok=true,write_ok=true,data=gradle wasi aot!]" in result.output, result.output)
+        assertTrue("STDOUT=out:hi-aot-plugin" in result.output, result.output)
+        assertTrue("STEPS=start,done" in result.output, result.output)
+        assertEquals("gradle wasi aot!", workDir.resolve("output.txt").readText())
+        val cpLine = result.output.lines().first { it.startsWith("CP=") }
+        assertTrue("runtime-aot" in cpLine && "runtime-wasi" in cpLine, cpLine)
+        assertFalse("runtime-chicory" in cpLine, cpLine)
     }
 
     @Test
@@ -1165,6 +1302,8 @@ class Wasm2KtPluginFunctionalTest {
             "wasm2kt.runtime.canonical.Lifter ",
             "wasm2kt.runtime.canonical.FuncType ",
             "wasm2kt.runtime.canonical.WitType ",
+            "wasm2kt.runtime.canonical.AsyncAbi ",
+            "wasm2kt.runtime.canonical.StackSwitching ",
         )
         val survivingWire = keptLines.filter { line -> forbiddenWirePrefixes.any { line.startsWith(it) } }
         assertTrue(survivingWire.isEmpty(), "Expected R8 to prune wire/dynamic classes in pure Phase 2 AOT APK, but kept: $survivingWire")

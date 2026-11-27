@@ -41,7 +41,19 @@ import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.WitHostImportDispatcher
+import wasm2kt.runtime.canonical.AbiBoundaryDirection
 import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.AsyncAbi
+import wasm2kt.runtime.canonical.AsyncAbiContext
+import wasm2kt.runtime.canonical.AsyncBackendHost
+import wasm2kt.runtime.canonical.AsyncCanonOptions
+import wasm2kt.runtime.canonical.AsyncCoreInstance
+import wasm2kt.runtime.canonical.AsyncExportSpec
+import wasm2kt.runtime.canonical.AsyncResourceTableInfo
+import wasm2kt.runtime.canonical.AsyncTable
+import wasm2kt.runtime.canonical.AsyncTrampolineSpec
+import wasm2kt.runtime.canonical.AsyncTransmitTableInfo
+import wasm2kt.runtime.canonical.BorrowScope
 import wasm2kt.runtime.canonical.CanonicalAbi
 import wasm2kt.runtime.canonical.CanonicalMemory
 import wasm2kt.runtime.canonical.ComponentGuard
@@ -53,9 +65,11 @@ import wasm2kt.runtime.canonical.ResourceHandle
 import wasm2kt.runtime.canonical.ResourceTable
 import wasm2kt.runtime.canonical.StringEncoding
 import wasm2kt.runtime.canonical.Transcoder
+import wasm2kt.runtime.canonical.UnsupportedAsyncIntrinsicException
 import wasm2kt.runtime.canonical.UnsupportedWitTypeException
 import wasm2kt.runtime.canonical.shortInterfaceName
 import wasm2kt.runtime.canonical.trap
+import wasm2kt.runtime.canonical.unsigned
 import wasm2kt.runtime.canonical.unversionedInterfaceName
 import java.nio.file.Files
 import java.nio.file.Path
@@ -143,7 +157,118 @@ internal class ChicoryComponentInstance(
     private val taskMayBlock = GlobalInstance(Value.i32(if (plan.usesAsync) 1 else 0), MutabilityType.Var)
 
     /** The async ABI (#16): the scheduler, and every component instance's handle table. */
-    internal val async = AsyncAbi(this)
+    internal val async = AsyncAbi(ChicoryAsyncHost())
+
+    private val asyncOptions = HashMap<Int, AsyncCanonOptions>()
+    private val asyncTables = HashMap<Int, AsyncTable>()
+    private val definedResourceInstances: Map<Int, Int> by lazy {
+        buildMap {
+            for (init in plan.initializers) {
+                if (init is Initializer.Resource) putIfAbsent(init.resource, init.instance)
+            }
+        }
+    }
+
+    private fun asyncCanonOptions(index: Int): AsyncCanonOptions = asyncOptions.getOrPut(index) {
+        val opts = plan.options.getValue(index)
+        AsyncCanonOptions(
+            stringEncoding = opts.stringEncoding,
+            memoryIndex = opts.memory,
+            memory = { opts.memory?.let { canonicalMemories.getValue(it) } },
+            realloc = opts.realloc?.let { rIdx ->
+                { align, size ->
+                    val f = reallocs.getValue(rIdx)
+                    f.apply(0, 0, align.toLong(), size.toLong())[0].toInt()
+                }
+            },
+            postReturn = opts.postReturn?.let { pIdx ->
+                val f = postReturns.getValue(pIdx)
+                val fn: (LongArray) -> Unit = { r -> f.apply(*r) }
+                fn
+            },
+            callback = opts.callback?.let { cIdx ->
+                { a -> callbacks.getValue(cIdx).apply(*a) ?: CanonicalAbi.EMPTY_LONG_ARRAY }
+            },
+            async = opts.async,
+            instance = opts.instance,
+        )
+    }
+
+    private inner class ChicoryAsyncHost : AsyncBackendHost {
+        override val backend: ComponentBackend get() = this@ChicoryComponentInstance
+        override val guard get() = this@ChicoryComponentInstance.guard
+
+        override fun checkUsable() = this@ChicoryComponentInstance.checkUsable()
+        override fun poison(message: String): Nothing = this@ChicoryComponentInstance.poison(message)
+        override fun <T> guest(block: () -> T): T = this@ChicoryComponentInstance.guest(block)
+        override fun asTrap(e: Throwable): Throwable = this@ChicoryComponentInstance.asTrap(e)
+        override fun <T> withoutLeaving(block: () -> T): T = this@ChicoryComponentInstance.withoutLeaving(block)
+        override fun checkMayLeave(what: String) = this@ChicoryComponentInstance.checkMayLeave(what)
+        override fun <T> mapUnsupported(block: () -> T): T = this@ChicoryComponentInstance.mapChicoryUnsupported(block)
+        override fun <T> bind(block: () -> T): T = this@ChicoryComponentInstance.bind(block)
+        override fun asContextElement() = this@ChicoryComponentInstance.asContextElement()
+
+        override fun context(
+            optionsIndex: Int,
+            direction: AbiBoundaryDirection,
+            borrowScope: (() -> BorrowScope)?,
+        ): AsyncAbiContext {
+            val dir = when (direction) {
+                AbiBoundaryDirection.HOST_TO_GUEST -> Direction.HOST_TO_GUEST
+                AbiBoundaryDirection.GUEST_TO_HOST -> Direction.GUEST_TO_HOST
+            }
+            return Context(plan.options.getValue(optionsIndex), dir, borrowScope)
+        }
+
+        override fun resourceTable(tableIndex: Int): ResourceTable = this@ChicoryComponentInstance.table(tableIndex)
+
+        override fun resourceTableInfo(tableIndex: Int): AsyncResourceTableInfo? =
+            plan.resourceTables[tableIndex]?.let { rt ->
+                val definedIn = rt.resource?.let { definedResourceInstances[it] } ?: -1
+                AsyncResourceTableInfo(rt.imported, rt.instance, definedIn)
+            }
+
+        override fun transmitTableInfo(tableIndex: Int, stream: Boolean): AsyncTransmitTableInfo {
+            val info = (if (stream) plan.streamTables[tableIndex] else plan.futureTables[tableIndex])
+                ?: throw IllegalStateException("Unknown ${if (stream) "stream" else "future"} table $tableIndex")
+            return AsyncTransmitTableInfo(info.instance, info.element)
+        }
+
+        override fun errorContextInstance(tableIndex: Int): Int = plan.errorContextTables[tableIndex] ?: 0
+
+        override fun canonOptions(optionsIndex: Int): AsyncCanonOptions = asyncCanonOptions(optionsIndex)
+
+        override fun memory(memoryIndex: Int): CanonicalMemory = canonicalMemories.getValue(memoryIndex)
+
+        override fun callback(callbackIndex: Int): (LongArray) -> LongArray =
+            callbacks.getValue(callbackIndex).let { f -> { a -> f.apply(*a) ?: CanonicalAbi.EMPTY_LONG_ARRAY } }
+
+        override fun postReturn(postReturnIndex: Int): (LongArray) -> Unit =
+            postReturns.getValue(postReturnIndex).let { pr ->
+                val fn: (LongArray) -> Unit = { r -> pr.apply(*r) }
+                fn
+            }
+
+        override fun table(tableIndex: Int): AsyncTable? = asyncTables.getOrPut(tableIndex) {
+            val table = tables[tableIndex] ?: return null
+            AsyncTable { fi, closure ->
+                if (fi < 0 || fi >= table.size()) trap("thread.new-indirect: table index $fi out of bounds")
+                val funcIdx = table.ref(fi)
+                if (funcIdx < 0) trap("thread.new-indirect: uninitialized table element $fi")
+                val owner = table.instance(fi)
+                val type = owner.type(owner.functionType(funcIdx))
+                if (type.params().size != 1 || type.returns().isNotEmpty()) {
+                    trap("thread.new-indirect: the start function has the wrong type")
+                }
+                { owner.getMachine().call(funcIdx, longArrayOf(closure)) }
+            }
+        }
+
+        override fun importDispatchKey(importIndex: Int): String = plan.imports.getValue(importIndex).dispatchKey
+        override fun hostImport(importIndex: Int): WitHostFunction = this@ChicoryComponentInstance.hostImport(importIndex)
+        override fun asyncHostImport(importIndex: Int): WitAsyncHostFunction? =
+            this@ChicoryComponentInstance.asyncHostImport(importIndex)
+    }
 
     /**
      * A resource handle owned by the host. As in the spec's `lift_own`, the component's own handle
@@ -194,6 +319,7 @@ internal class ChicoryComponentInstance(
     private class ResolvedExport(
         val export: PlanExport,
         val sync: SyncExport?,
+        val asyncSpec: AsyncExportSpec?,
     )
 
     /** Exports resolved so far; [invoke] takes their index. */
@@ -215,19 +341,25 @@ internal class ChicoryComponentInstance(
         }
         if (index < 0) {
             index = resolved.size
+            val func = coreFunction(export.func)
             val sync = if (plan.usesAsync) {
                 null
             } else {
                 val opts = plan.options.getValue(export.options)
                 SyncExport(
                     opts = opts,
-                    func = coreFunction(export.func),
+                    func = func,
                     memory = opts.memory?.let { canonicalMemories[it] },
                     realloc = opts.realloc?.let { reallocs[it] },
                     postReturn = opts.postReturn?.let { postReturns.getValue(it) },
                 )
             }
-            resolved += ResolvedExport(export = export, sync = sync)
+            val asyncSpec = if (plan.usesAsync) {
+                AsyncExportSpec(export.qualifiedName, export.type, export.options) { a -> func.apply(*a) ?: CanonicalAbi.EMPTY_LONG_ARRAY }
+            } else {
+                null
+            }
+            resolved += ResolvedExport(export = export, sync = sync, asyncSpec = asyncSpec)
         }
         resolvedIndices[functionName] = index
         return index
@@ -244,8 +376,7 @@ internal class ChicoryComponentInstance(
     override suspend fun invokeSuspending(function: Int, args: WitReader): WitReader {
         if (!plan.usesAsync) return invoke(function, args)
         checkUsable()
-        val export = resolvedExport(function).export
-        return async.invokeSuspending(export, export.qualifiedName, args)
+        return async.invokeSuspending(resolvedExport(function).asyncSpec!!, args)
     }
 
     override fun invoke(function: Int, args: WitReader): WitReader {
@@ -254,7 +385,7 @@ internal class ChicoryComponentInstance(
         val export = entry.export
         val functionName = export.qualifiedName
         // Calls into a component that uses the async ABI are tasks on its scheduler (ADR-0019).
-        if (plan.usesAsync) return async.invoke(export, functionName, args)
+        if (plan.usesAsync) return async.invoke(entry.asyncSpec!!, args)
         if (guard.entered) poison("Cannot reenter component instance: '$functionName' was called while another call into it is in progress")
         val sync = checkNotNull(entry.sync)
         val type = export.type
@@ -438,7 +569,7 @@ internal class ChicoryComponentInstance(
                 )
                 is CoreDef.TaskMayBlock -> builder.addGlobal(ImportGlobal(arg.module, arg.name, taskMayBlock))
                 is CoreDef.Intrinsic -> builder.addFunction(
-                    HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), async.intrinsic(def.name)),
+                    HostFunction(arg.module, arg.name, importFunctionType(core.module, arg.module, arg.name), intrinsicHandle(def.name)),
                 )
                 is CoreDef.InstanceFlags -> builder.addGlobal(
                     ImportGlobal(arg.module, arg.name, instanceFlags.getOrPut(def.index) {
@@ -559,8 +690,24 @@ internal class ChicoryComponentInstance(
         is CoreDef.InstanceFlags -> error("Instance flags are not callable")
         is CoreDef.TaskMayBlock -> error("The task-may-block flag is not callable")
         is CoreDef.Intrinsic -> {
-            val handle = async.intrinsic(def.name)
+            val handle = intrinsicHandle(def.name)
             ExportFunction { args -> handle.apply(null, *args) }
+        }
+    }
+
+    private fun intrinsicHandle(name: String): com.dylibso.chicory.runtime.WasmFunctionHandle {
+        val slot = name.last() - '0'
+        return when {
+            name.startsWith("context-get") -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, _ ->
+                longArrayOf(unsigned(async.contextGet(slot)))
+            }
+            name.startsWith("context-set") -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
+                async.contextSet(slot, args[0].toInt())
+                null
+            }
+            else -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, _ ->
+                throw UnsupportedOperationException("Intrinsic '$name' is not supported by the Chicory backend")
+            }
         }
     }
 
@@ -571,11 +718,11 @@ internal class ChicoryComponentInstance(
             is Trampoline.LowerImport -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 checkMayLeave("host import '${plan.imports.getValue(t.import).dispatchKey}'")
                 when {
-                    plan.options.getValue(t.options).async -> async.callHostAsync(t, args)
+                    plan.options.getValue(t.options).async -> async.callHostAsync(t.import, t.type, t.options, args)
                     plan.usesAsync -> {
                         // An `async func` the host implements as a suspending function (ADR-0019).
                         var results: LongArray? = null
-                        if (async.callHostSync(t) { fn -> results = callHost(t, args, fn) }) results else callHost(t, args)
+                        if (async.callHostSync(t.import, t.type) { fn -> results = callHost(t, args, fn) }) results else callHost(t, args)
                     }
                     else -> callHost(t, args)
                 }
@@ -584,7 +731,37 @@ internal class ChicoryComponentInstance(
                 checkMayLeave("resource.new")
                 longArrayOf(table(t.table).insert(args[0].toInt()).toLong())
             }
-            is Trampoline.Async -> async.trampoline(t)
+            is Trampoline.Async -> {
+                val spec = AsyncTrampolineSpec(
+                    kind = t.kind,
+                    instance = t.instance,
+                    table = t.table,
+                    options = t.options,
+                    async = t.async,
+                    cancellable = t.cancellable,
+                    results = t.results,
+                    resultsIndex = t.resultsIndex,
+                    memory = t.memory,
+                    callback = t.callback,
+                    postReturn = t.postReturn,
+                )
+                val needsCoreInstance = t.kind == "sync-start-call" || t.kind == "async-start-call"
+                com.dylibso.chicory.runtime.WasmFunctionHandle { instance, args ->
+                    val core = if (needsCoreInstance && instance != null) {
+                        AsyncCoreInstance { fn, a -> instance.getMachine().call(fn, a) ?: CanonicalAbi.EMPTY_LONG_ARRAY }
+                    } else {
+                        null
+                    }
+                    try {
+                        async.invokeTrampoline(spec, core, args)
+                    } catch (e: UnsupportedAsyncIntrinsicException) {
+                        throw UnsupportedOperationException(
+                            "Component intrinsic not supported by the Chicory backend: ${t.kind}",
+                            e,
+                        )
+                    }
+                }
+            }
             is Trampoline.ResourceRep -> com.dylibso.chicory.runtime.WasmFunctionHandle { _, args ->
                 longArrayOf(table(t.table).rep(args[0].toInt()).toLong())
             }
@@ -710,7 +887,7 @@ internal class ChicoryComponentInstance(
 
     internal enum class Direction { HOST_TO_GUEST, GUEST_TO_HOST }
 
-    internal fun context(opts: CanonOptions, direction: Direction, borrowScope: (() -> Task)? = null) = Context(opts, direction, borrowScope)
+    internal fun context(opts: CanonOptions, direction: Direction, borrowScope: (() -> BorrowScope)? = null) = Context(opts, direction, borrowScope)
 
     /**
      * Lifting and lowering at the host boundary. [borrowScope] is the task borrows of host resources
@@ -720,10 +897,10 @@ internal class ChicoryComponentInstance(
     internal inner class Context(
         private val opts: CanonOptions,
         private val direction: Direction,
-        private val borrowScope: (() -> Task)? = null,
+        private val borrowScope: (() -> BorrowScope)? = null,
         private var cachedMemory: CanonicalMemory? = null,
         private var cachedRealloc: ExportFunction? = null,
-    ) : AbiContext {
+    ) : AsyncAbiContext {
         override val memory: CanonicalMemory
             get() = cachedMemory ?: opts.memory?.let { canonicalMemories.getValue(it) }?.also { cachedMemory = it }
                 ?: throw IllegalStateException("This function needs linear memory but its canonical options declare none")
@@ -753,14 +930,14 @@ internal class ChicoryComponentInstance(
             list += action
         }
 
-        private fun insert(table: Int, rep: Int, own: Boolean, scope: Task? = null): Int =
+        private fun insert(table: Int, rep: Int, own: Boolean, scope: BorrowScope? = null): Int =
             table(table).insert(rep, own, scope).also {
                 val list = inserted ?: ArrayList<Pair<Int, Int>>(2).also { inserted = it }
                 list += table to it
             }
 
         /** Lowering the arguments failed: take back the handles already added for them. */
-        fun rollbackLowering() {
+        override fun rollbackLowering() {
             rollbackActions?.let { list ->
                 for (action in list.asReversed()) action()
                 list.clear()
@@ -775,7 +952,7 @@ internal class ChicoryComponentInstance(
         }
 
         /** The spec's `trap_if(num_borrows != 0)` when a call returns: the callee must drop borrows it received. */
-        fun checkBorrowsDropped() {
+        override fun checkBorrowsDropped() {
             borrowsIn?.let { list ->
                 for ((t, h, slot) in list) {
                     if (table(t).slotOrNull(h) === slot) poison("Borrowed resource handle $h was not dropped before the call returned")
@@ -790,7 +967,7 @@ internal class ChicoryComponentInstance(
             return guest { withoutLeaving { f.apply(0, 0, align.toLong(), size.toLong())[0].toInt() } }
         }
 
-        fun commitMoves() {
+        override fun commitMoves() {
             moves?.let { set ->
                 for (id in set) hostHandles.remove(id)
                 set.clear()
@@ -799,7 +976,7 @@ internal class ChicoryComponentInstance(
             rollbackActions?.clear()
         }
 
-        fun releaseLends() {
+        override fun releaseLends() {
             lent?.let { list ->
                 for (h in list) h.lends--
                 list.clear()

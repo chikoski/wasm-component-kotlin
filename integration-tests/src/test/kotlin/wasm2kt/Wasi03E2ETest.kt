@@ -7,7 +7,10 @@ import wasm2kt.cli.GenerateCommand
 import wasm2kt.runtime.ComponentBackendFactory
 import wasm2kt.runtime.chicory.ChicoryComponent
 import wasm2kt.tooling.Decomposer
+import wasm2kt.tooling.aot.AotComponentCodegen
+import wasm2kt.tooling.aot.AotComponentCompiler
 import wasm2kt.wasi.WasiExitException
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -17,9 +20,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * End-to-end test (#98): a component importing WASI 0.3 interfaces (`random`, `clocks`,
- * `environment`, `stdin`, `stdout`, `exit`) has bindings generated against `:runtime-wasi` via its
- * classpath [wasm2kt.generator.InterfaceManifest] and runs on Chicory with `Linker.addWasi03`.
+ * End-to-end test (#98, #188): a component importing WASI 0.3 interfaces (`random`, `clocks`,
+ * `environment`, `stdin`, `stdout`, `exit`, `filesystem`) has bindings generated against
+ * `:runtime-wasi` via its classpath [wasm2kt.generator.InterfaceManifest] and runs on both
+ * Chicory and the AOT backend with `Linker.addWasi03` / `wasi03Imports`.
  */
 class Wasi03E2ETest {
     private val wasmToolsBin: String = System.getenv("WASM_TOOLS_BIN")?.takeIf { it.isNotBlank() }
@@ -279,6 +283,44 @@ class Wasi03E2ETest {
         }
     }
 
+    private fun compileAotFactory(
+        tempDir: Path,
+        decomposedDir: Path,
+        componentName: String,
+        pkg: String,
+    ): Pair<ComponentBackendFactory, java.net.URLClassLoader> {
+        val aotWork = tempDir.resolve("aot-$componentName")
+        val aotClasses = aotWork.resolve("classes")
+        val aotResources = aotWork.resolve("resources")
+        val aotKotlin = aotWork.resolve("kotlin")
+        val aotCompiled = aotWork.resolve("compiled")
+        Files.createDirectories(aotCompiled)
+        val compiled = AotComponentCompiler.compile(
+            decomposedDir = decomposedDir,
+            classesDir = aotClasses,
+            resourcesDir = aotResources,
+            packageName = "$pkg.wasm2kt.${componentName.replace('-', '_')}",
+        )
+        AotComponentCodegen.generateComponentOnly(aotKotlin, componentName, pkg, compiled)
+        val sources = Files.walk(aotKotlin).use { s -> s.filter { it.toString().endsWith(".kt") }.map { it.toString() }.toList() }
+        val cp = listOf(System.getProperty("java.class.path"), aotClasses.toString()).joinToString(File.pathSeparator)
+        val exitCode = org.jetbrains.kotlin.cli.jvm.K2JVMCompiler().exec(
+            System.err,
+            "-Xcontext-parameters", "-jvm-target", "21", "-no-stdlib",
+            "-classpath", cp,
+            "-d", aotCompiled.toString(),
+            *sources.toTypedArray(),
+        )
+        assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exitCode, "AOT component wiring for $componentName must compile")
+        val loader = java.net.URLClassLoader(
+            arrayOf(aotCompiled.toUri().toURL(), aotClasses.toUri().toURL(), aotResources.toUri().toURL()),
+            javaClass.classLoader,
+        )
+        val objectName = wasm2kt.tooling.ComponentCodegen.componentObjectName(componentName)
+        val factory = loader.loadClass("$pkg.$objectName").getField("INSTANCE").get(null) as ComponentBackendFactory
+        return factory to loader
+    }
+
     @Test
     fun `WASI 0_3 component runs end-to-end on Chicory using runtime-wasi`(@TempDir tempDir: Path) {
         val watFile = tempDir.resolve("wasi-app.wat")
@@ -351,19 +393,28 @@ class Wasi03E2ETest {
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exitCode, "Generated WASI app bindings + harness must compile")
 
         val backendFactory = ChicoryComponent.fromDirectory(decomposedDir)
-        val loader = java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader)
-        val harnessClass = loader.loadClass("$pkg.HarnessKt")
+        val (aotFactory, aotLoader) = compileAotFactory(tempDir, decomposedDir, "wasi-app", pkg)
+        aotLoader.use {
+            java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader).use { loader ->
+                val harnessClass = loader.loadClass("$pkg.HarnessKt")
+                val runMethod = harnessClass.getDeclaredMethod("runChecksOnChicory", ComponentBackendFactory::class.java, String::class.java)
+                val exitMethod = harnessClass.getDeclaredMethod("runExitOnChicory", ComponentBackendFactory::class.java, Int::class.javaPrimitiveType)
 
-        val runMethod = harnessClass.getDeclaredMethod("runChecksOnChicory", ComponentBackendFactory::class.java, String::class.java)
-        val stdout = runMethod.invoke(null, backendFactory, "hello wasi") as String
-        assertEquals("hello wasi!", stdout)
+                for ((label, factory, stdinText) in listOf(
+                    Triple("Chicory", backendFactory, "hello wasi"),
+                    Triple("AOT", aotFactory, "hello aot"),
+                )) {
+                    val stdout = runMethod.invoke(null, factory, stdinText) as String
+                    assertEquals("$stdinText!", stdout, "Unexpected stdout on $label")
 
-        val exitMethod = harnessClass.getDeclaredMethod("runExitOnChicory", ComponentBackendFactory::class.java, Int::class.javaPrimitiveType)
-        val thrown = assertFailsWith<java.lang.reflect.InvocationTargetException> {
-            exitMethod.invoke(null, backendFactory, 42)
-        }.cause
-        assertTrue(thrown is WasiExitException, "Expected WasiExitException, got $thrown")
-        assertEquals(42, thrown.statusCode)
+                    val thrown = assertFailsWith<java.lang.reflect.InvocationTargetException> {
+                        exitMethod.invoke(null, factory, 42)
+                    }.cause
+                    assertTrue(thrown is WasiExitException, "Expected WasiExitException on $label, got $thrown")
+                    assertEquals(42, thrown.statusCode)
+                }
+            }
+        }
     }
 
     @Test
@@ -712,13 +763,22 @@ class Wasi03E2ETest {
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exitCode, "Generated WASI fs bindings + harness must compile")
 
         val backendFactory = ChicoryComponent.fromDirectory(decomposedDir)
-        val loader = java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader)
-        val harnessClass = loader.loadClass("$pkg.FsHarnessKt")
-        val runMethod = harnessClass.getDeclaredMethod("runFsOnChicory", ComponentBackendFactory::class.java, Path::class.java)
-        val writtenLen = runMethod.invoke(null, backendFactory, workDir) as Int
+        val (aotFactory, aotLoader) = compileAotFactory(tempDir, decomposedDir, "wasi-fs", pkg)
+        aotLoader.use {
+            java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader).use { loader ->
+                val harnessClass = loader.loadClass("$pkg.FsHarnessKt")
+                val runMethod = harnessClass.getDeclaredMethod("runFsOnChicory", ComponentBackendFactory::class.java, Path::class.java)
 
-        assertEquals("hello fs!".length, writtenLen)
-        assertEquals("hello fs!", Files.readString(workDir.resolve("output.txt")))
+                val writtenLen = runMethod.invoke(null, backendFactory, workDir) as Int
+                assertEquals("hello fs!".length, writtenLen)
+                assertEquals("hello fs!", Files.readString(workDir.resolve("output.txt")))
+
+                Files.writeString(workDir.resolve("input.txt"), "hello aot fs")
+                val aotWrittenLen = runMethod.invoke(null, aotFactory, workDir) as Int
+                assertEquals("hello aot fs!".length, aotWrittenLen)
+                assertEquals("hello aot fs!", Files.readString(workDir.resolve("output.txt")))
+            }
+        }
     }
 
     @Test
@@ -907,39 +967,48 @@ class Wasi03E2ETest {
         assertEquals(org.jetbrains.kotlin.cli.common.ExitCode.OK, exitCode, "Generated WASI fixture bindings + harness must compile")
 
         val backendFactory = ChicoryComponent.fromDirectory(decomposedDir)
-        val loader = java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader)
-        val harnessClass = loader.loadClass("$pkg.FixtureHarnessKt")
-        val runMethod = harnessClass.getDeclaredMethod("exerciseFixture", ComponentBackendFactory::class.java, Path::class.java)
-        val result = runMethod.invoke(null, backendFactory, workDir)
+        val (aotFactory, aotLoader) = compileAotFactory(tempDir, decomposedDir, "wasi-fixture", pkg)
+        aotLoader.use {
+            java.net.URLClassLoader(arrayOf(classesOut.toUri().toURL()), javaClass.classLoader).use { loader ->
+                val harnessClass = loader.loadClass("$pkg.FixtureHarnessKt")
+                val runMethod = harnessClass.getDeclaredMethod("exerciseFixture", ComponentBackendFactory::class.java, Path::class.java)
 
-        fun prop(name: String): Any? = result.javaClass.getMethod("get${name.replaceFirstChar { it.uppercase() }}").invoke(result)
+                for ((label, factory) in listOf("Chicory" to backendFactory, "AOT" to aotFactory)) {
+                    Files.deleteIfExists(workDir.resolve("output.txt"))
+                    val result = runMethod.invoke(null, factory, workDir)
 
-        val summary1 = prop("summary1") as String
-        val summary2 = prop("summary2") as String
-        assertTrue("mono=true;wall=true" in summary1, summary1)
-        assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-1;" in summary1, summary1)
-        assertTrue("fs=[mount=/work,read_ok=true,write_ok=true,data=hello fixture!]" in summary1, summary1)
-        assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-2;" in summary2, summary2)
-        assertEquals("out:session-1", prop("stdout1"))
-        assertEquals("out:session-2", prop("stdout2"))
-        assertEquals("hello fixture!", Files.readString(workDir.resolve("output.txt")))
+                    fun prop(name: String): Any? = result.javaClass.getMethod("get${name.replaceFirstChar { it.uppercase() }}").invoke(result)
 
-        assertEquals(6, prop("auditInstancesCreated"))
-        assertEquals(
-            listOf("1:start", "1:done", "2:start", "2:done", "3:start", "3:done", "5:start", "5:done"),
-            prop("allSteps"),
-        )
+                    val summary1 = prop("summary1") as String
+                    val summary2 = prop("summary2") as String
+                    assertTrue("mono=true;wall=true" in summary1, "[$label] $summary1")
+                    assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-1;" in summary1, "[$label] $summary1")
+                    assertTrue("fs=[mount=/work,read_ok=true,write_ok=true,data=hello fixture!]" in summary1, "[$label] $summary1")
+                    assertTrue("args=wasi-app,--mode=test;env=WASI_ENV=ok;stdin_ok=true;stdout_ok=true;stdin=session-2;" in summary2, "[$label] $summary2")
+                    assertEquals("out:session-1", prop("stdout1"), "[$label] stdout1")
+                    assertEquals("out:session-2", prop("stdout2"), "[$label] stdout2")
+                    assertEquals("hello fixture!", Files.readString(workDir.resolve("output.txt")), "[$label] output.txt")
 
-        val overriddenSummary = prop("overriddenSummary") as String
-        assertTrue(overriddenSummary.startsWith("rand=777777;"), overriddenSummary)
-        assertTrue("fs=[none]" in overriddenSummary, overriddenSummary)
+                    assertEquals(6, prop("auditInstancesCreated"), "[$label]")
+                    assertEquals(
+                        listOf("1:start", "1:done", "2:start", "2:done", "3:start", "3:done", "5:start", "5:done"),
+                        prop("allSteps"),
+                        "[$label]",
+                    )
 
-        val missingRandomError = prop("missingRandomError") as String
-        assertTrue("wasi:random/random@0.3.0" in missingRandomError, missingRandomError)
+                    val overriddenSummary = prop("overriddenSummary") as String
+                    assertTrue(overriddenSummary.startsWith("rand=777777;"), "[$label] $overriddenSummary")
+                    assertTrue("fs=[none]" in overriddenSummary, "[$label] $overriddenSummary")
 
-        val toggledSummary = prop("toggledSummary") as String
-        assertTrue(toggledSummary.startsWith("rand=777777;"), toggledSummary)
+                    val missingRandomError = prop("missingRandomError") as String
+                    assertTrue("wasi:random/random@0.3.0" in missingRandomError, "[$label] $missingRandomError")
 
-        assertEquals(9, prop("exitCode"))
+                    val toggledSummary = prop("toggledSummary") as String
+                    assertTrue(toggledSummary.startsWith("rand=777777;"), "[$label] $toggledSummary")
+
+                    assertEquals(9, prop("exitCode"), "[$label]")
+                }
+            }
+        }
     }
 }

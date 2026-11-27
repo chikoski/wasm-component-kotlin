@@ -34,8 +34,8 @@ import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.io.path.name
 
 /**
- * Component Model reference tests (`conformance/component-model/test/`) running on the Phase 1
- * AOT static component wiring backend (`values/` and `resources/`).
+ * Component Model reference tests (`conformance/component-model/test/`) running on the AOT
+ * static component wiring backend (`values/`, `resources/`, and `async/`).
  *
  * Each `.wast` file compiles all of its non-invalid components in a single batched `K2JVMCompiler`
  * invocation for fast execution, then executes all `.wast` commands in file order.
@@ -54,7 +54,7 @@ class AotConformanceTest {
         ?: Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools").takeIf { Files.isExecutable(it) }?.toString()
         ?: "wasm-tools"
 
-    private val directories = listOf("values", "resources")
+    private val directories = listOf("values", "resources", "async")
 
     private val skips: Map<String, String> = buildMap {
         Files.readAllLines(suite.resolve("nyi.txt")).map { it.trim() }.filter { it.startsWith("./") }

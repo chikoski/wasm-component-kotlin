@@ -782,4 +782,71 @@ class AotCoreCompilerTest {
         }
         return out.toByteArray()
     }
+
+    @Test
+    fun `emitRawCallDispatch implements RawCallableCoreModule for imported and defined functions including floats and multi-value`() {
+        val funcImp = strBytes("host") + strBytes("inc") + listOf(0x00) + uleb(0)
+        val mod = wasmModule(
+            1 to typeSection(
+                funcType(listOf(I32), listOf(I32)),           // type 0: imported i32->i32
+                funcType(listOf(F32, F64), listOf(F64)),      // type 1: float/double arithmetic
+                funcType(emptyList(), emptyList()),           // type 2: void
+                funcType(listOf(I32), listOf(I32, I64)),      // type 3: multi-value
+            ),
+            2 to importSection(funcImp),
+            3 to funcSection(1, 2, 3),
+            10 to codeSection(
+                // func 1 (def 0): f32.promote_f64 + f64
+                codeBody(emptyList(), listOf(0x20, 0x00, 0xBB, 0x20, 0x01, 0xA0)),
+                // func 2 (def 1): nop void
+                codeBody(emptyList(), listOf(0x01)),
+                // func 3 (def 2): (x) -> (call $inc(x), i64.extend_i32_s(x) * 2)
+                codeBody(
+                    emptyList(),
+                    listOf(0x20, 0x00, 0x10, 0x00, 0x20, 0x00, 0xAC, 0x42, 0x02, 0x7E),
+                ),
+            ),
+        )
+        val ir = ChicoryWasmAdapter.convert(mod, moduleIndex = 0)
+
+        // Default options do not implement RawCallableCoreModule.
+        val defaultCompiled = AotCoreCompiler.compile(ir, "wasm2kt.test.noraw", "Core0")
+        val defaultLoader = CompiledModuleLoader(defaultCompiled)
+        val defaultImportsIface = defaultLoader.loadClass("wasm2kt.test.noraw.Core0Instance\$Imports")
+        val noopProxy = java.lang.reflect.Proxy.newProxyInstance(defaultLoader, arrayOf(defaultImportsIface)) { _, _, args ->
+            (args!![0] as Int) + 1
+        }
+        val defaultInst = defaultLoader.instantiate(noopProxy, arrayOf(FuncRef.host("(I)I", HostTrampoline { a -> longArrayOf(a[0] + 1) })))
+        assertTrue(defaultInst !is wasm2kt.runtime.aot.RawCallableCoreModule)
+
+        // emitRawCallDispatch = true implements RawCallableCoreModule and dispatches all function indices.
+        val rawCompiled = AotCoreCompiler.compile(
+            ir,
+            "wasm2kt.test.raw",
+            "Core0",
+            options = AotCompileOptions(emitRawCallDispatch = true),
+        )
+        AotCoreCompiler.verifyAll(rawCompiled)
+        val rawLoader = CompiledModuleLoader(rawCompiled)
+        val rawImportsIface = rawLoader.loadClass("wasm2kt.test.raw.Core0Instance\$Imports")
+        val incProxy = java.lang.reflect.Proxy.newProxyInstance(rawLoader, arrayOf(rawImportsIface)) { _, _, args ->
+            (args!![0] as Int) + 10
+        }
+        val rawInst = rawLoader.instantiate(incProxy, arrayOf(FuncRef.host("(I)I", HostTrampoline { a -> longArrayOf(a[0] + 10) })))
+        val rawCallable = rawInst as wasm2kt.runtime.aot.RawCallableCoreModule
+
+        // func 0: imported i32 -> i32
+        assertEquals(listOf(15L), rawCallable.invokeRaw(0, longArrayOf(5L))!!.toList())
+        // func 1: (f32, f64) -> f64
+        val f32Bits = java.lang.Float.floatToRawIntBits(1.5f).toLong()
+        val f64Bits = java.lang.Double.doubleToRawLongBits(2.25)
+        val resF64 = java.lang.Double.longBitsToDouble(rawCallable.invokeRaw(1, longArrayOf(f32Bits, f64Bits))!!.single())
+        assertEquals(3.75, resF64)
+        // func 2: void
+        assertEquals(null, rawCallable.invokeRaw(2, LongArray(0)))
+        // func 3: multi-value (i32, i64)
+        assertEquals(listOf(17L, 14L), rawCallable.invokeRaw(3, longArrayOf(7L))!!.toList())
+        // Out of bounds index traps
+        assertThrows<ComponentTrapException> { rawCallable.invokeRaw(99, LongArray(0)) }
+    }
 }

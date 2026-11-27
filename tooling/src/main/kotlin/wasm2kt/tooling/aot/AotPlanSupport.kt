@@ -346,9 +346,28 @@ internal class AotPlanEmissionHelper(
     ) {
         when (def) {
             is BuildCoreDef.Export -> emitExportDefCall(out, def, paramExprs, returnStyle)
-            is BuildCoreDef.Trampoline -> emitTrampolineDefCall(out, def.index, paramExprs, paramTypes, resultTypes, rawArgsVar, returnStyle)
+            is BuildCoreDef.Trampoline -> emitTrampolineDefCall(
+                out,
+                def.index,
+                paramExprs,
+                paramTypes,
+                resultTypes,
+                rawArgsVar,
+                returnStyle,
+            )
             is BuildCoreDef.Intrinsic -> {
-                out.addStatement("rt.unsupportedTrampoline(%S)", "intrinsic ${def.name}")
+                when {
+                    def.name.startsWith("context-get-i32-") -> {
+                        val slot = def.name.last() - '0'
+                        emitIntToReturn(out, CodeBlock.of("rt.contextGet(%L)", slot), returnStyle)
+                    }
+                    def.name.startsWith("context-set-i32-") -> {
+                        val slot = def.name.last() - '0'
+                        out.add("rt.contextSet(%L, ", slot).add(paramExprs[0]).add(")\n")
+                        if (returnStyle.kind == ReturnKind.LONG_ARRAY) out.addStatement("null")
+                    }
+                    else -> out.addStatement("rt.unsupportedTrampoline(%S)", "intrinsic ${def.name}")
+                }
             }
             is BuildCoreDef.InstanceFlags,
             is BuildCoreDef.TaskMayBlock,
@@ -493,34 +512,44 @@ internal class AotPlanEmissionHelper(
                 out.addStatement("rt.unsupportedTrampoline(%S)", tr.detail)
             }
             is BuildTrampoline.Async -> {
-                when (tr.kind) {
-                    "enter-sync-call" -> {
-                        out.addStatement("rt.enterSyncCall()")
-                        if (returnStyle.kind == ReturnKind.LONG_ARRAY) out.addStatement("null")
+                if (plan.usesAsync) {
+                    val argsExpr = coreArgsLongArrayExpr(paramExprs, paramTypes, rawArgsVar, packFuncRef = true)
+                    val callCode = CodeBlock.builder()
+                        .add("rt.callAsyncTrampoline(%L, ", trampolineIndex)
+                        .add(argsExpr)
+                        .add(")")
+                        .build()
+                    emitLongArrayToReturn(out, callCode, resultTypes, returnStyle)
+                } else {
+                    when (tr.kind) {
+                        "enter-sync-call" -> {
+                            out.addStatement("rt.enterSyncCall()")
+                            if (returnStyle.kind == ReturnKind.LONG_ARRAY) out.addStatement("null")
+                        }
+                        "exit-sync-call" -> {
+                            out.addStatement("rt.exitSyncCall()")
+                            if (returnStyle.kind == ReturnKind.LONG_ARRAY) out.addStatement("null")
+                        }
+                        "resource-transfer-own" -> {
+                            val callCode = CodeBlock.builder()
+                                .add("rt.resourceTransferOwn(")
+                                .add(paramExprs[0]).add(", ")
+                                .add(paramExprs[1]).add(", ")
+                                .add(paramExprs[2]).add(")")
+                                .build()
+                            emitIntToReturn(out, callCode, returnStyle)
+                        }
+                        "resource-transfer-borrow" -> {
+                            val callCode = CodeBlock.builder()
+                                .add("rt.resourceTransferBorrow(")
+                                .add(paramExprs[0]).add(", ")
+                                .add(paramExprs[1]).add(", ")
+                                .add(paramExprs[2]).add(")")
+                                .build()
+                            emitIntToReturn(out, callCode, returnStyle)
+                        }
+                        else -> out.addStatement("rt.unsupportedTrampoline(%S)", tr.kind)
                     }
-                    "exit-sync-call" -> {
-                        out.addStatement("rt.exitSyncCall()")
-                        if (returnStyle.kind == ReturnKind.LONG_ARRAY) out.addStatement("null")
-                    }
-                    "resource-transfer-own" -> {
-                        val callCode = CodeBlock.builder()
-                            .add("rt.resourceTransferOwn(")
-                            .add(paramExprs[0]).add(", ")
-                            .add(paramExprs[1]).add(", ")
-                            .add(paramExprs[2]).add(")")
-                            .build()
-                        emitIntToReturn(out, callCode, returnStyle)
-                    }
-                    "resource-transfer-borrow" -> {
-                        val callCode = CodeBlock.builder()
-                            .add("rt.resourceTransferBorrow(")
-                            .add(paramExprs[0]).add(", ")
-                            .add(paramExprs[1]).add(", ")
-                            .add(paramExprs[2]).add(")")
-                            .build()
-                        emitIntToReturn(out, callCode, returnStyle)
-                    }
-                    else -> out.addStatement("rt.unsupportedTrampoline(%S)", tr.kind)
                 }
             }
         }
@@ -530,6 +559,7 @@ internal class AotPlanEmissionHelper(
         paramExprs: List<CodeBlock>,
         paramTypes: List<IrValType>,
         rawArgsVar: String?,
+        packFuncRef: Boolean = false,
     ): CodeBlock {
         if (paramTypes.isEmpty()) return CodeBlock.of("%T.EMPTY_LONG_ARRAY", CanonicalAbi::class)
         if (rawArgsVar != null) return CodeBlock.of("%L", rawArgsVar)
@@ -537,7 +567,7 @@ internal class AotPlanEmissionHelper(
         b.add("longArrayOf(")
         paramTypes.forEachIndexed { i, vt ->
             if (i > 0) b.add(", ")
-            b.add(packToLong(paramExprs[i], vt))
+            b.add(packToLong(paramExprs[i], vt, packFuncRef))
         }
         b.add(")")
         return b.build()
@@ -601,24 +631,30 @@ internal class AotPlanEmissionHelper(
     fun defCoreParamTypes(def: BuildCoreDef): List<IrValType> = when (def) {
         is BuildCoreDef.Export -> funcExport(def.ref).target.funcType.params
         is BuildCoreDef.Trampoline -> trampolineParamTypes(def.index)
+        is BuildCoreDef.Intrinsic -> if (def.name.startsWith("context-set-i32-")) listOf(IrValType.I32) else emptyList()
         else -> emptyList()
     }
 
     fun defCoreResultTypes(def: BuildCoreDef): List<IrValType> = when (def) {
         is BuildCoreDef.Export -> funcExport(def.ref).target.funcType.results
         is BuildCoreDef.Trampoline -> trampolineResultTypes(def.index)
+        is BuildCoreDef.Intrinsic -> if (def.name.startsWith("context-get-i32-")) listOf(IrValType.I32) else emptyList()
         else -> emptyList()
     }
 
     fun trampolineParamTypes(trampolineIndex: Int): List<IrValType> =
         when (val tr = plan.trampolines.getValue(trampolineIndex)) {
             is BuildTrampoline.LowerImport -> {
-                val flatParams = if (tr.type.flatParamCount > CanonicalAbi.MAX_FLAT_PARAMS) {
+                val asyncLift = plan.options[tr.options]?.async == true
+                val maxFlat = if (asyncLift) CanonicalAbi.MAX_FLAT_ASYNC_PARAMS else CanonicalAbi.MAX_FLAT_PARAMS
+                val flatParams = if (tr.type.flatParamCount > maxFlat) {
                     listOf(IrValType.I32)
                 } else {
                     tr.type.paramTypes.flatMap { it.flat }.map(::coreTypeToIrValType)
                 }
-                if (tr.type.flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
+                if (asyncLift) {
+                    if (tr.type.results.isNotEmpty()) flatParams + IrValType.I32 else flatParams
+                } else if (tr.type.flatResultCount > CanonicalAbi.MAX_FLAT_RESULTS) {
                     flatParams + IrValType.I32
                 } else {
                     flatParams
@@ -648,6 +684,7 @@ internal class AotPlanEmissionHelper(
 
     fun trampolineResultTypes(trampolineIndex: Int): List<IrValType> =
         when (val tr = plan.trampolines.getValue(trampolineIndex)) {
+            is BuildTrampoline.LowerImport -> if (plan.options[tr.options]?.async == true) listOf(IrValType.I32) else emptyList()
             is BuildTrampoline.ResourceNew -> listOf(IrValType.I32)
             is BuildTrampoline.ResourceRep -> listOf(IrValType.I32)
             is BuildTrampoline.Async -> when (tr.kind) {
@@ -679,14 +716,18 @@ internal class AotPlanEmissionHelper(
         )
     }
 
-    fun packToLong(expr: CodeBlock, vt: IrValType): CodeBlock = when (vt) {
+    fun packToLong(expr: CodeBlock, vt: IrValType, packFuncRef: Boolean = false): CodeBlock = when (vt) {
         IrValType.I32 -> CodeBlock.builder().add("(").add(expr).add(").toLong()").build()
         IrValType.I64 -> expr
         IrValType.F32 -> CodeBlock.builder().add("java.lang.Float.floatToRawIntBits(").add(expr).add(").toLong()").build()
         IrValType.F64 -> CodeBlock.builder().add("java.lang.Double.doubleToRawLongBits(").add(expr).add(")").build()
-        IrValType.FUNCREF -> CodeBlock.builder()
-            .add("if (").add(expr).add(" == null) 0L else throw %T(%S)", UnsupportedOperationException::class, "Cannot marshal non-null funcref across LongArray boundary")
-            .build()
+        IrValType.FUNCREF -> if (packFuncRef) {
+            CodeBlock.builder().add("rt.packFuncRef(").add(expr).add(")").build()
+        } else {
+            CodeBlock.builder()
+                .add("if (").add(expr).add(" == null) 0L else throw %T(%S)", UnsupportedOperationException::class, "Cannot marshal non-null funcref across LongArray boundary")
+                .build()
+        }
         IrValType.EXTERNREF -> CodeBlock.builder()
             .add("if (").add(expr).add(" == null) 0L else throw %T(%S)", UnsupportedOperationException::class, "Cannot marshal non-null externref across LongArray boundary")
             .build()
@@ -797,6 +838,8 @@ internal class SpillSlotCounter {
 internal class FuncTypePool {
     private val indexByKey = LinkedHashMap<String, Int>()
     private val entries = ArrayList<FuncType>()
+    private val standaloneTypes = ArrayList<WitType>()
+    private var resolvedHelpers: Map<String, String> = emptyMap()
 
     fun intern(type: FuncType): Int {
         val key = funcTypeKey(type)
@@ -807,10 +850,16 @@ internal class FuncTypePool {
         }
     }
 
+    fun registerType(wt: WitType) {
+        standaloneTypes.add(wt)
+    }
+
+    fun witTypeCode(t: WitType): CodeBlock = emitWitTypeExpr(t, resolvedHelpers, allowHelperForRoot = true)
+
     fun emitInto(type: TypeSpec.Builder) {
         val funcTypeClass = FuncType::class.asClassName()
         val arrayType = ClassName("kotlin", "Array").parameterizedBy(funcTypeClass)
-        if (entries.isEmpty()) {
+        if (entries.isEmpty() && standaloneTypes.isEmpty()) {
             type.addProperty(
                 PropertySpec.builder("FUNC_TYPES", arrayType, KModifier.PRIVATE)
                     .initializer("emptyArray()")
@@ -843,6 +892,9 @@ internal class FuncTypePool {
             ft.params.forEach { countType(it.second) }
             ft.results.forEach { countType(it) }
         }
+        for (wt in standaloneTypes) {
+            countType(wt)
+        }
 
         val helperNameByKey = LinkedHashMap<String, String>()
         var nextHelper = 0
@@ -851,6 +903,7 @@ internal class FuncTypePool {
                 helperNameByKey[k] = "wt_${nextHelper++}"
             }
         }
+        resolvedHelpers = helperNameByKey
 
         for (k in order) {
             val hName = helperNameByKey[k] ?: continue

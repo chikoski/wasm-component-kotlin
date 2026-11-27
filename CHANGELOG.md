@@ -49,6 +49,7 @@
 
 ### 主な追加・改善
 
+* 自作 AOT バックエンドの Component Model Async および WASI 0.3 対応
 * World DSL と自作 AOT バックエンドの静的 Canonical ABI 直結
 * Gradle プラグインの AOT バックエンド切替と R8・ART 比較の追加
 * `plan.json` からの静的コンポーネント配線生成と `ComponentBackend` 互換層の実装
@@ -63,6 +64,8 @@
 * ART における文字列と境界呼び出しの最適化
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#188](https://github.com/chikoski/wasm-component-kotlin/issues/188) の Phase 3 実装に対応し、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づく自作 `AOT` バックエンドで Component Model Async と WASI 0.3 を実行できるようにしました。`AsyncAbi` と `Concurrency` は Chicory 非依存の `AsyncBackendHost` インタフェースを介して `:runtime-canonical` へ統合し、`:runtime-chicory` と `:runtime-aot` の双方から共通利用しています。非同期コンポーネントの `<Name>Component` は `ComponentBackend` 互換配線と `RawCallableCoreModule` 経由で `AsyncAbi` へ接続され、WASI 0.3 も追加設定や警告なしで動作します。同期コンポーネントに対する Phase 2 の静的直接結合と R8 による `WitWriter`・`AsyncAbi`・`StackSwitching` の除去経路はそのまま維持しました。
 
 [#187](https://github.com/chikoski/wasm-component-kotlin/issues/187) に対応し、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) の Phase 2 として、生成される World DSL と静的コンパイル済み AOT バックエンドを直接結ぶ静的 Canonical ABI 配線を実装しました。`:runtime-canonical` にはワイヤ層へ依存しない `DirectCanonicalAbi` を分離し、`@InternalWasm2KtApi` の内部トップレベル関数群である `trap`、`unsigned`、`checkRange`、`Utf8` を `CanonicalAbiKt` から `DirectCanonicalAbiKt` へ移しました。`:runtime-aot` には `AotComponentFactory`、`AotComponentRuntime`、および `with` 指定済み外部ライブラリ向けの隔離ブリッジ `AotMappedImportBridge` を追加しています。`:generator` と `DirectAotComponentEmitter` により、生成済み `Session` の内部メソッドから `CoreNInstance` の関数と `LinearMemory` を直接呼び出すコードを生成し、`WitWriter`、`WitReader`、および `ComponentBackend.invoke` の往復を省きました。あわせて `openSession`、`withSession`、および `withSessionBlocking` が `AotComponentFactory` のみを受け取る署名となり、Android Release ビルド時に R8 で未使用エクスポートとワイヤ層クラス群を除去できます。非同期コンポーネントの対応は後続の `#188` へ残しています。
 

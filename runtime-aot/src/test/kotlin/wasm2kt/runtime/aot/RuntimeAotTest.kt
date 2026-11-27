@@ -10,6 +10,8 @@ import wasm2kt.runtime.HostFunction as WitHostFunction
 import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitWriter
 import wasm2kt.runtime.canonical.AbiContext
+import wasm2kt.runtime.canonical.AsyncTrampolineSpec
+import wasm2kt.runtime.canonical.CanonicalAbi
 import wasm2kt.runtime.canonical.CanonicalMemory
 import wasm2kt.runtime.canonical.ComponentGuard
 import wasm2kt.runtime.canonical.FuncType
@@ -663,5 +665,210 @@ class RuntimeAotTest {
             hostTable.close()
         }
         assertEquals(listOf("closed"), closed)
+    }
+
+    @Test
+    fun `AOT async backend enforces trap poison, leaves instance usable on host errors, and preserves host UOE`() {
+        val opts = AotCanonOptions(StringEncoding.UTF8, instance = 0, memoryIndex = null, async = false)
+        lateinit var rt: AotComponentBackend
+        val dispatcher = object : WitHostImportDispatcher {
+            override fun hostFunction(name: String): WitHostFunction? = when (name) {
+                "env#uoe" -> WitHostFunction { _, _ -> throw UnsupportedOperationException("custom host UOE") }
+                else -> null
+            }
+        }
+        rt = AotComponentBackend(
+            imports = dispatcher,
+            resourceTables = emptyArray(),
+            usesAsync = true,
+            importDescs = arrayOf(AotImportDesc(0, "env#uoe")),
+        ).apply {
+            registerOptions(0, opts)
+            registerAsyncTrampoline(0, AsyncTrampolineSpec(kind = "task-return", instance = 0, options = 0, results = listOf(WitType.S32), resultsIndex = 0))
+            registerAsyncTrampoline(1, AsyncTrampolineSpec(kind = "unknown-future-intrinsic"))
+            setExports(
+                arrayOf(
+                    AotExportDesc(
+                        instance = null,
+                        name = "echo-u32",
+                        type = FuncType(listOf("x" to WitType.U32), listOf(WitType.U32)),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction { a -> longArrayOf(a[0]) },
+                    ),
+                    AotExportDesc(
+                        instance = null,
+                        name = "call-host-uoe",
+                        type = FuncType(emptyList(), emptyList()),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction {
+                            rt.callHostAsyncAware(0, FuncType(emptyList(), emptyList()), 0, CanonicalAbi.EMPTY_LONG_ARRAY)
+                        },
+                    ),
+                    AotExportDesc(
+                        instance = null,
+                        name = "call-unsupported-intrinsic",
+                        type = FuncType(emptyList(), emptyList()),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction {
+                            rt.callAsyncTrampoline(1, CanonicalAbi.EMPTY_LONG_ARRAY)
+                        },
+                    ),
+                    AotExportDesc(
+                        instance = null,
+                        name = "trap-guest",
+                        type = FuncType(emptyList(), emptyList()),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction { AotTrapSupport.unreachable() },
+                    ),
+                ),
+            )
+        }
+
+        // Host error (trailing unread bytes) does NOT poison the async instance (ADR-0007).
+        assertThrows<IllegalArgumentException> {
+            rt.invoke(rt.resolve("echo-u32"), WitWriter().apply { int(11); int(22) }.toReader())
+        }
+        assertEquals(42, rt.invoke(rt.resolve("echo-u32"), WitWriter().apply { int(42) }.toReader()).int())
+
+        // Guest trap invokes onPoison -> async.abandon() and poisons subsequent calls.
+        assertThrows<ComponentTrapException> {
+            rt.invoke(rt.resolve("trap-guest"), WitWriter().toReader())
+        }
+        assertThrows<ComponentTrapException> { rt.resolve("echo-u32") }
+        rt.close()
+
+        // Host UOE inside an async-aware import keeps its original message (not relabeled as unsupported intrinsic).
+        val rtUoe = AotComponentBackend(
+            imports = dispatcher,
+            resourceTables = emptyArray(),
+            usesAsync = true,
+            importDescs = arrayOf(AotImportDesc(0, "env#uoe")),
+        ).apply {
+            registerOptions(0, opts)
+            setExports(
+                arrayOf(
+                    AotExportDesc(
+                        instance = null,
+                        name = "call-host-uoe",
+                        type = FuncType(emptyList(), emptyList()),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction {
+                            callHostAsyncAware(0, FuncType(emptyList(), emptyList()), 0, CanonicalAbi.EMPTY_LONG_ARRAY)
+                        },
+                    ),
+                ),
+            )
+        }
+        val hostUoe = assertThrows<UnsupportedOperationException> {
+            rtUoe.invoke(rtUoe.resolve("call-host-uoe"), WitWriter().toReader())
+        }
+        assertEquals("custom host UOE", hostUoe.message)
+        rtUoe.close()
+
+        // Unsupported async intrinsic still produces an UnsupportedOperationException naming the intrinsic.
+        val rtBadIntrinsic = AotComponentBackend(imports = null, resourceTables = emptyArray(), usesAsync = true).apply {
+            registerOptions(0, opts)
+            registerAsyncTrampoline(1, AsyncTrampolineSpec(kind = "unknown-future-intrinsic"))
+            setExports(
+                arrayOf(
+                    AotExportDesc(
+                        instance = null,
+                        name = "call-unsupported-intrinsic",
+                        type = FuncType(emptyList(), emptyList()),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction { callAsyncTrampoline(1, CanonicalAbi.EMPTY_LONG_ARRAY) },
+                    ),
+                ),
+            )
+        }
+        val badMsg = assertThrows<UnsupportedOperationException> {
+            rtBadIntrinsic.invoke(rtBadIntrinsic.resolve("call-unsupported-intrinsic"), WitWriter().toReader())
+        }.message!!
+        assertTrue("unknown-future-intrinsic" in badMsg, badMsg)
+        rtBadIntrinsic.close()
+    }
+
+    @Test
+    fun `packFuncRef encodes null as 0L and dispatches Host, RawCallableCoreModule, and CoreModuleInstance refs`() {
+        val opts = AotCanonOptions(StringEncoding.UTF8, instance = 0, memoryIndex = null, async = false)
+        lateinit var rt: AotComponentBackend
+        val rawModule = object : RawCallableCoreModule {
+            override fun invokeIndirect(funcIndex: Int, args: Array<Any?>): Array<Any?>? = null
+            override fun invokeRaw(funcIndex: Int, args: LongArray): LongArray? = when (funcIndex) {
+                10 -> longArrayOf(args[0] + 5L)
+                11 -> longArrayOf(args[0] * 2L)
+                else -> null
+            }
+        }
+        val indirectModule = object : CoreModuleInstance {
+            override fun invokeIndirect(funcIndex: Int, args: Array<Any?>): Array<Any?>? = when (funcIndex) {
+                20 -> {
+                    rt.callAsyncTrampoline(2, longArrayOf((args[0] as Int).toLong() + 100L))
+                    null
+                }
+                else -> null
+            }
+        }
+
+        val startRef = FuncRef.core(rawModule, 10, "(I)I")
+        val returnRef = FuncRef.core(rawModule, 11, "(I)I")
+        val calleeIndirectRef = FuncRef.core(indirectModule, 20, "(I)V")
+        val hostCalleeRef = FuncRef.host("(I)V", HostTrampoline { a ->
+            rt.callAsyncTrampoline(2, longArrayOf(a[0] + 1000L))
+            null
+        })
+
+        rt = AotComponentBackend(imports = null, resourceTables = emptyArray(), usesAsync = true).apply {
+            registerOptions(0, opts)
+            registerAsyncTrampoline(0, AsyncTrampolineSpec(kind = "prepare-call"))
+            registerAsyncTrampoline(1, AsyncTrampolineSpec(kind = "sync-start-call"))
+            registerAsyncTrampoline(2, AsyncTrampolineSpec(kind = "task-return", instance = 1, options = 0, results = listOf(WitType.S32), resultsIndex = 0))
+            setExports(
+                arrayOf(
+                    AotExportDesc(
+                        instance = null,
+                        name = "fused-via-core-indirect",
+                        type = FuncType(listOf("x" to WitType.S32), listOf(WitType.S32)),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction { a ->
+                            assertEquals(0L, rt.packFuncRef(null))
+                            val startId = rt.packFuncRef(startRef)
+                            val returnId = rt.packFuncRef(returnRef)
+                            val calleeId = rt.packFuncRef(calleeIndirectRef)
+                            assertTrue(startId > 0L && returnId > startId && calleeId > returnId)
+                            rt.callAsyncTrampoline(0, longArrayOf(startId, returnId, 0L, 1L, 0L, 0L, 0L, 1L, a[0]))
+                            rt.callAsyncTrampoline(1, longArrayOf(calleeId, 1L))
+                        },
+                    ),
+                    AotExportDesc(
+                        instance = null,
+                        name = "fused-via-host-ref",
+                        type = FuncType(listOf("x" to WitType.S32), listOf(WitType.S32)),
+                        options = opts,
+                        optionsIndex = 0,
+                        func = AotCoreFunction { a ->
+                            val startId = rt.packFuncRef(startRef)
+                            val returnId = rt.packFuncRef(returnRef)
+                            val calleeId = rt.packFuncRef(hostCalleeRef)
+                            rt.callAsyncTrampoline(0, longArrayOf(startId, returnId, 0L, 1L, 0L, 0L, 0L, 1L, a[0]))
+                            rt.callAsyncTrampoline(1, longArrayOf(calleeId, 1L))
+                        },
+                    ),
+                ),
+            )
+        }
+
+        // ((7 + 5) + 100) * 2 = 224
+        assertEquals(224, rt.invoke(rt.resolve("fused-via-core-indirect"), WitWriter().apply { int(7) }.toReader()).int())
+        // ((7 + 5) + 1000) * 2 = 2024
+        assertEquals(2024, rt.invoke(rt.resolve("fused-via-host-ref"), WitWriter().apply { int(7) }.toReader()).int())
+        rt.close()
     }
 }

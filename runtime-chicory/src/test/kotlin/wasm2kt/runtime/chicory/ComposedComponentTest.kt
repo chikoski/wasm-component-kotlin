@@ -15,10 +15,14 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import wasm2kt.runtime.ComponentTrapException
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.AsyncStore
+import wasm2kt.runtime.canonical.ComponentInstanceState
 import wasm2kt.runtime.canonical.FuncType
 import wasm2kt.runtime.canonical.InternalWasm2KtApi
 import wasm2kt.runtime.canonical.ResourceHandle
+import wasm2kt.runtime.canonical.StackSwitching
 import wasm2kt.runtime.canonical.StringEncoding
+import wasm2kt.runtime.canonical.Task
 import wasm2kt.runtime.canonical.TranscodeOp
 import wasm2kt.runtime.canonical.Transcoder
 import wasm2kt.runtime.canonical.WitType

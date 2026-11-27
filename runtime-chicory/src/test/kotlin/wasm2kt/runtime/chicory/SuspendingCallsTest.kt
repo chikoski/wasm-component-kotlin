@@ -1,3 +1,5 @@
+@file:OptIn(InternalWasm2KtApi::class)
+
 package wasm2kt.runtime.chicory
 
 import kotlinx.coroutines.CompletableDeferred
@@ -24,6 +26,7 @@ import wasm2kt.runtime.WitHostImportDispatcher
 import wasm2kt.runtime.WitReader
 import wasm2kt.runtime.WitStreamChunk
 import wasm2kt.runtime.WitWriter
+import wasm2kt.runtime.canonical.InternalWasm2KtApi
 import wasm2kt.runtime.witFuture
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals

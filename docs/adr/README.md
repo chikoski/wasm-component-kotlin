@@ -25,7 +25,7 @@
 | [0015](0015-binary-value-boundary.md) | 値の受け渡しを型に沿ったバイナリ形式にし、Wasmtime にはコンポーネントごとの型付きブリッジを加える | 承認、型付きブリッジの作り方は → ADR-0016、Phase 2 の AOT 選択時例外は → ADR-0023 |
 | [0016](0016-typed-bridge-from-wit-json.md) | 型付きブリッジの Rust の型を wit.json から生成し、bindgen! を使わない | 承認 |
 | [0017](0017-component-model-conformance-suite.md) | Component Model の公式テストスイートを写して取り込み、既知の失敗をスキップリストで管理する | 承認 |
-| [0018](0018-async-abi-on-chicory.md) | Chicory の async ABI は仕様の定義を移植し、スレッドで継続を表す | 承認（ホストとの境界は → ADR-0019） |
+| [0018](0018-async-abi-on-chicory.md) | Chicory の async ABI は仕様の定義を移植し、スレッドで継続を表す | 承認（ホストとの境界は → ADR-0019、Phase 3 の `:runtime-canonical` 共通化と AOT 共有は → ADR-0023） |
 | [0019](0019-suspending-async-boundary.md) | async の境界をコルーチンにし、ホストの async な import も suspend fun にする | 承認 |
 | [0020](0020-wasi03-filesystem-sandboxing-and-mounts.md) | WASI 0.3 ファイルシステムのサンドボックス方針と宣言的マウント設定 | 承認 |
 | [0021](0021-split-large-chicory-methods.md) | Chicory が生成する大きなメソッドをバイトコード単位で分割する | 承認 |

@@ -129,14 +129,6 @@ abstract class Wasm2KtCheckTask : Wasm2KtToolingTask() {
             val warningsFile = parameters.warnings.get().asFile
             warningsFile.parentFile.mkdirs()
 
-            if (backend == "AOT" && PlanCheck.usesAsync(decomposed)) {
-                warningsFile.delete()
-                throw IllegalStateException(
-                    "wasm2kt: $sourceName uses async features (usesAsync = true), which the AOT backend does not support yet; " +
-                        "switch this component to Wasm2KtBackend.CHICORY",
-                )
-            }
-
             // Report what would otherwise only fail on the device, the first time it is used (#39).
             val problems = PlanCheck.unsupportedFeatures(decomposed)
             if (problems.isEmpty()) {
