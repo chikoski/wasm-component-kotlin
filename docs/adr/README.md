@@ -32,3 +32,4 @@
 | [0022](0022-wasi03-scope-and-host-configuration.md) | WASI 0.3 の対応範囲とホスト側設定 API の設計 | 承認 |
 | [0023](0023-custom-wasm-compiler-and-static-jvm-backend.md) | R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 Kotlin 配線バックエンドの設計 | 承認 |
 | [0024](0024-default-backend-and-chicory-role.md) | Gradle プラグインの既定バックエンドの切り替えと Chicory バックエンドの位置づけ | 承認 |
+| [0025](0025-async-aot-wire-layer-r8-stripping.md) | AOT バックエンドの非同期および WASI 0.3 コンポーネントにおけるワイヤ層 R8 除去の方針 | 提案 |
