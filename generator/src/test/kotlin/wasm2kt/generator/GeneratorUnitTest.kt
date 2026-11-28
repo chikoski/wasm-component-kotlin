@@ -514,4 +514,23 @@ class GeneratorUnitTest {
         assertTrue("internal val world: () -> Imports" in world, world)
         assertFalse("exampleHostResStore: () -> Store" in world.substringAfter("class AotImports").substringBefore("companion").substringBefore("fun imports"))
     }
+
+    @Test
+    fun `guest resource close keeps isClosed false only when borrowed`() {
+        val (aotFiles, _) = generateAot("host-res")
+        val aotClose = aotFiles.getValue("exports/example/host_res/guest_api/GuestApi")
+            .substringAfter("override fun close()")
+            .substringBefore("companion object")
+        assertTrue("session?.__dropResource(handle)" in aotClose, aotClose)
+        assertTrue("\"borrowed by a call in progress\"" in aotClose, aotClose)
+        assertTrue(Regex("""finally\s*\{\s*if\s*\(!keepOpen\)\s*\{\s*isClosed\s*=\s*true""").containsMatchIn(aotClose), aotClose)
+
+        val stdFiles = generate("host-res")
+        val stdClose = stdFiles.getValue("exports/example/host_res/guest_api/GuestApi")
+            .substringAfter("override fun close()")
+            .substringBefore("companion object")
+        assertTrue("session?.runtimeSession?.dropResource(handle)" in stdClose, stdClose)
+        assertTrue("\"borrowed by a call in progress\"" in stdClose, stdClose)
+        assertTrue(Regex("""finally\s*\{\s*if\s*\(!keepOpen\)\s*\{\s*isClosed\s*=\s*true""").containsMatchIn(stdClose), stdClose)
+    }
 }
