@@ -251,15 +251,15 @@ ARM64 Android 16 エミュレーター上の `CallBenchmark` では、Perfetto �
 
 なお、`emulator-5554` 上の `AotComponentInstrumentedTest` により、`AOT` コンポーネントの E2E 動作と、ART 上における NaN ビット表現の保存を確認しました。ローカルの ARM64 環境では、`WasmNumerics` の `reinterpret` 群と `LinearMemory` の `F32`/`F64` ロード・ストア、および `AOT` コンパイル済みコードと同等の `intBitsToFloat`/`floatToRawIntBits` 系変換でシグナリング NaN を含むビット列が破壊されず保持されます。一方、CI の `emulator` ジョブは `x86_64` 構成で実行されるため、実機および ARM64 での検証は本節のローカル計測が基準です。
 
-### 7.6 制約と Phase 2 への課題
+### 7.6 制約と Phase 2・Phase 3 への展開
 
-Phase 1 の `AOT` バックエンドにはいくつかの技術的制約と設計上のトレードオフがあります。
+Phase 1 の `AOT` バックエンドには、構築時点での技術的制約と設計上のトレードオフがありました。
 
 * 非同期コンポーネント非対応
 * バイナリワイヤ境界の残存
 * `ByteArray` によるロードとストアの実装
 
-非同期コンポーネントと WASI 0.3 はまだ `AOT` で実行できず、Gradle プラグインは設定値にかかわらずビルド時にエラーで拒否します。また、Phase 1 では生成バインディングとバックエンドの間に `WitWriter` と `WitReader` の直列化が残っているため、境界でのコピーとボックス化をなくす直接の Lower と Lift の生成は `#187` で進めます。さらに `LinearMemory` は Android API 26 互換のため `VarHandle` を使わず `ByteArray` へのバイト単位シフトで 4 バイトや 8 バイトのアクセスを実装しています。この構造でも `sort-bytes` や `processFrame` では高速に動作しましたが、高頻度メモリアクセスに対する `ByteBuffer` や `Unsafe` 相当手段の評価は Phase 2 以降の検討課題です。
+Phase 1 では非同期コンポーネントと WASI 0.3 に未対応であり、生成バインディングとバックエンドの間にも `WitWriter` と `WitReader` の直列化が残っていました。同期コンポーネント向けのバイナリ境界除去は `#187` の Phase 2 で完了し、非同期コンポーネントと WASI 0.3 の実行対応は `#188` の Phase 3 で完了しています。一方、`LinearMemory` は Android API 26 互換のため `ByteArray` へのバイト単位シフトで 4 バイトや 8 バイトのアクセスを実装しており、高頻度メモリアクセスに対する代替手段の評価は今後の検討課題です。
 
 ---
 
@@ -321,16 +321,86 @@ Host JVM での 9 回実行中央値における Phase 1 `aot-p1` と Phase 2 `a
 | `CallBenchmark` `echoBytes1024` 中央値 | 1,325.2 ns | 2,193.5 ns |
 | `CallBenchmark` `echoBlob1024` 中央値 | 2,462.2 ns | 655.9 ns |
 
-ART 上の `echoBytes1024` は最小値が Phase 2 で `748.4 ns`、`CHICORY` で `1,184.4 ns` だったものの、中央値は `CHICORY` のほうが小さく出ました。`lcgSum1e6` 以降の重い計算ベンチマーク比較前にエミュレーター側の ADB 接続が切断されたため、ART 上での定常計算ベンチマークの完全なペア比較は後続計測に残っています。なお、Phase 2 `AOT` も引き続き同期コンポーネントのみに対応しており、非同期コンポーネントの対応は `#188` で進めます。
+ART 上の `echoBytes1024` は最小値が Phase 2 で `748.4 ns`、`CHICORY` で `1,184.4 ns` だったものの、中央値は `CHICORY` のほうが小さく出ました。この中央値逆転の原因調査は [#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) として追跡しています。
+
+同じ ARM64 Android 16 エミュレーター `Medium_Phone_API_36.1` で `benchmark-release-androidTest.apk` を導入し、`cmd package compile -m speed -f com.example.wasm2kt.bench.test` の後に計算系 5 組を追加計測しました。端末環境は `google/sdk_gphone64_arm64/emu64a:16/BP41.250916.009.A1/14246511:user/release-keys`、アーキテクチャは `aarch64` です。ストレージ枯渇を防ぐため、`am instrument` に `-e androidx.benchmark.suppressErrors EMULATOR,LOW-BATTERY,UNLOCKED` と `-e androidx.benchmark.profiling.mode None` を指定して `CallBenchmark` の対象メソッドを 1 件ずつ実行し、計測ごとに端末側の出力ディレクトリを削除して取得しました。
+
+| ART 計算計測項目 | `CHICORY` 中央値 | `CHICORY` アロケーション | Phase 2 `AOT` 中央値 | Phase 2 `AOT` アロケーション |
+| :--- | ---: | ---: | ---: | ---: |
+| `lcgSum1e6` | 2.18 ms | 25 回 | 1.43 ms | 0 回 |
+| `regexCount16B` | 797.6 µs | 8,802 回 | 132.4 µs | 6 回 |
+| `regexCount14KiB` | 1.17 ms | 9,349 回 | 908.2 µs | 6 回 |
+| `jsonRoundtrip13KiB` | 5.51 ms | 9,341 回 | 1.26 ms | 4 回 |
+| `sortBytes64KiB` | 12.90 ms | 34 回 | 5.06 ms | 1 回 |
+
+計算系 5 項目のすべてで Phase 2 `AOT` の中央値が `CHICORY` を下回りました。`lcgSum1e6` の最小値は `CHICORY` の `2.14 ms` に対し Phase 2 `AOT` が `291.4 µs` です。`regexCount16B`、`regexCount14KiB`、および `jsonRoundtrip13KiB` ではアロケーション回数が 8,802〜9,349 回から 4〜6 回へ減少し、`lcgSum1e6` では 0 回になっています。
 
 ---
 
-## 9. 再計測の手順
+## 9. Phase 3 非同期と WASI 0.3 の AOT 実測結果
+
+`#188` と `#207` に伴い、Phase 3 で追加された自作 `AOT` バックエンドの非同期および WASI 0.3 実行経路について、`CHICORY` バックエンドとの比較計測を実施しました。ここではビルド時生成物、Host JVM の定常呼び出しと初回起動、および Android R8 リリースビルドのサイズを示します。
+
+### 9.1 ビルド時生成物とコンパイル時間
+
+`async-stream`、`async-pipeline`、および `wasi-03` の 3 コンポーネントについて、Apple Silicon macOS 上の OpenJDK 21.0.13 で両バックエンドの生成サイズとビルド時間を比較しました。`CHICORY` では全コンポーネントともインタプリタ実行関数が 0 件でしたが、`.meta` と `plan.json` が出力されます。なお `PrepareAsync` における `CHICORY` 側のビルド時間は `ComponentBuild.run` による分解工程を含む計測であり、`AOT` 側は分解済み出力を再利用して `AotComponentCompiler` と `AotComponentCodegen` のみを計測しています。
+
+| コンポーネントとバックエンド | 関数数 | 分割対象と補助メソッド | 生成クラス数と合計サイズ | メタまたはデータ領域 | ビルド時間 |
+| :--- | ---: | :--- | :--- | :--- | ---: |
+| `async-stream` Chicory | 16 | — | 6 件 / 91,862 B | `.meta` 604 B / `plan.json` 12,862 B | 2,212 ms |
+| `async-stream` AOT | 16 | 0 / 0 | 4 件 / 9,603 B | `.data` 0 B | 124 ms |
+| `async-pipeline` Chicory | 217 | — | 12 件 / 270,149 B | `.meta` 11,234 B / `plan.json` 23,765 B | 164 ms |
+| `async-pipeline` AOT | 217 | 2 / 5 | 11 件 / 244,765 B | `.data` 7,780 B | 374 ms |
+| `wasi-03` Chicory | 206 | — | 12 件 / 282,310 B | `.meta` 15,323 B / `plan.json` 46,580 B | 230 ms |
+| `wasi-03` AOT | 206 | 3 / 7 | 10 件 / 267,044 B | `.data` 11,008 B | 223 ms |
+
+`async-stream` の Chicory ビルド時間 2,212 ms には、同一プロセス内で最初に動作する Chicory と `wasm-tools` 関連のウォームアップが含まれます。`AOT` 側では `.meta` と `plan.json` が生成されず、`async-pipeline` と `wasi-03` でも静的初期化用の `.data` のみが出力されます。
+
+### 9.2 Host JVM の定常呼び出しと初回起動
+
+同じ Apple Silicon macOS の OpenJDK 21.0.13 環境で、定常状態の呼び出し中央値と新規 JVM プロセス 9 回の初回起動中央値を計測しました。`async-stream` フィクスチャの `count-up` は解放を行わないバンプアロケータを 1 ページ 64 KiB のメモリ上で使う設計のため、数千回以上の連続呼び出しを行う定常ベンチマークでは `double` と `sum` を対象にしています。`wasi-03` の `run-summary` には 1.0 ms の `monotonic_clock::wait_for` 待機が含まれ、タイマー待機と入出力が支配的なため定常計測では `aot` と `chicory-aot` の 2 系統のみを比較しています。
+
+| 対象とバックエンド | `aot` | `chicory-aot` | `chicory-interp` |
+| :--- | ---: | ---: | ---: |
+| `async-stream` `double(21)` | 18.5 µs | 19.2 µs | 16.6 µs |
+| `async-stream` `sum(32)` | 195.3 µs | 199.1 µs | 219.2 µs |
+| `async-pipeline` `process-items(3)` | 114.4 µs | 122.5 µs | 558.5 µs |
+| `wasi-03` `run-summary` | 1.98 ms | 1.96 ms | — |
+
+定常状態では、非同期スケジューリングや `run_summary` 内の 1.0 ms タイマー待機が支配的な部分で `aot` と `chicory-aot` が近接しています。一方、新規 JVM プロセスでの初回起動時間は `AOT` が短くなりました。
+
+| 対象とフェーズ | `aot` 中央値 | `chicory-aot` 中央値 |
+| :--- | ---: | ---: |
+| `async-pipeline` 初回 `open` | 36.25 ms | 99.57 ms |
+| `async-pipeline` 初回合計 | 93.66 ms | 149.33 ms |
+| `async-pipeline` 2 回目 `open` | 0.33 ms | 1.48 ms |
+| `wasi-03` 初回 `open` | 75.03 ms | 123.40 ms |
+| `wasi-03` 初回合計 | 135.43 ms | 180.77 ms |
+| `wasi-03` 2 回目 `open` | 0.41 ms | 1.50 ms |
+
+### 9.3 Android R8 リリース APK と DEX サイズ
+
+`compileSdk 35`、`minSdk 26`、`JavaVersion.VERSION_17`、`isMinifyEnabled = true`、および `proguard-android-optimize.txt` の条件で、空の `Activity` から非同期エクスポートを呼び出す最小 Android アプリを計測用の一時 composite build 上に構築し、`assembleRelease` の出力サイズを取得しました。対象は `async-pipeline` と `addWasiDependency` を有効にした `wasi-03` で、それぞれ `CHICORY` と `AOT` のリリース APK を計測しています。なおこの計測用プロジェクトは計測後に削除しており、リポジトリ内の常設検証は `Wasm2KtPluginFunctionalTest` が担います。
+
+| 構成とバックエンド | リリース APK | 非圧縮 DEX | DEX クラス数 | DEX メソッド ID | `.meta` と `plan.json` | `.data` 資源 | `wasm2ktCompile` | R8 縮小時間 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `async-pipeline` Chicory | 313,234 B | 634,020 B | 657 | 3,481 | 34,999 B | 0 B | 0.291 s | 9.941 s |
+| `async-pipeline` AOT | 184,337 B | 329,308 B | 375 | 1,832 | 0 B | 7,780 B | 0.495 s | 8.302 s |
+| `wasi-03` Chicory | 339,633 B | 677,476 B | 727 | 3,754 | 61,903 B | 0 B | 0.361 s | 7.419 s |
+| `wasi-03` AOT | 218,026 B | 398,052 B | 462 | 2,238 | 0 B | 11,008 B | 0.522 s | 4.286 s |
+
+`AOT` の採用により、`async-pipeline` では APK サイズが `313,234 B` から `184,337 B` へ、非圧縮 DEX が `634,020 B` から `329,308 B` へ縮小しました。`wasi-03` でも APK サイズが `339,633 B` から `218,026 B` へ、非圧縮 DEX が `677,476 B` から `398,052 B` へ減っています。ただし、現在の Phase 3 非同期経路は `AotComponentBackend` 経由で `WitWriter`、`WitReader`、`ComponentBackend`、`AsyncAbi`、`CanonicalAbi` を使うため、R8 後の DEX にワイヤ層および非同期 ABI 関連クラスが残存します。このワイヤ層除去の検討は [#206](https://github.com/chikoski/wasm-component-kotlin/issues/206) で追跡しています。
+
+---
+
+## 10. 再計測の手順
 
 ```bash
-./gradlew -Pwasm2kt.bench :benchmarks:bench        # 定常状態（JVM）。-Pwasm2kt.bench.filter=<正規表現> で絞り込み可
-./gradlew -Pwasm2kt.bench :benchmarks:benchTyped   # 型付きブリッジの計測（cargo でビルド）
-./gradlew -Pwasm2kt.bench :benchmarks:coldStart    # 初回インスタンス化（JVM）
+./gradlew -Pwasm2kt.bench :benchmarks:bench          # 定常状態（JVM）。-Pwasm2kt.bench.filter=<正規表現> で絞り込み可
+./gradlew -Pwasm2kt.bench :benchmarks:benchTyped     # 型付きブリッジの計測（cargo でビルド）
+./gradlew -Pwasm2kt.bench :benchmarks:coldStart      # 初回インスタンス化（JVM）
+./gradlew -Pwasm2kt.bench :benchmarks:benchAsync     # 非同期と WASI 0.3 の定常状態（JVM）
+./gradlew -Pwasm2kt.bench :benchmarks:coldStartAsync # 非同期と WASI 0.3 の初回起動（JVM）
 ./gradlew -Pwasm2kt.bench :benchmarks:profile -Pwasm2kt.bench.filter=regex
 ./gradlew :gradle-plugin:functionalTest --tests "*Wasm2KtPluginFunctionalTest*"  # R8 のワイヤ層クラス除去を含む検証
 ./gradlew -p samples/android :benchmark:assembleReleaseAndroidTest && samples/android/benchmark/run-on-device.sh

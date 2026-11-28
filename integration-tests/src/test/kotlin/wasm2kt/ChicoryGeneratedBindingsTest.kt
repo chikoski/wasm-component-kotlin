@@ -239,4 +239,67 @@ class ChicoryGeneratedBindingsTest {
         )
         assertEquals("one=41,two=42,three=43,overlapping=[11, 21, 31],maxInFlight=3,timedOut=null,after=50", out)
     }
+
+    @Test
+    fun `guest resource close preserves liveness on borrowed drop and stays idempotent after session close on Chicory`(@TempDir tempDir: Path) {
+        val out = generateCompileRun(
+            tempDir, "host-res", "com.example.chicory.hostres", "HostResWorld.kt",
+            """
+            import com.example.chicory.hostres.example.host_res.store.Blob
+            import com.example.chicory.hostres.example.host_res.store.Store
+            import com.example.chicory.hostres.exports.example.host_res.guest_api.Counter
+            import wasm2kt.runtime.ComponentTrapException
+
+            class DummyBlob(private val bytes: ByteArray) : Blob {
+                override fun size(): UInt = bytes.size.toUInt()
+                override fun append(other: ByteArray) {}
+                override fun read(): ByteArray = bytes
+                override fun close() {}
+            }
+
+            fun run(component: ComponentBackendFactory): String {
+                lateinit var currentCounter: Counter
+                var borrowedDropErr: Throwable? = null
+                val store = object : Store {
+                    override fun newBlob(init: ByteArray): Blob = DummyBlob(init)
+                    override fun blobMerge(a: Blob, b: Blob): Blob = DummyBlob(a.read() + b.read())
+                    override fun log(msg: String) {
+                        borrowedDropErr = runCatching { currentCounter.close() }.exceptionOrNull()
+                    }
+                    override fun find(name: String): Blob? = null
+                }
+                val worldImports = object : Imports {
+                    override fun newTicket(id: UInt): Ticket = object : Ticket {
+                        override fun id(): UInt = id
+                        override fun close() {}
+                    }
+                }
+                val imp = imports(exampleHostResStore = { store }, world = { worldImports })
+                withSession(component, imp) {
+                    val c = Counter(5)
+                    currentCounter = c
+                    c.poke()
+                    check(borrowedDropErr is IllegalStateException && !c.isClosed && c.value() == 6) {
+                        "err=${'$'}borrowedDropErr closed=${'$'}{c.isClosed}"
+                    }
+                    c.close()
+                    check(c.isClosed)
+                }
+
+                lateinit var leaked: Counter
+                withSession(component, imp) {
+                    leaked = Counter(7)
+                }
+                val afterSessionErr = runCatching { leaked.close() }.exceptionOrNull()
+                check(afterSessionErr is IllegalStateException && leaked.isClosed) {
+                    "afterSessionErr=${'$'}afterSessionErr closed=${'$'}{leaked.isClosed}"
+                }
+                leaked.close()
+                return "ok"
+            }
+            """,
+            component("host-res"),
+        )
+        assertEquals("ok", out)
+    }
 }

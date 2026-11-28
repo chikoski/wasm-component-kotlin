@@ -1963,12 +1963,24 @@ class WitToKotlinPoetConverter(
             }
         }
 
+        val dropCall = if (aotDirectMode) "session?.__dropResource(handle)" else "session?.runtimeSession?.dropResource(handle)"
         builder.addFunction(
             FunSpec.builder("close")
                 .addModifiers(KModifier.OVERRIDE)
                 .beginControlFlow("if (!isClosed)")
+                .addStatement("var keepOpen = false")
+                .beginControlFlow("try")
+                .addStatement(dropCall)
+                .nextControlFlow("catch (e: IllegalStateException)")
+                .beginControlFlow("if (e.message?.contains(%S) == true)", "borrowed by a call in progress")
+                .addStatement("keepOpen = true")
+                .endControlFlow()
+                .addStatement("throw e")
+                .nextControlFlow("finally")
+                .beginControlFlow("if (!keepOpen)")
                 .addStatement("isClosed = true")
-                .addStatement(if (aotDirectMode) "session?.__dropResource(handle)" else "session?.runtimeSession?.dropResource(handle)")
+                .endControlFlow()
+                .endControlFlow()
                 .endControlFlow()
                 .build(),
         )
