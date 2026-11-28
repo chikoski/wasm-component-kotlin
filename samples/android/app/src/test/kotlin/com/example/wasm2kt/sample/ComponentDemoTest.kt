@@ -19,9 +19,4 @@ class ComponentDemoTest {
     fun componentsRun() {
         assertEquals(expected, ComponentDemo.run())
     }
-
-    @Test
-    fun aotComponentsRun() {
-        assertEquals(expected, AotComponentDemo.run())
-    }
 }

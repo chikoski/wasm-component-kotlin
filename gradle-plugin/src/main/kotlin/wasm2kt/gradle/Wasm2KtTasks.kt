@@ -29,6 +29,7 @@ import wasm2kt.tooling.Decomposer
 import wasm2kt.tooling.PlanCheck
 import wasm2kt.tooling.aot.AotComponentCodegen
 import wasm2kt.tooling.aot.AotComponentCompiler
+import wasm2kt.tooling.ir.UnsupportedWasmFeatureException
 import java.io.File
 import java.nio.file.Files
 import java.util.jar.JarEntry
@@ -202,7 +203,9 @@ abstract class Wasm2KtCompileTask : Wasm2KtToolingTask() {
             val decomposed = parameters.decomposedDir.get().asFile.toPath()
             val pkg = parameters.internalPackage.get()
             val warnings = if (parameters.backend.get() == "AOT") {
-                val compiled = AotComponentCompiler.compile(decomposed, classes, resources, pkg)
+                val compiled = runAotWithChicoryHint {
+                    AotComponentCompiler.compile(decomposed, classes, resources, pkg)
+                }
                 for ((index, mod) in compiled.modules) {
                     val s = mod.stats
                     if (s.splitFunctions > 0) {
@@ -320,7 +323,9 @@ abstract class Wasm2KtGenerateTask : Wasm2KtToolingTask() {
             out.deleteRecursively()
             val decomposed = p.decomposedDir.get().asFile.toPath()
             if (p.backend.get() == "AOT") {
-                val compiled = AotComponentCompiler.compileInMemory(decomposed, p.internalPackage.get())
+                val compiled = runAotWithChicoryHint {
+                    AotComponentCompiler.compileInMemory(decomposed, p.internalPackage.get())
+                }
                 AotComponentCodegen.generate(
                     decomposedDir = decomposed,
                     outputDir = out.toPath(),
@@ -370,3 +375,14 @@ abstract class Wasm2KtWarningsTask : DefaultTask() {
         }
     }
 }
+
+private inline fun <T> runAotWithChicoryHint(block: () -> T): T =
+    try {
+        block()
+    } catch (e: UnsupportedWasmFeatureException) {
+        throw IllegalStateException(
+            "${e.message}\nTo build this component with the Chicory fallback backend instead, " +
+                "set backend.set(Wasm2KtBackend.CHICORY) in wasm2kt { ... }.",
+            e,
+        )
+    }

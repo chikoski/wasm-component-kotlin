@@ -111,6 +111,11 @@ class Wasm2KtPluginFunctionalTest {
         val third = runner(dir, "clean", "run", "--configuration-cache", "--build-cache").build()
         assertEquals(TaskOutcome.FROM_CACHE, third.task(":wasm2ktCompileRoundtrip")?.outcome)
         assertTrue("RESULT scaled=42,tag=ERR#404;counter=42" in third.output)
+        ZipFile(dir.resolve("build/wasm2kt/roundtrip/wasm2kt-roundtrip.jar")).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertTrue(names.any { it.endsWith(".class") }, "Expected default AOT .class entries: $names")
+            assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in default AOT jar: $names")
+        }
     }
 
     @Test
@@ -319,17 +324,20 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `oversized wasm module splits functions and reports compile warnings across cached builds`(@TempDir dir: File) {
+    fun `oversized wasm module splits functions and reports compile warnings across cached builds on CHICORY`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("heavy.wasm"), dir.resolve("heavy.wasm").toPath())
         dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n$ISOLATED_BUILD_CACHE")
         dir.resolve("build.gradle.kts").writeText(
             """
+            import wasm2kt.gradle.Wasm2KtBackend
+
             plugins { id("io.github.wasm2kt") }
             repositories {
                 maven(url = uri("${testRepo.replace("\\", "/")}"))
                 mavenCentral()
             }
             wasm2kt {
+                backend.set(Wasm2KtBackend.CHICORY)
                 components {
                     register("heavy") {
                         source.set(file("heavy.wasm"))
@@ -498,6 +506,7 @@ class Wasm2KtPluginFunctionalTest {
             depsResult.output,
         )
         assertTrue("io.github.wasm2kt:runtime-wasi:" in depsResult.output, depsResult.output)
+        assertTrue("io.github.wasm2kt:runtime-aot:" !in depsResult.output, depsResult.output)
         assertTrue("io.github.wasm2kt:runtime-chicory:" !in depsResult.output, depsResult.output)
 
         val genResult = runner(dir, "wasm2ktGenerateApp").build()
@@ -545,7 +554,7 @@ class Wasm2KtPluginFunctionalTest {
             """
             plugins {
                 id("com.android.library") version "$agpVersion"
-                // Pins AGP 9's built-in Kotlin compiler plugin to this repo's Kotlin version so it can read runtime-chicory metadata.
+                // Pins AGP 9's built-in Kotlin compiler plugin to this repo's Kotlin version so it can read runtime-aot metadata.
                 id("org.jetbrains.kotlin.jvm") version "$kotlinVersion" apply false
                 id("io.github.wasm2kt") version "$wasm2ktVersion"
             }
@@ -735,7 +744,7 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `AOT backend opt-in runs components without runtime-chicory or plan resources`(@TempDir dir: File) {
+    fun `default AOT backend runs components without runtime-chicory or plan resources`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
         Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
         dir.resolve("settings.gradle.kts").writeText(
@@ -747,8 +756,6 @@ class Wasm2KtPluginFunctionalTest {
         )
         dir.resolve("build.gradle.kts").writeText(
             """
-            import wasm2kt.gradle.Wasm2KtBackend
-
             plugins {
                 kotlin("jvm") version "$kotlinVersion"
                 id("io.github.wasm2kt")
@@ -759,7 +766,6 @@ class Wasm2KtPluginFunctionalTest {
                 mavenCentral()
             }
             wasm2kt {
-                backend.set(Wasm2KtBackend.AOT)
                 components {
                     register("roundtrip") {
                         source.set(file("roundtrip.wasm"))
@@ -820,6 +826,78 @@ class Wasm2KtPluginFunctionalTest {
             val names = zip.entries().asSequence().map { it.name }.toList()
             assertTrue(names.any { it.endsWith(".class") }, "Expected AOT .class entries in jar: $names")
             assertFalse(names.any { it.endsWith("plan.json") || it.endsWith(".meta") }, "Unexpected Chicory resources in AOT jar: $names")
+        }
+    }
+
+    @Test
+    fun `explicit CHICORY backend opt-out uses runtime-chicory and plan resources`(@TempDir dir: File) {
+        Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
+        dir.resolve("settings.gradle.kts").writeText(
+            """
+            rootProject.name = "chicory-optout"
+            pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+            $ISOLATED_BUILD_CACHE
+            """.trimIndent(),
+        )
+        dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins {
+                kotlin("jvm") version "$kotlinVersion"
+                id("io.github.wasm2kt")
+                application
+            }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                backend.set(Wasm2KtBackend.CHICORY)
+                components {
+                    register("roundtrip") {
+                        source.set(file("roundtrip.wasm"))
+                        packageName.set("com.example.rt")
+                    }
+                }
+            }
+            application { mainClass.set("MainKt") }
+            tasks.register("printClasspath") {
+                val cp = configurations.runtimeClasspath.map { files -> files.map { it.name }.sorted() }
+                doLast { println("CP=" + cp.get().joinToString(",")) }
+            }
+            """.trimIndent(),
+        )
+        val src = dir.resolve("src/main/kotlin").apply { mkdirs() }
+        src.resolve("Main.kt").writeText(
+            """
+            import com.example.rt.*
+            import com.example.rt.example.roundtrip.env_provider.EnvProvider
+            import com.example.rt.exports.example.roundtrip.math_api.scale
+
+            fun main() {
+                val imports = imports(
+                    exampleRoundtripEnvProvider = {
+                        object : EnvProvider {
+                            override fun getMultiplier(): Int = 6
+                            override fun formatTag(prefix: String, code: UInt): String = "${'$'}prefix#${'$'}code"
+                        }
+                    },
+                )
+                println("CHICORY_OPTOUT " + withSession(RoundtripComponent, imports) { scale(7) })
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner(dir, "run", "printClasspath", "--configuration-cache").build()
+        assertTrue("CHICORY_OPTOUT 42" in result.output, result.output)
+        val cpLine = result.output.lines().first { it.startsWith("CP=") }
+        assertTrue("runtime-chicory" in cpLine, "Expected runtime-chicory on opt-out classpath: $cpLine")
+        assertFalse("runtime-aot" in cpLine, "Unexpected runtime-aot on Chicory-only classpath: $cpLine")
+        ZipFile(dir.resolve("build/wasm2kt/roundtrip/wasm2kt-roundtrip.jar")).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertTrue(names.any { it.endsWith("plan.json") }, names.toString())
+            assertTrue(names.any { it.endsWith(".meta") }, names.toString())
         }
     }
 
@@ -916,7 +994,7 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `AOT backend runs async components without Chicory or plan resources`(@TempDir dir: File) {
+    fun `default AOT backend runs async components without Chicory or plan resources`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("async-pipeline.wasm"), dir.resolve("async-pipeline.wasm").toPath())
         dir.resolve("settings.gradle.kts").writeText(
             """
@@ -927,8 +1005,6 @@ class Wasm2KtPluginFunctionalTest {
         )
         dir.resolve("build.gradle.kts").writeText(
             """
-            import wasm2kt.gradle.Wasm2KtBackend
-
             plugins {
                 kotlin("jvm") version "$kotlinVersion"
                 id("io.github.wasm2kt")
@@ -939,7 +1015,6 @@ class Wasm2KtPluginFunctionalTest {
                 mavenCentral()
             }
             wasm2kt {
-                backend.set(Wasm2KtBackend.AOT)
                 components {
                     register("async-pipeline") {
                         source.set(file("async-pipeline.wasm"))
@@ -1013,7 +1088,7 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `addWasiDependency wires runtime-wasi and runs WASI 0_3 component on AOT without warning`(@TempDir dir: File) {
+    fun `addWasiDependency wires runtime-wasi and runs WASI 0_3 component on default AOT without warning`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("wasi-03.wasm"), dir.resolve("wasi-03.wasm").toPath())
         val workDir = dir.resolve("work").apply { mkdirs() }
         workDir.resolve("input.txt").writeText("gradle wasi aot")
@@ -1026,8 +1101,6 @@ class Wasm2KtPluginFunctionalTest {
         )
         dir.resolve("build.gradle.kts").writeText(
             """
-            import wasm2kt.gradle.Wasm2KtBackend
-
             plugins {
                 kotlin("jvm") version "$kotlinVersion"
                 id("io.github.wasm2kt")
@@ -1038,7 +1111,6 @@ class Wasm2KtPluginFunctionalTest {
                 mavenCentral()
             }
             wasm2kt {
-                backend.set(Wasm2KtBackend.AOT)
                 addWasiDependency.set(true)
                 components {
                     register("wasi-app") {
@@ -1117,7 +1189,7 @@ class Wasm2KtPluginFunctionalTest {
     }
 
     @Test
-    fun `android application AOT release build shrinks cleanly without Chicory or plan resources`(@TempDir dir: File) {
+    fun `android application default AOT release build shrinks cleanly without Chicory or plan resources`(@TempDir dir: File) {
         Files.copy(fixtures.resolve("roundtrip.wasm"), dir.resolve("roundtrip.wasm").toPath())
         Files.copy(fixtures.resolve("counter.wasm"), dir.resolve("counter.wasm").toPath())
         val escapedRepo = testRepo.replace("\\", "/")
@@ -1146,8 +1218,6 @@ class Wasm2KtPluginFunctionalTest {
         )
         dir.resolve("build.gradle.kts").writeText(
             """
-            import wasm2kt.gradle.Wasm2KtBackend
-
             plugins {
                 id("com.android.application") version "$agpVersion"
                 id("org.jetbrains.kotlin.jvm") version "$kotlinVersion" apply false
@@ -1178,7 +1248,6 @@ class Wasm2KtPluginFunctionalTest {
                 }
             }
             wasm2kt {
-                backend.set(Wasm2KtBackend.AOT)
                 components {
                     register("roundtrip") {
                         source.set(file("roundtrip.wasm"))
@@ -1336,6 +1405,52 @@ class Wasm2KtPluginFunctionalTest {
         for (task in aotTasks) {
             assertEquals(TaskOutcome.FROM_CACHE, third.task(task)?.outcome, "$task should come FROM_CACHE")
         }
+    }
+
+    @Test
+    fun `unsupported Core Wasm feature on default AOT fails with CHICORY opt-out guidance`(@TempDir dir: File) {
+        // Minimal component wrapping one Core Wasm module with `return_call 0` (tail-call proposal).
+        val tailCallComponent = byteArrayOf(
+            0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00,
+            0x01, 0x1a,
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00,
+            0x0a, 0x06, 0x01, 0x04, 0x00, 0x12, 0x00, 0x0b,
+        )
+        Files.write(dir.resolve("tailcall.wasm").toPath(), tailCallComponent)
+        dir.resolve("settings.gradle.kts").writeText("rootProject.name = \"tailcall-consumer\"\n$ISOLATED_BUILD_CACHE")
+        fun writeBuild(useChicory: Boolean) = dir.resolve("build.gradle.kts").writeText(
+            """
+            import wasm2kt.gradle.Wasm2KtBackend
+
+            plugins { id("io.github.wasm2kt") }
+            repositories {
+                maven(url = uri("${testRepo.replace("\\", "/")}"))
+                mavenCentral()
+            }
+            wasm2kt {
+                ${if (useChicory) "backend.set(Wasm2KtBackend.CHICORY)" else ""}
+                components {
+                    register("tailcall") {
+                        source.set(file("tailcall.wasm"))
+                        packageName.set("com.example.tailcall")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        writeBuild(useChicory = false)
+        val failed = runner(dir, "wasm2ktCompileTailcall").buildAndFail()
+        assertEquals(TaskOutcome.FAILED, failed.task(":wasm2ktCompileTailcall")?.outcome, failed.output)
+        assertTrue("tail-call" in failed.output, failed.output)
+        assertTrue("Wasm2KtBackend.CHICORY" in failed.output, failed.output)
+
+        val genFailed = runner(dir, "wasm2ktGenerateTailcall").buildAndFail()
+        assertEquals(TaskOutcome.FAILED, genFailed.task(":wasm2ktGenerateTailcall")?.outcome, genFailed.output)
+        assertTrue("tail-call" in genFailed.output, genFailed.output)
+        assertTrue("Wasm2KtBackend.CHICORY" in genFailed.output, genFailed.output)
     }
 }
 

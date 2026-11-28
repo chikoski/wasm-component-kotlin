@@ -1,6 +1,6 @@
-# Example 05: Gradle プラグインと Chicory バックエンドによる Pure JVM 実行 (`roundtrip`)
+# Example 05: Gradle プラグインと既定 AOT バックエンドによる Pure JVM 実行 (`roundtrip`)
 
-`io.github.wasm2kt` Gradle プラグインを使って `.wasm` コンポーネントをビルド時に分解・AOT コンパイルし、ネイティブライブラリ（JNI / FFM）を使わずに Pure JVM（Chicory バックエンド）上で実行するサンプルです。
+`io.github.wasm2kt` Gradle プラグインを使って `.wasm` コンポーネントをビルド時に分解・静的 JVM バイトコードへコンパイルし、ネイティブライブラリ（JNI / FFM）を使わずに Pure JVM（既定の `AOT` バックエンド）上で実行するサンプルです。`backend.set(Wasm2KtBackend.CHICORY)` によるオプトアウトにも対応します。
 
 ---
 
@@ -15,7 +15,7 @@
 `wasm2kt` ブロックに `.wasm` コンポーネントと出力先パッケージ名を登録すると、ビルド時に以下のタスクが自動実行されます。
 
 1. `wasm2ktDecomposeRoundtrip`: コンポーネントをコアモジュール・`plan.json`・`wit.json` に分解します。
-2. `wasm2ktCompileRoundtrip`: コアモジュールを Chicory のビルド時コンパイラで JVM バイトコードへ AOT コンパイルします。
+2. `wasm2ktCompileRoundtrip`: コアモジュールを選択されたバックエンド、既定では `AOT` バックエンドで静的 JVM バイトコードへコンパイルします。
 3. `wasm2ktGenerateRoundtrip`: Kotlin ホストバインディングと `RoundtripComponent` エントリポイントを生成します。
 
 ```kotlin

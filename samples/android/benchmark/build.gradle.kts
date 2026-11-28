@@ -51,6 +51,7 @@ wasm2kt {
             register(name) {
                 source.set(rootProject.file("../../fixtures/$name.wasm"))
                 packageName.set("com.example.wasm2kt.bench.$name")
+                backend.set(Wasm2KtBackend.CHICORY)
             }
             register("$name-aot") {
                 source.set(rootProject.file("../../fixtures/$name.wasm"))

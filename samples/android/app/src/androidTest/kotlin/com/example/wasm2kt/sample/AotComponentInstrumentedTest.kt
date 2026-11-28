@@ -10,14 +10,9 @@ import wasm2kt.runtime.aot.LinearMemory
 import wasm2kt.runtime.aot.WasmNumerics
 import wasm2kt.runtime.canonical.InternalWasm2KtApi
 
-/** Exercises the AOT backend and NaN bit preservation on ART (arm64-v8a locally, x86_64 on CI). */
+/** Exercises AOT NaN bit preservation on ART (arm64-v8a locally, x86_64 on CI). */
 @RunWith(AndroidJUnit4::class)
 class AotComponentInstrumentedTest {
-    @Test
-    fun aotComponentsRunOnDevice() {
-        assertEquals(ComponentDemo.run(), AotComponentDemo.run())
-    }
-
     @Test
     fun nanBitPatternsPreservedOnArt() {
         val mem = LinearMemory(1)

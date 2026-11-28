@@ -49,7 +49,7 @@ wasm-tools component new embedded.wasm -o my-component.wasm
 
 ## 3. 未対応機能の事前検査 `failOnUnsupportedFeatures`
 
-Gradle プラグインでビルドする際、`wasm2ktCheck<Name>` タスクは分解後の `plan.json` を検査し、選択されたバックエンドが未対応の機能が含まれていれば警告を出します。詳細は [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) と [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) を参照してください。なお `Wasm2KtBackend.AOT` を選択したコンポーネントが非同期機能を使用している場合は、`failOnUnsupportedFeatures` の設定にかかわらずこの検査タスクがビルドを失敗させます。
+Gradle プラグインでビルドする際、`wasm2ktCheck<Name>` タスクは分解後の `plan.json` を検査し、選択されたバックエンドで未対応の機能が含まれていれば警告を出します。詳細は [#39](https://github.com/chikoski/wasm-component-kotlin/issues/39) と [#78](https://github.com/chikoski/wasm-component-kotlin/issues/78) を参照してください。なお、`AOT` と `CHICORY` の双方で非同期機能および WASI 0.3 をサポートしています。既定の `AOT` バックエンドで未対応の Core Wasm 機能が検出された場合は、コンパイルタスクが `UnsupportedWasmFeatureException` を送出して `Wasm2KtBackend.CHICORY` への切り替えを案内します。
 
 CI などで未対応機能の使用をビルドエラーにしたい場合は、`build.gradle.kts` で `failOnUnsupportedFeatures.set(true)` を設定します。
 

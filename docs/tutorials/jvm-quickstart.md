@@ -1,7 +1,7 @@
-# Kotlin/JVM クイックスタート（Chicory バックエンド）
+# Kotlin/JVM クイックスタート
 
 このガイドでは、Gradle プラグイン `io.github.wasm2kt` を使って、Kotlin/JVM プロジェクトで `.wasm` コンポーネントをビルド時にコンパイルして実行する手順を説明します。
-純 JVM のランタイム（Chicory）で動くため、ネイティブライブラリや `--enable-native-access`、Rust ツールチェーン、`wasm-tools` は不要です。
+既定の純 JVM バックエンドである `AOT` で動くため、ネイティブライブラリや `--enable-native-access`、Rust ツールチェーン、`wasm-tools` は不要です。未対応の Core Wasm 機能を含む場合は、`backend.set(Wasm2KtBackend.CHICORY)` を指定して `CHICORY` バックエンドへ切り替えられます。
 
 ## 前提条件
 
@@ -78,7 +78,7 @@ fun main() {
 
 ## 次のステップ
 
-* 実行可能なサンプルコード：[Example 05: Gradle プラグインと Chicory バックエンド](../../examples/05-chicory-gradle-plugin/README.md)
+* 実行可能なサンプルコード：[Example 05: Gradle プラグインと既定 AOT バックエンド](../../examples/05-chicory-gradle-plugin/README.md)
 * Wasmtime（ネイティブ）との違いを確認する：[バックエンドの選び方](../guides/choosing-a-backend.md)
 * プラグインの設定項目とキャッシュの挙動：[Gradle プラグイン リファレンス](../reference/gradle-plugin.md)
 * ホスト import の実装方法：[ホスト import と interface の共有](../guides/host-imports.md)

@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-28。対象ブランチは `feat/207-adr0024-stage1-verification`。主な変更点は ADR-0024 第一段階としての Phase 2 適合・厳密検証、ARM64 ART 計算系ベンチマーク、および非同期と WASI 0.3 の性能・R8 サイズ計測です。
+> 最終更新: 2026-11-28。対象ブランチは `feat/208-default-aot-backend`。主な変更点は ADR-0024 第二段階として、Gradle プラグインと `ComponentBuild.run` の既定バックエンドを同期・非同期ともに `AOT` へ切り替え、バージョン `0.2.0-SNAPSHOT` への更新および CI・サンプル・ドキュメントを追従させたことです。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -8,19 +8,21 @@
 ## 1. 全体像
 
 `wasm2kt` は、WebAssembly コンポーネント（WIT）から型安全な Kotlin ホストバインディングを生成するプロジェクトです。
-生成されるワールド DSL は共通で、実行バックエンドを 2 つ持ちます。
+生成されるワールド DSL は共通で、純 JVM 実行の `AOT`（既定）および `CHICORY`（オプトアウト）と、ネイティブ実行の `Wasmtime` を利用できます。
 
 | バックエンド | 実行方式 | 主な用途 | 入口 |
 | :--- | :--- | :--- | :--- |
+| `AOT`（既定） | core モジュールを静的 JVM バイトコードへ直接生成し、純 JVM で実行 | Android、ネイティブ不可の環境 | `withSession(XxxComponent)` |
+| `CHICORY`（オプトアウト） | Chicory のビルド時コンパイラで JVM バイトコードを生成し、純 JVM で実行 | 未対応機能・巨大メソッド分割の回避 | `withSession(XxxComponent)` |
 | Wasmtime | Rust 製ブリッジ（FFM / JNI）でネイティブ実行 | デスクトップ / サーバー JVM | `withSession(path)` |
-| Chicory | core モジュールをビルド時に JVM バイトコードへコンパイルし、純 JVM で実行 | **Android**、ネイティブ不可の環境 | `withSession(XxxComponent)` |
 
 ```text
 component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decomposer を Chicory で実行）
-                                        ├─▶ core モジュールの AOT コンパイル（jar）
+                                        ├─▶ core モジュールの静的コンパイル（既定 AOT / CHICORY）
                                         └─▶ Kotlin バインディング + XxxComponent 生成
-アプリ ──▶ 生成 DSL ──▶ バイナリ形式（ADR-0015）──▶ runtime-chicory ──▶ Chicory
-                                                    └─▶ Wasmtime ブリッジ（FFM / JNI）
+アプリ ──▶ 生成 DSL ──▶ 静的直結 / AsyncAbi ──▶ runtime-aot（既定）
+                    └─▶ バイナリ形式（ADR-0015）──▶ runtime-chicory（CHICORY）
+                                                └─▶ Wasmtime ブリッジ（FFM / JNI）
 ```
 
 詳細: [ドキュメント目次](index.md) / [アーキテクチャ](explanation/architecture.md) / [Gradle プラグイン](reference/gradle-plugin.md)
@@ -38,8 +40,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 | `decomposer/` | コンポーネント分解ツール（Rust）。`dist/` に wasm 版を同梱 | — | 稼働 |
 | `runtime-api` | `ComponentBackend` などバックエンド共通の契約 | 17 | 稼働 |
 | `runtime-canonical` | Chicory 非依存の共通 Canonical ABI および Async ABI 層 | 17 | 稼働 |
-| `runtime-aot` | 自作 Core Wasm コンパイラと直接結合・互換層・非同期ディスパッチの実行時基盤 | 17 | Phase 3 稼働 |
-| `runtime-chicory` | Chicory バックエンド（Canonical ABI 実装） | 17 | 稼働 |
+| `runtime-aot` | 既定の自作 Core Wasm コンパイラと直接結合・互換層・非同期ディスパッチの実行時基盤 | 17 | 稼働 |
+| `runtime-chicory` | Chicory バックエンド（オプトアウトおよび検証用の Canonical ABI 実装） | 17 | 稼働 |
 | `runtime-wasi` | WASI 0.3 コアインターフェースのホスト実装 | 17 | 稼働 |
 | `tooling` | 分解・AOT コンパイル・コード生成のパイプライン | 21 | 稼働 |
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン | 21 | 稼働 |
@@ -77,7 +79,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * 既存の package への対応付け（`with`）は import した interface だけ。export した interface の型は、world ごとに生成される（ADR-0014）
 * ホスト resource の受け渡しは、セッションの呼び出し中（同じスレッド）に限られる。Wasmtime ではホストの borrow を一時的な所有ハンドルで代用している（48 でも必要。[ADR-0008](adr/0008-host-defined-resources.md)、[ADR-0010](adr/0010-wasmtime-lts.md)）
 * コンポーネント定義の resource を、コンポーネントがホスト import に own / borrow で渡す経路は未対応（Chicory）
-* async と WASI 0.3 は Chicory バックエンドおよびオプトイン AOT バックエンドで実装し、Wasmtime バックエンドは同期機能の参照実装として維持します（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)、[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md)）。[ADR-0024](adr/0024-default-backend-and-chicory-role.md) の承認に伴い、Gradle プラグインの既定バックエンドを `AOT` へ切り替える第二段階を [#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) で進めます。
+* `async` と WASI 0.3 は既定の `AOT` バックエンドと `CHICORY` バックエンドの双方で動作し、`Wasmtime` バックエンドは同期機能の参照実装として維持しています（[ADR-0005](adr/0005-async-and-wasi03-chicory-only.md)、[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md)、[ADR-0024](adr/0024-default-backend-and-chicory-role.md)）。
+* `integration-tests` の CI は `prTest`（AOT 全般 + Chicory の非同期と `fromDirectory` 経路）、`chicorySyncTest`（関連パス変更時および週次スケジュール実行）、および `typedBridgeTest` に整理しました。
 * async の制約（[ADR-0018](adr/0018-async-abi-on-chicory.md)、[ADR-0019](adr/0019-suspending-async-boundary.md)）: async の export と import は `suspend fun` だが、ゲストの wasm を実行している間は中断しない（取り消しは、ゲストが次にホストを待つか yield したときに届く）。ホストが受け渡せる stream / future は、要素に resource / stream / future 自体を含まないもの。同じインスタンスや祖先のインスタンスへの再入は、wasmtime-environ 48 がトラップにする
 * Gradle デーモンの JDK 21 指定。`tooling` と `gradle-plugin` が JVM 21 を対象とするため、`gradle/gradle-daemon-jvm.properties` で指定しています
 * 成果物はまだどこにも公開していない（functionalTest 用のローカル `build/test-repo` のみ）。当面は公開しない方針
@@ -99,11 +102,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### P1
 
-QC レビュー（2026-10-31）と QC レビュー（2026-11-04）、および WASI 0.3 の P1 スコープは完了しています。現在は [ADR-0024](adr/0024-default-backend-and-chicory-role.md) の第二段階を残しています。
-
-| Issue | ID | 内容 |
-| :--- | :--- | :--- |
-| [#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) | — | Gradle プラグインの既定バックエンドを `AOT` へ切り替え、CI・サンプル・ドキュメントを追従させる |
+なし（QC レビュー、WASI 0.3 の P1 スコープ、および ADR-0024 第一・第二段階まで完了）
 
 ### P2
 
@@ -128,6 +127,7 @@ QC レビュー（2026-10-31）と QC レビュー（2026-11-04）、および W
 
 ### 完了
 
+* Gradle プラグインの既定バックエンド `AOT` 切り替えと CI・サンプル・ドキュメント追従
 * ADR-0024 第一段階としての ART・非同期計測と Phase 2 適合・厳密検証
 * 自作 AOT バックエンドの Component Model Async および WASI 0.3 対応
 * 既定バックエンドと `runtime-chicory` の位置づけに関する ADR-0024 策定
@@ -149,6 +149,8 @@ QC レビュー（2026-10-31）と QC レビュー（2026-11-04）、および W
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) では、[ADR-0024](adr/0024-default-backend-and-chicory-role.md) の第二段階として `io.github.wasm2kt` Gradle プラグインおよび `ComponentBuild.run` の既定バックエンドを同期・非同期ともに `AOT` へ切り替えました。バージョンを `0.2.0-SNAPSHOT` へ更新し、未対応 Core Wasm 機能による `AOT` ビルド失敗時には `Wasm2KtBackend.CHICORY` のオプトアウト案内を表示します。また、CI の `native` ジョブを `prTest` と条件付き・週次の `chicorySyncTest` に分離し、`samples/android`、`:benchmarks`、および各ドキュメントと移行ガイドを更新しました。
 
 [#207](https://github.com/chikoski/wasm-component-kotlin/issues/207) では、[ADR-0024](adr/0024-default-backend-and-chicory-role.md) の第一段階として既定バックエンド切り替え前に必要な検証と計測を完了しました。`AotPhase2ConformanceTest` では `values/` と `resources/` の 190 コマンドを実行し、30 件以上の同期かつ WIT ありコンポーネントを Phase 2 静的直接結合経路で、非同期や WIT なしのコンポーネントを Phase 1 経路で検証しました。あわせて `AotPhase2StrictnessTest` で境界条件と ADR-0014 マッピング契約を確認し、`WitToKotlinPoetConverter` のゲストリソース `close()` における借用時およびセッション終了後の振る舞いを修正して `ChicoryGeneratedBindingsTest` と `GeneratorUnitTest` にも回帰テストを加えました。さらに `Medium_Phone_API_36.1` 上の ARM64 ART 計算系ベンチマーク 5 組、および Phase 3 の `async-stream`・`async-pipeline`・`wasi-03` を対象とした Host JVM ベンチマークと Android R8 リリース APK サイズ計測の結果を [performance.md](explanation/performance.md) へ反映しました。
 

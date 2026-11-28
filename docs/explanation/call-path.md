@@ -1,6 +1,6 @@
 # Kotlin から wasm の関数を呼び出す経路
 
-このドキュメントでは、生成された Kotlin 関数からバイナリ形式（[ADR-0015](../adr/0015-binary-value-boundary.md)）を経て Chicory または Wasmtime（汎用ブリッジ / 型付きブリッジ、[ADR-0016](../adr/0016-typed-bridge-from-wit-json.md)）で wasm の関数を実行するまでの経路を説明します。
+このドキュメントでは、生成された Kotlin 関数から既定の `AOT` 直接結合経路、およびバイナリ形式（[ADR-0015](../adr/0015-binary-value-boundary.md)）を経由する `AOT` 非同期、`CHICORY`、または `Wasmtime` の呼び出し経路を説明します。
 各経路の実行時間は [性能とサイズ](performance.md) にあります。
 
 ## 1. 登場する層
@@ -12,8 +12,8 @@
 | `BackendWasmtimeSession` | 生成コード | `ComponentBackend`（Chicory）への橋渡し。関数名をインデックスにしてキャッシュし、引数を `WitWriter` に書く |
 | `FfmWasmtimeSession` / `JniWasmtimeSession` | 生成コード | Wasmtime ブリッジへの橋渡し。同上 |
 | `WitWriter` / `WitReader` | `runtime-api` | 値のバイナリ形式（[ADR-0015](../adr/0015-binary-value-boundary.md)）の読み書き |
-| `ChicoryComponent` | `runtime-chicory` | 関数名の解決、Canonical ABI の lower / lift、core 関数の呼び出し |
-| `DirectCanonicalAbi` / `AotComponentRuntime` | `runtime-canonical` / `runtime-aot` | Phase 2 の静的直結 `AOT` バックエンド向けの検証・文字変換・資源寿命管理を行う |
+| `ChicoryComponent` | `runtime-chicory` | `CHICORY` オプトアウト時の関数名解決、Canonical ABI の lower / lift、core 関数の呼び出し |
+| `DirectCanonicalAbi` / `AotComponentRuntime` | `runtime-canonical` / `runtime-aot` | 既定の静的直結 `AOT` 同期バックエンド向けの検証、文字変換、資源寿命管理を行います |
 | `FfmWasmtimeBridge` / `JniWasmtimeBridge` | `runtime-wasmtime` | ネイティブ関数の呼び出し（ダウンコール）と、ホスト import のコールバック（アップコール） |
 | `rust-bridge` | `rust-bridge/core`（共通部）、`rust-bridge/src`（汎用ブリッジ） | セッション管理、C ABI / JNI。汎用経路ではバイナリ形式と `Val` の変換および `Func::call` を行う |
 | 型付きブリッジ | `tooling` が生成するクレート（`TypedBridge`、[ADR-0016](../adr/0016-typed-bridge-from-wit-json.md)） | コンポーネントごとの Rust の型と、`TypedFunc::call` / `func_wrap` による型付きの呼び出し |

@@ -4,7 +4,7 @@ WIT・Canonical ABI・Component Model の各機能について、バックエン
 
 ## 1. WIT の型と関数
 
-| 分類 | 機能 | Chicory / AOT | Wasmtime（汎用 / 型付き） | 備考 |
+| 分類 | 機能 | AOT（既定） / CHICORY | Wasmtime（汎用 / 型付き） | 備考 |
 | :--- | :--- | :--- | :--- | :--- |
 | プリミティブ | `bool`, `s8`〜`s64`, `u8`〜`u64`, `f32`, `f64`, `char`, `string` | 対応 | 対応 | 文字列は UTF-8 / UTF-16 / Latin1+UTF-16 に対応。NaN は正規化（[ADR-0007](../adr/0007-canonical-abi-validation.md)） |
 | 複合型 | `record`, `variant`, `enum`, `flags`（32 個以下）, `tuple`, `list<T>`, `option<T>`, `result<T, E>` | 対応 | 対応 | ネストした `option<option<T>>` も対応 |
@@ -16,7 +16,7 @@ WIT・Canonical ABI・Component Model の各機能について、バックエン
 
 ## 2. リソース (`resource`)
 
-| 機能 | Chicory / AOT | Wasmtime（汎用 / 型付き） | 備考 |
+| 機能 | AOT（既定） / CHICORY | Wasmtime（汎用 / 型付き） | 備考 |
 | :--- | :--- | :--- | :--- |
 | コンポーネント定義 `resource`（export された resource の `constructor` / `method` / `static` / `drop`、`own` / `borrow`） | 対応 | 対応 | 返された `own` ハンドルはコンポーネントのテーブルから除去される（[#31](https://github.com/chikoski/wasm-component-kotlin/issues/31)） |
 | ホスト定義 `resource`（import された resource の `own` / `borrow`、drop 時の `close()`） | 対応 | 対応 | [ADR-0008](../adr/0008-host-defined-resources.md)。Wasmtime ではホストの `borrow` を一時的な所有ハンドルで代用 |
@@ -24,7 +24,7 @@ WIT・Canonical ABI・Component Model の各機能について、バックエン
 
 ## 3. 合成コンポーネント・Async・WASI・制限
 
-| 機能 | Chicory / AOT | Wasmtime | 備考 |
+| 機能 | AOT（既定） / CHICORY | Wasmtime | 備考 |
 | :--- | :--- | :--- | :--- |
 | メモリを持つ子コンポーネント同士の合成（文字列・`list` の transcode、`trap`） | 対応 | 対応 | 12 種類の文字列 transcoder に対応（[#47](https://github.com/chikoski/wasm-component-kotlin/issues/47)、[ADR-0013](../adr/0013-multi-memory-adapters.md)） |
 | 合成した子コンポーネント間での `resource` の受け渡し（`resource.transfer-own` 等） | 対応 | 対応 | fused adapter の `resource-transfer-own`、`resource-transfer-borrow`、`enter-sync-call`、`exit-sync-call` および共有テーブルの適合に対応。[#16](https://github.com/chikoski/wasm-component-kotlin/issues/16) と [#70](https://github.com/chikoski/wasm-component-kotlin/issues/70) で実装 |

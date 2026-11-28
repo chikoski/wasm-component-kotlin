@@ -33,7 +33,7 @@ fun main(args: Array<String>) {
         work.toFile().deleteRecursively()
         val wasm = fixtures.resolve("$name.wasm")
         val started = System.nanoTime()
-        val built = ComponentBuild.run(wasm, name, pkg, work)
+        val built = ComponentBuild.run(wasm, name, pkg, work, backend = wasm2kt.tooling.BuildBackend.CHICORY)
         val buildMs = (System.nanoTime() - started) / 1_000_000
 
         // Full bindings (with Wasmtime sessions) so one API drives every backend.

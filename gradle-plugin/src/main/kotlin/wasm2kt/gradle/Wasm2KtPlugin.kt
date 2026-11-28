@@ -12,12 +12,12 @@ import org.gradle.api.tasks.TaskProvider
 import java.util.Properties
 import javax.inject.Inject
 
-/** Code generation / execution backend used for a [Wasm2KtComponent] (ADR-0023). */
+/** Code generation / execution backend used for a [Wasm2KtComponent] (ADR-0023, ADR-0024). */
 enum class Wasm2KtBackend {
-    /** Compile core modules via Chicory and resolve component plans at runtime (default). */
+    /** Compile core modules via Chicory and resolve component plans at runtime (opt-out fallback). */
     CHICORY,
 
-    /** Directly compile core modules into JVM bytecode with static component wiring. */
+    /** Directly compile core modules into JVM bytecode with static component wiring (default). */
     AOT,
 }
 
@@ -39,12 +39,13 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
 
     /**
      * Backend used by components that do not override [Wasm2KtComponent.backend]. Defaults to
-     * [Wasm2KtBackend.CHICORY].
+     * [Wasm2KtBackend.AOT] (ADR-0024). Set to [Wasm2KtBackend.CHICORY] to opt out per build or
+     * per component.
      */
     abstract val backend: Property<Wasm2KtBackend>
 
     /**
-     * Adds the matching runtime dependency (`runtime-chicory` and/or `runtime-aot`, matching the
+     * Adds the matching runtime dependency (`runtime-aot` and/or `runtime-chicory`, matching the
      * configured component backends) to `implementation`. Turn off to manage runtime dependencies
      * yourself.
      */
@@ -57,10 +58,11 @@ abstract class Wasm2KtExtension @Inject constructor(project: Project) {
     abstract val addWasiDependency: Property<Boolean>
 
     /**
-     * Fail the build when a component uses features its backend does not support yet (component
-     * intrinsics, types, or async). Off by default for warnings: the build only warns and calls
-     * that reach unsupported features throw at run time. Note that [Wasm2KtBackend.AOT] always
-     * fails the build on async components regardless of this flag.
+     * Fail the build when a component uses WIT features (such as `map<K, V>` or `wasi:http`)
+     * flagged by [Wasm2KtCheckTask]. Off by default for warnings: the build warns and calls that
+     * reach unsupported WIT features throw at run time. Note that [Wasm2KtBackend.AOT] always fails
+     * at compile time on unsupported Core Wasm proposals (such as SIMD128, tail-call, or GC);
+     * set `backend.set(Wasm2KtBackend.CHICORY)` to run those components on the fallback backend.
      */
     abstract val failOnUnsupportedFeatures: Property<Boolean>
 
@@ -104,7 +106,7 @@ abstract class Wasm2KtComponent @Inject constructor(private val name: String) : 
 class Wasm2KtPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("wasm2kt", Wasm2KtExtension::class.java, project)
-        extension.backend.convention(Wasm2KtBackend.CHICORY)
+        extension.backend.convention(Wasm2KtBackend.AOT)
         extension.addRuntimeDependency.convention(true)
         extension.addWasiDependency.convention(false)
         extension.failOnUnsupportedFeatures.convention(false)
@@ -235,7 +237,7 @@ class Wasm2KtPlugin : Plugin<Project> {
     }
 }
 
-class ComponentTasks(
+internal class ComponentTasks(
     val component: Wasm2KtComponent,
     val decompose: TaskProvider<Wasm2KtDecomposeTask>,
     val check: TaskProvider<Wasm2KtCheckTask>,

@@ -7,7 +7,7 @@
 ## プロジェクト
 
 WebAssembly コンポーネント（WIT）から Kotlin ホストバインディングを生成します。実行バックエンドは 2 つあります。
-Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュールをビルド時にコンパイルし、Android 対応）です。
+Wasmtime（`rust-bridge` + FFM / JNI）、AOT（純 JVM 既定。自作コンパイラで静的 JVM バイトコードを生成し、Android 対応）、および Chicory（オプトアウト・検証用の純 JVM バックエンド）です。
 
 ## モジュール
 
@@ -34,9 +34,13 @@ Wasmtime（`rust-bridge` + FFM / JNI）と、Chicory（純 JVM。core モジュ�
 
 ```bash
 ./gradlew test                                  # 全モジュールのテスト（generator のユニットテストは fixtures/*.json を入力に使う）
-./gradlew check                                 # 上記 + gradle-plugin の functionalTest（TestKit）
+./gradlew check -x :integration-tests:test      # integration-tests 以外の検査（animalsniffer と functionalTest を含む）
+./gradlew :integration-tests:prTest             # PR 向けの既定統合テスト（AOT 全体 + Chicory async / fromDirectory）
+./gradlew :integration-tests:chicorySyncTest    # Chicory 同期スイート（ChicoryDifferentialTest と ConformanceTest values / resources）
+./gradlew :runtime-aot:test                     # AOT バックエンド単体
 ./gradlew :runtime-chicory:test                 # Chicory バックエンド単体
-./gradlew :integration-tests:test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト
+./gradlew :integration-tests:test --tests 'wasm2kt.ChicoryDifferentialTest'   # Wasmtime との差分テスト（Chicory）
+./gradlew :integration-tests:test --tests 'wasm2kt.AotPhase2DifferentialTest' # Wasmtime との差分テスト（AOT Phase 2）
 ./gradlew :integration-tests:test --tests 'wasm2kt.conformance.ConformanceTest'   # 公式テストスイート（Chicory）
 ./gradlew :integration-tests:test --tests 'wasm2kt.conformance.AotConformanceTest' # 公式テストスイート（values/・resources/・async/）を AOT で実行
 conformance/update.sh <commit>                 # 公式テストスイートを更新する（そのあと skip.txt を見直す）
@@ -66,12 +70,12 @@ JDK 21 がインストールされていれば、Gradle が自動で見つけま
 * `plan.json` の形式を変えるときは、`decomposer/src/main.rs` の `PLAN_VERSION`、`ComponentPlan.SUPPORTED_VERSION`、および `BuildPlan.SUPPORTED_VERSION` を同時に上げる。
   `decomposer/regenerate-fixtures.sh` で `runtime-chicory/src/test/resources/components/` の分解結果も再生成する
 * gradle-plugin では、設定時（configuration time）に tooling のクラスを参照しない（ADR-0004）。Kotlin プラグインの型も直接使わない
-* 値のバイナリ形式、関数名の解決、ホスト import のキーは Chicory バックエンドと Wasmtime バックエンドで揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら差分テストを通す。例外として、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づくオプトイン `AOT` バックエンドの同期コンポーネント（`usesAsync` が false）では、エクスポートとワールドローカルなホスト import に `WitWriter` と `WitReader` を通さず `DirectCanonicalAbi` と静的直接結合を使う。外部ライブラリと共有する `with` 指定済み interface と非同期コンポーネントは `ComponentBackend` 互換層および共有 `AsyncAbi` 経由で動作し、ADR-0011 のキー規則、ADR-0007 のトラップ・poison、ADR-0008 の資源契約、および `#75` の直列化契約は共通に保つ
+* 値のバイナリ形式、関数名の解決、ホスト import のキーは `AOT`、`CHICORY`、および `Wasmtime` で揃える（ADR-0015、ADR-0011）。Chicory 側の挙動を変えたら `chicorySyncTest` と `prTest` を通す。[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) と [ADR-0024](docs/adr/0024-default-backend-and-chicory-role.md) に基づく既定 `AOT` バックエンドの同期コンポーネント（`usesAsync` が false）では、エクスポートとワールドローカルなホスト import に `WitWriter` と `WitReader` を通さず `DirectCanonicalAbi` と静的直接結合を使う。外部ライブラリと共有する `with` 指定済み interface と非同期コンポーネントは `ComponentBackend` 互換層および共有 `AsyncAbi` 経由で動作し、ADR-0011 のキー規則、ADR-0007 のトラップ・poison、ADR-0008 の資源契約、および `#75` の直列化契約は共通に保つ
 * 汎用ブリッジと型付きブリッジは同じ C ABI / JNI の関数を公開する（`rust-bridge/core` の `export_bridge!`）。resource の規則は `core` の関数を両方から使う。`core` か `TypedBridge.kt` を変えたら `typedBridgeTest` も通す（ADR-0016）
-* Chicory の挙動を直したら `ConformanceTest` も通し、通るようになった項目を `conformance/skip.txt` から消す。AOT バックエンドの配線や実行時を変えた場合は `AotConformanceTest` と `conformance/skip-aot.txt` もあわせて確認する（ADR-0017）
+* Chicory の挙動を直したら `chicorySyncTest` と `prTest`（async）も通し、通るようになった項目を `conformance/skip.txt` から消す。AOT バックエンドの配線や実行時を変えた場合は `prTest` 内の `AotConformanceTest` と `AotPhase2ConformanceTest` および `conformance/skip-aot.txt` もあわせて確認する（ADR-0017）。週次スケジュール等で `chicorySyncTest` が失敗した場合は、直近マージ PR から原因モジュールを切り分けて独立パッチまたは差し戻しで修正し、`prTest` の条件を緩和して回避しない
 * `runtime-chicory` の Canonical ABI は仕様の `trap_if` に従う。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホストの値の誤りは `IllegalArgumentException` / `IllegalStateException`（poison しない）。ゲストのコードを動かす箇所は `guest { }` で囲む（ADR-0007）
 * ホスト定義 resource（world 直下か、import した interface の resource）は、値の境界では rep（整数）で受け渡す。オブジェクトとの対応は生成セッションが束縛する `HostResourceTable` が持ち、drop は `[resource-drop]<name>` の dispatch で伝える。両バックエンドで揃える（ADR-0008）
-* async と WASI 0.3 は Chicory バックエンドおよびオプトイン `AOT` バックエンドで実装し、Wasmtime バックエンドは同期機能の参照実装として維持する（ADR-0005、ADR-0023 Phase 3）
+* async と WASI 0.3 は既定 `AOT` バックエンドおよびオプトアウト `CHICORY` バックエンドでサポートし、Wasmtime バックエンドは同期機能の参照実装として維持する（ADR-0005、ADR-0023 Phase 3、ADR-0024）
 * async（`Concurrency.kt`、`AsyncAbi.kt`、`AsyncBackendHost.kt`）は `:runtime-canonical` で仕様の参照定義（`definitions.py`）を移植した共通実装で、継続を JVM のスレッドで表す（ADR-0018）。async を使わないコンポーネント（`usesAsync` が false）の実行経路と Phase 2 の R8 除去対象クラス境界は変えない。ホストとの境界はコルーチンで、async の状態はインスタンスのスケジューラーのスレッド（`SessionLoop`）だけが触る（ADR-0019）。async を変えたら `ConformanceTest`（`async/`）、`AotConformanceTest`（`async/`）、`AotAsyncE2ETest`、`Wasi03E2ETest`、`AsyncAbiTest`、`SuspendingCallsTest` を通す
 * 生成コードの公開 API（ワールド DSL）を変えるときは、Wasmtime 側と Chicory 側の両方の E2E テストを確認する
 * commit メッセージは Conventional Commits 形式（`feat(scope): ...`、`fix: ...`）。本文に理由を書く
