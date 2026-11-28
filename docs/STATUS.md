@@ -1,6 +1,6 @@
 # プロジェクトの現状とアクションアイテム
 
-> 最終更新: 2026-11-28。対象ブランチは `feat/208-default-aot-backend`。主な変更点は ADR-0024 第二段階として、Gradle プラグインと `ComponentBuild.run` の既定バックエンドを同期・非同期ともに `AOT` へ切り替え、バージョン `0.2.0-SNAPSHOT` への更新および CI・サンプル・ドキュメントを追従させたことです。
+> 最終更新: 2026-11-28。対象ブランチは `perf/205-investigate-art-echobytes1024`。主な変更点は `Medium_Phone_API_36.1` での `echoBytes1024` 再計測と DEX・`oatdump` 解析による [#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) の完了、エピック [#180](https://github.com/chikoski/wasm-component-kotlin/issues/180) クローズの反映、および `AotComponentRuntime` と `CallBenchmark`・`run-on-device.sh` の改善です。
 >
 > このファイルは「今どうなっていて、次に何をやるか」を書く場所です。変わるたびに更新してください。
 > 使い方の説明は [README](../README.md) と [docs/](.)、設計判断の理由は [docs/adr/](adr/) に置き、ここでは重複させずにリンクします。
@@ -108,9 +108,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 | Issue | ID | 内容 |
 | :--- | :--- | :--- |
-| [#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) | — | ARM64 ART エミュレーター上の `echoBytes1024` で起きる中央値逆転の原因調査 |
 | [#206](https://github.com/chikoski/wasm-component-kotlin/issues/206) | — | Phase 3 非同期と WASI 0.3 の AOT コンポーネントにおける R8 ワイヤ層除去の実現性検討 |
-| [#180](https://github.com/chikoski/wasm-component-kotlin/issues/180) | — | R8 と ART 最適化に向けた自作 Core Wasm コンパイラと静的 JVM バックエンドの段階導入。[ADR-0023](adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) と [ADR-0024](adr/0024-default-backend-and-chicory-role.md) に基づき進行 |
 | [#117](https://github.com/chikoski/wasm-component-kotlin/issues/117) | — | WASI 0.3 `wasi:http` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#118](https://github.com/chikoski/wasm-component-kotlin/issues/118) | — | WASI 0.3 `wasi:sockets` ホスト実装の追加。[ADR-0022](adr/0022-wasi03-scope-and-host-configuration.md) で P2 へ分離 |
 | [#77](https://github.com/chikoski/wasm-component-kotlin/issues/77) | — | 信頼できないコンポーネントの実行時間とメモリの上限・中断。前提は README の「安全性の前提」に明記した（#87）。実装は後で優先度を見直す |
@@ -127,6 +125,7 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 
 ### 完了
 
+* ARM64 ART `echoBytes1024` の原因調査と `AotComponentRuntime`・ベンチマーク手順の改善
 * Gradle プラグインの既定バックエンド `AOT` 切り替えと CI・サンプル・ドキュメント追従
 * ADR-0024 第一段階としての ART・非同期計測と Phase 2 適合・厳密検証
 * 自作 AOT バックエンドの Component Model Async および WASI 0.3 対応
@@ -149,6 +148,8 @@ component.wasm ──(Gradle プラグイン)──▶ 分解（wasm 版 decompo
 * ART における文字列と境界呼び出しの最適化と再計測
 * 大規模メソッド分割後の制約と回避策の文書化
 * プルリクエストテンプレートの整備
+
+[#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) では、ARM64 Android 16 エミュレーター `Medium_Phone_API_36.1` 上の `CallBenchmark` で報告された `echoBytes1024` の中央値逆転を調査しました。`dex2oat` の `speed` と `verify` の双方で再計測したところ逆転は再現せず、`oatdump` でも AOT 経路の対象メソッドがすべて ARM64 ネイティブコードへコンパイルされていることを確認しました。以前の実行条件では `run-on-device.sh` が `verify` 状態のまま `MethodTracing` と Perfetto 出力を有効にして連続実行していた点を確認しています。あわせて `AotComponentRuntime` の `writeBytes` デフォルト引数ブリッジ呼び出し除去、`CallBenchmark` 測定ループ内のボックス化と `Blob` 生成の除去、および `run-on-device.sh` の `speed` 事前コンパイルとトレース出力整理を実施し、詳細を [performance.md](explanation/performance.md) へ反映しました。あわせて、全サブイシューと ADR-0024 切り替えまで完了したエピック [#180](https://github.com/chikoski/wasm-component-kotlin/issues/180) のクローズも反映しています。
 
 [#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) では、[ADR-0024](adr/0024-default-backend-and-chicory-role.md) の第二段階として `io.github.wasm2kt` Gradle プラグインおよび `ComponentBuild.run` の既定バックエンドを同期・非同期ともに `AOT` へ切り替えました。バージョンを `0.2.0-SNAPSHOT` へ更新し、未対応 Core Wasm 機能による `AOT` ビルド失敗時には `Wasm2KtBackend.CHICORY` のオプトアウト案内を表示します。また、CI の `native` ジョブを `prTest` と条件付き・週次の `chicorySyncTest` に分離し、`samples/android`、`:benchmarks`、および各ドキュメントと移行ガイドを更新しました。
 

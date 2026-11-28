@@ -51,21 +51,44 @@ class CallBenchmark {
         com.example.wasm2kt.bench.types_aot.withSession(TypesAotComponent) { rule.measureRepeated { op() } }
 
     @Test fun echoName5_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoName("hello") }
-    @Test fun echoBytes16_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(16)) }
-    @Test fun echoBytes1024_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(1024)) }
-    @Test fun echoBytes65536_staticAot_dsl() = typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(Payloads.bytes.getValue(65536)) }
-    @Test fun echoBlob1024_staticAot_dsl() = typesStaticAot {
-        com.example.wasm2kt.bench.types_aot.echoBlob(
-            com.example.wasm2kt.bench.types_aot.Blob(name = "sample", data = Payloads.bytes.getValue(1024), tag = 7u),
-        )
+    @Test fun echoBytes16_staticAot_dsl() {
+        val b = Payloads.bytes.getValue(16)
+        typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(b) }
+    }
+    @Test fun echoBytes1024_staticAot_dsl() {
+        val b = Payloads.bytes.getValue(1024)
+        typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(b) }
+    }
+    @Test fun echoBytes65536_staticAot_dsl() {
+        val b = Payloads.bytes.getValue(65536)
+        typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBytes(b) }
+    }
+    @Test fun echoBlob1024_staticAot_dsl() {
+        val blob = com.example.wasm2kt.bench.types_aot.Blob(name = "sample", data = Payloads.bytes.getValue(1024), tag = 7u)
+        typesStaticAot { com.example.wasm2kt.bench.types_aot.echoBlob(blob) }
     }
 
     @Test fun echoName5_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoName("hello") }
-    @Test fun echoBytes16_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(Payloads.bytes.getValue(16)) }
-    @Test fun echoBytes1024_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(Payloads.bytes.getValue(1024)) }
-    @Test fun echoBytes65536_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(Payloads.bytes.getValue(65536)) }
-    @Test fun echoBlob1024_aot_dsl() = types(TypesComponent) { com.example.wasm2kt.bench.types.echoBlob(Payloads.blob) }
-    @Test fun echoBytes1024_interp_dsl() = types(Payloads.interpreted("types")) { com.example.wasm2kt.bench.types.echoBytes(Payloads.bytes.getValue(1024)) }
+    @Test fun echoBytes16_aot_dsl() {
+        val b = Payloads.bytes.getValue(16)
+        types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(b) }
+    }
+    @Test fun echoBytes1024_aot_dsl() {
+        val b = Payloads.bytes.getValue(1024)
+        types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(b) }
+    }
+    @Test fun echoBytes65536_aot_dsl() {
+        val b = Payloads.bytes.getValue(65536)
+        types(TypesComponent) { com.example.wasm2kt.bench.types.echoBytes(b) }
+    }
+    @Test fun echoBlob1024_aot_dsl() {
+        val blob = Payloads.blob
+        types(TypesComponent) { com.example.wasm2kt.bench.types.echoBlob(blob) }
+    }
+    @Test fun echoBytes1024_interp_dsl() {
+        val b = Payloads.bytes.getValue(1024)
+        types(Payloads.interpreted("types")) { com.example.wasm2kt.bench.types.echoBytes(b) }
+    }
 
     @Test fun echoBytes1024_aot_backend() {
         val backend = TypesComponent.instantiate(null)
