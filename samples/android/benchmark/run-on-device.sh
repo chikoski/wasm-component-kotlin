@@ -10,6 +10,7 @@ apk=build/outputs/apk/androidTest/release/benchmark-release-androidTest.apk
 pkg=com.example.wasm2kt.bench.test
 runner="$pkg/androidx.benchmark.junit4.AndroidBenchmarkRunner"
 suppress="EMULATOR,LOW-BATTERY,UNLOCKED"
+profiling_mode="${BENCH_PROFILING:-None}"
 mkdir -p "$out"
 
 adb install -r -t "$apk"
@@ -30,8 +31,17 @@ adb logcat -d -s wasm2kt-bench:I | grep PHASE > "$out/art-cold-start.txt"
 echo "== device"; cat "$out/device.txt"
 echo "== cold start"; sed 's/^.*PHASE /PHASE /' "$out/art-cold-start.txt"
 
+# Compile ahead of time right before CallBenchmark so cold-start stays comparable to fresh install
+# while steady-state ART benchmarks reflect dex2oat speed code rather than verify+JIT.
+adb shell cmd package compile -m speed -f "$pkg"
+# Clear previous benchmark traces to avoid ENOSPC on emulator storage, and default profiling to None
+# so MethodTracing/Perfetto overhead and I/O contention do not skew steady-state timings.
+adb shell rm -rf "/sdcard/Android/media/$pkg"
+adb shell mkdir -p "/sdcard/Android/media/$pkg"
+
 # Steady state.
 adb shell am instrument -w -r -e class com.example.wasm2kt.bench.CallBenchmark \
-  -e androidx.benchmark.suppressErrors "$suppress" "$runner" | tee "$out/art-calls.txt"
+  -e androidx.benchmark.suppressErrors "$suppress" \
+  -e androidx.benchmark.profiling.mode "$profiling_mode" "$runner" | tee "$out/art-calls.txt"
 adb pull "/sdcard/Android/media/$pkg/" "$out/media" || true
 echo "== benchmark data"; find "$out/media" -name '*benchmarkData.json' -exec cat {} \; || true

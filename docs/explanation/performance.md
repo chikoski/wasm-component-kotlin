@@ -321,7 +321,30 @@ Host JVM での 9 回実行中央値における Phase 1 `aot-p1` と Phase 2 `a
 | `CallBenchmark` `echoBytes1024` 中央値 | 1,325.2 ns | 2,193.5 ns |
 | `CallBenchmark` `echoBlob1024` 中央値 | 2,462.2 ns | 655.9 ns |
 
-ART 上の `echoBytes1024` は最小値が Phase 2 で `748.4 ns`、`CHICORY` で `1,184.4 ns` だったものの、中央値は `CHICORY` のほうが小さく出ました。この中央値逆転の原因調査は [#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) として追跡しています。
+ART 上の `echoBytes1024` は最小値が Phase 2 で `748.4 ns`、`CHICORY` で `1,184.4 ns` だったものの、中央値は `CHICORY` のほうが小さく出ました。この原因調査は [#205](https://github.com/chikoski/wasm-component-kotlin/issues/205) で実施し、以降の再計測結果と要因を次項に整理しています。
+
+#### `#205` の `echoBytes1024` 原因調査と改善後の再計測
+
+同じ `Medium_Phone_API_36.1` 上で `dex2oat` のコンパイル状態、`oatdump` の機械語生成、DEX バイトコード、`logcat`、および再計測の分布を調べた結果、上記の中央値逆転は再計測では再現しませんでした。`#187` 時点で使った `run-on-device.sh` は `cmd package compile -m speed` を実行しない `verify` 状態のままで `CallBenchmark` 全 31 テストを連続実行しており、`benchmark-junit4:1.3.4` で既定で有効になる Perfetto トレースとメソッドトレースの出力が端末側のストレージを消費して `ENOSPC` や強い I/O 競合を引き起こしうる条件になっていました。一方、今回の検証では `CallBenchmark` 全件一括実行を `verify` 状態で再現した際に 11 テストで合計約 794 MB のトレース出力後に `trace_config.pb` 作成で `ENOSPC` が発生しました。
+
+`dex2oat` を `speed` モードで事前適用した上で `oatdump` によりコンパイル結果を検査したところ、`TypesAotComponent$Instance.__export_2_echoBytes`、`Core0FuncGroup_0.func_21`、`AotComponentRuntime.lowerByteArray`、`DirectCanonicalAbi.liftByteArray`、および `LinearMemory.readBytes` と `writeBytes` はいずれも ARM64 ネイティブコードへコンパイルされており、インタプリタフォールバックは見つかりませんでした。
+
+あわせて DEX バイトコードの点検により、呼び出し回数の多い経路で不要な間接呼び出しと測定ループ内の確保が見つかりました。`AotComponentRuntime` の `lowerByteArray` と `lowerString` では `mem.writeBytes` のデフォルト引数により `CanonicalMemory.writeBytes$default` を経由する呼び出しが生成されていたため、4 引数指定の直接呼び出しへ改めました。また、`CallBenchmark` で測定ループ内にあった `Payloads.bytes.getValue` による `Int` ボックス化と `Blob` 生成をループ外へ移動し、`run-on-device.sh` にも `ColdStartProbe` 後の `cmd package compile -m speed -f`、既定での `profiling.mode None` 指定、および計測前の出力ディレクトリ削除を追加しました。
+
+修正後の APK に対して `cmd package compile -m speed -f` と `profiling.mode None` を適用し、出力ディレクトリをテストごとに削除しながら対象メソッドを 1 件ずつ呼び出して、`echoBytes1024` を順序交互で 3 回、あわせて近傍項目を 1 回ずつ再計測した結果を以下に示します。なお、`run-on-device.sh` では既定の `profiling.mode None` で全 31 テストを 1 回の実行へまとめています。
+
+| 修正後の ART 計測項目 | `CHICORY` 最小値 | `CHICORY` 中央値 | `CHICORY` アロケーション | Phase 2 `AOT` 最小値 | Phase 2 `AOT` 中央値 | Phase 2 `AOT` p90 | Phase 2 `AOT` アロケーション |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `add` | 427.0 ns | 469.6 ns | 22 回 | 15.2 ns | 15.6 ns | 16.0 ns | 0 回 |
+| `echoName5` | 1,101.1 ns | 1,184.3 ns | 28 回 | 174.6 ns | 180.9 ns | 195.2 ns | 5 回 |
+| `echoBytes16` | 1,447.0 ns | 1,492.3 ns | 27 回 | 126.8 ns | 138.0 ns | 155.6 ns | 1 回 |
+| `echoBytes1024` 1 回目 | 1,894.7 ns | 1,997.3 ns | 29 回 | 208.3 ns | 285.7 ns | 351.1 ns | 1 回 |
+| `echoBytes1024` 2 回目 | 1,485.4 ns | 1,609.0 ns | 29 回 | 343.1 ns | 376.2 ns | 429.3 ns | 1 回 |
+| `echoBytes1024` 3 回目 | 1,439.7 ns | 1,522.8 ns | 29 回 | 256.8 ns | 286.7 ns | 609.6 ns | 1 回 |
+| `echoBytes65536` | 70,686.0 ns | 78,579.6 ns | 34 回 | 16,102.7 ns | 17,333.7 ns | 19,929.4 ns | 1 回 |
+| `echoBlob1024` | 3,099.0 ns | 3,353.7 ns | 39 回 | 470.1 ns | 504.9 ns | 543.1 ns | 7 回 |
+
+修正後の `echoBytes1024` では Phase 2 `AOT` の中央値が `285.7 ns` から `376.2 ns` の範囲に収まり、`CHICORY` の `1,522.8 ns` から `1,997.3 ns` に対して一貫して短い結果になりました。アロケーション回数も `echoBytes1024` と `echoBytes65536` で 2 回から戻り値 `ByteArray` 分のみの 1 回へ、`echoBlob1024` で 10 回から 7 回へ減っています。なお、修正前の `verify` 状態における単独計測でも Phase 2 `AOT` の `echoBytes1024` 中央値は `262.5 ns` から `338.5 ns`、修正前の `speed` 状態における 3 回計測でも `356.5 ns` から `370.2 ns` であり、いずれの条件でも `AOT` のほうが短く推移しました。
 
 同じ ARM64 Android 16 エミュレーター `Medium_Phone_API_36.1` で `benchmark-release-androidTest.apk` を導入し、`cmd package compile -m speed -f com.example.wasm2kt.bench.test` の後に計算系 5 組を追加計測しました。端末環境は `google/sdk_gphone64_arm64/emu64a:16/BP41.250916.009.A1/14246511:user/release-keys`、アーキテクチャは `aarch64` です。ストレージ枯渇を防ぐため、`am instrument` に `-e androidx.benchmark.suppressErrors EMULATOR,LOW-BATTERY,UNLOCKED` と `-e androidx.benchmark.profiling.mode None` を指定して `CallBenchmark` の対象メソッドを 1 件ずつ実行し、計測ごとに端末側の出力ディレクトリを削除して取得しました。
 

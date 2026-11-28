@@ -143,25 +143,25 @@ open class AotComponentRuntime(
             StringEncoding.UTF8 -> {
                 val bytes = DirectCanonicalAbi.encodeUtf8(s)
                 val ptr = alloc(mem, realloc, 1, bytes.size)
-                if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes)
+                if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes, 0, bytes.size)
                 DirectCanonicalAbi.packPtrLen(ptr, bytes.size)
             }
             StringEncoding.UTF16 -> {
                 val bytes = DirectCanonicalAbi.encodeUtf16Le(s)
                 val ptr = alloc(mem, realloc, 2, bytes.size)
-                if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes)
+                if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes, 0, bytes.size)
                 DirectCanonicalAbi.packPtrLen(ptr, s.length)
             }
             StringEncoding.LATIN1_UTF16 -> {
                 val latin1 = DirectCanonicalAbi.encodeLatin1OrNull(s)
                 if (latin1 != null) {
                     val ptr = alloc(mem, realloc, 2, latin1.size)
-                    if (latin1.isNotEmpty()) mem.writeBytes(ptr, latin1)
+                    if (latin1.isNotEmpty()) mem.writeBytes(ptr, latin1, 0, latin1.size)
                     DirectCanonicalAbi.packPtrLen(ptr, latin1.size)
                 } else {
                     val bytes = DirectCanonicalAbi.encodeUtf16Le(s)
                     val ptr = alloc(mem, realloc, 2, bytes.size)
-                    if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes)
+                    if (bytes.isNotEmpty()) mem.writeBytes(ptr, bytes, 0, bytes.size)
                     DirectCanonicalAbi.packPtrLen(ptr, s.length or DirectCanonicalAbi.UTF16_TAG)
                 }
             }
@@ -170,7 +170,7 @@ open class AotComponentRuntime(
     fun lowerByteArray(mem: LinearMemory, realloc: AotRealloc, bytes: ByteArray): Long {
         val byteLen = DirectCanonicalAbi.checkLowerListLength(bytes.size, 1)
         val ptr = alloc(mem, realloc, 1, byteLen)
-        if (byteLen > 0) mem.writeBytes(ptr, bytes)
+        if (byteLen > 0) mem.writeBytes(ptr, bytes, 0, byteLen)
         return DirectCanonicalAbi.packPtrLen(ptr, bytes.size)
     }
 
