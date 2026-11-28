@@ -1,7 +1,7 @@
 # ドキュメント目次
 
-`wasm2kt` は、WebAssembly コンポーネント（`.wasm` / `.wit`）から Kotlin のホストバインディングを生成します。
-実行バックエンドは **Chicory**（純 JVM、ビルド時コンパイル、Android 対応）と **Wasmtime**（Rust ブリッジによるネイティブ実行）の 2 つです。
+`wasm2kt` は、WebAssembly コンポーネントから Kotlin のホストバインディングを生成します。
+実行バックエンドは純 JVM で動作し Android に対応する `AOT` と `CHICORY`、および Rust ブリッジによるネイティブ実行を行う `Wasmtime` を備えています。Gradle プラグイン `io.github.wasm2kt` では、同期コンポーネントと非同期コンポーネントの双方で自作 `AOT` バックエンドが既定です。
 
 目的と立場に合わせて、以下の入口から読み進めてください。
 
@@ -28,7 +28,7 @@
 
 ### ガイド (`guides/`)
 
-* [バックエンドの選び方](guides/choosing-a-backend.md): Chicory、Wasmtime（汎用ブリッジ）、Wasmtime（型付きブリッジ）の違い
+* [バックエンドの選び方](guides/choosing-a-backend.md): `AOT`、`CHICORY`、および `Wasmtime` の汎用ブリッジと型付きブリッジの違い
 * [ホスト import と interface の共有](guides/host-imports.md): `imports(...)`、`Linker`、ホスト定義 `resource`、既存パッケージへの対応付け（`with`）
 * [リソースと所有権](guides/resources-and-ownership.md): コンポーネント定義 `resource`、`own` と `borrow`、`AutoCloseable`
 * [エラーとトラップ](guides/errors-and-traps.md): `ComponentTrapException`、インスタンスの poison、ホスト側の引数エラーとの違い

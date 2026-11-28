@@ -139,11 +139,23 @@ class ComponentBuildTest {
     }
 
     @Test
-    fun `generated component runs AOT-compiled roundtrip and counter worlds`(@TempDir dir: Path) {
-        val roundtrip = ComponentBuild.run(fixtures.resolve("roundtrip.wasm"), "roundtrip", "com.example.rt", dir.resolve("rt"))
-        val counter = ComponentBuild.run(fixtures.resolve("counter.wasm"), "counter", "com.example.ct", dir.resolve("ct"))
+    fun `generated component runs Chicory-compiled roundtrip and counter worlds`(@TempDir dir: Path) {
+        val roundtrip = ComponentBuild.run(
+            fixtures.resolve("roundtrip.wasm"),
+            "roundtrip",
+            "com.example.rt",
+            dir.resolve("rt"),
+            backend = BuildBackend.CHICORY,
+        )
+        val counter = ComponentBuild.run(
+            fixtures.resolve("counter.wasm"),
+            "counter",
+            "com.example.ct",
+            dir.resolve("ct"),
+            backend = BuildBackend.CHICORY,
+        )
 
-        // AOT output: one machine class per core module, plus .meta and plan resources.
+        // Chicory output: one machine class per core module, plus .meta and plan resources.
         assertTrue(Files.exists(roundtrip.classesDir.resolve("com/example/rt/wasm2kt/roundtrip/Core0Machine.class")))
         assertTrue(Files.exists(roundtrip.resourcesDir.resolve("com/example/rt/wasm2kt/roundtrip/plan.json")))
 
@@ -255,13 +267,12 @@ class ComponentBuildTest {
     }
 
     @Test
-    fun `ComponentBuild run with AOT backend emits class and data outputs without plan or meta`(@TempDir dir: Path) {
+    fun `ComponentBuild run defaults to AOT backend and emits class and data outputs without plan or meta`(@TempDir dir: Path) {
         val output = ComponentBuild.run(
             component = fixtures.resolve("counter.wasm"),
             componentName = "counter-aot",
             packageName = "com.example.aotbuild",
             workDir = dir,
-            backend = BuildBackend.AOT,
         )
         assertTrue(Files.exists(output.kotlinDir.resolve("com/example/aotbuild/CounterAotComponent.kt")))
         val classFiles = Files.walk(output.classesDir).use { s -> s.filter { it.toString().endsWith(".class") }.toList() }

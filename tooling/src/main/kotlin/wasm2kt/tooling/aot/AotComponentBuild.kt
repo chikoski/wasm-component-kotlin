@@ -5,11 +5,14 @@ import wasm2kt.tooling.Decomposer
 import java.nio.file.Path
 
 /**
- * Complete build-time pipeline for a single synchronous component using the Phase 1 AOT static
- * wiring backend (`wasm` -> decompose -> AOT core `.class` + `.data` -> static Kotlin `<Name>Component`).
+ * Complete build-time pipeline for a single component using the custom AOT backend
+ * (`wasm` -> decompose -> AOT core `.class` + `.data` -> static Kotlin `<Name>Component`),
+ * emitting Phase 2 direct static wiring for unmapped synchronous components and Phase 3 async
+ * or mapped compatibility wiring where needed.
  *
- * Unlike [ComponentBuild], nothing in [ComponentBuild.Output.resourcesDir] contains `plan.json` or
- * `.meta` files, and the generated Kotlin has zero Chicory or `kotlinx.serialization` dependencies.
+ * Unlike the Chicory backend in [ComponentBuild], nothing in [ComponentBuild.Output.resourcesDir]
+ * contains `plan.json` or `.meta` files, and the generated Kotlin has zero Chicory or
+ * `kotlinx.serialization` dependencies.
  */
 object AotComponentBuild {
     fun run(

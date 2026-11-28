@@ -1,14 +1,15 @@
 # ビルドの順序
 
-このドキュメントでは、Gradle プラグイン（Chicory バックエンド）と CLI（Wasmtime 汎用ブリッジ / 型付きブリッジ）におけるビルド時の成果物と実行順序を説明します。
+このドキュメントでは、Gradle プラグインと CLI におけるビルド時の成果物と実行順序を説明します。
 
 ## 1. 成果物と使用時期
 
 | 成果物 | 作成元 | 使用時期 | 使用先 |
 | :--- | :--- | :--- | :--- |
 | `wit.json`（WIT の AST） | `decomposer` / `wasm-tools component wit --json` | ビルド時 | Kotlin コード生成器、型付きブリッジ生成器 |
-| `plan.json`、`coreN.wasm` | `decomposer` | ビルド時・実行時 | `CoreModuleCompiler`、`ChicoryComponent` |
-| マシンクラス（`.class`）、`.meta` | `CoreModuleCompiler`（Chicory build-time compiler） | 実行時 | `ChicoryComponent` |
+| `plan.json`、`coreN.wasm` | `decomposer` | ビルド時、`CHICORY` 実行時 | `AotComponentCompiler`、`CoreModuleCompiler`、`ChicoryComponent` |
+| 静的 JVM クラス、`.data` | `AotComponentCompiler`（既定 `AOT`） | 実行時 | `runtime-aot`、生成 `<Name>Component` |
+| マシンクラス（`.class`）、`.meta` | `CoreModuleCompiler`（`CHICORY` 用） | 実行時 | `ChicoryComponent` |
 | 生成された Kotlin コード | `generator` / `ComponentCodegen` | ビルド時（コンパイル） | Kotlin コンパイラ |
 | `rust-bridge`（汎用 `cdylib`） | `cargo build --manifest-path rust-bridge/Cargo.toml` | 実行時 | `runtime-wasmtime` |
 | 型付きブリッジのクレートと `cdylib` | `wasm2kt bridge`（`TypedBridge` + `cargo build`） | 実行時 | `runtime-wasmtime` |

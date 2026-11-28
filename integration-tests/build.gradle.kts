@@ -51,6 +51,34 @@ tasks.test {
     workingDir = rootDir
 }
 
+// PR-mandatory suite (ADR-0024): AOT tests, Wasmtime reference tests, and Chicory async conformance tests.
+tasks.register<Test>("prTest") {
+    description = "Runs the PR-mandatory integration tests (AOT, Wasmtime, and Chicory async conformance)."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { excludeTags("typed-bridge", "chicory-sync") }
+    exclude("wasm2kt/ChicoryDifferentialTest.class", "wasm2kt/ChicoryDifferentialJniTest.class")
+    jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
+    workingDir = rootDir
+}
+
+// Secondary Chicory sync suites: triggered conditionally on relevant path changes and weekly schedule (ADR-0024).
+tasks.register<Test>("chicorySyncTest") {
+    description = "Runs the Chicory synchronous differential and conformance suites."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { excludeTags("chicory-async") }
+    include(
+        "wasm2kt/ChicoryDifferentialTest.class",
+        "wasm2kt/ChicoryDifferentialJniTest.class",
+        "wasm2kt/conformance/ConformanceTest.class",
+    )
+    jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
+    workingDir = rootDir
+}
+
 // The tests on a typed Wasmtime bridge (ADR-0016) build one with cargo and load it instead of the
 // generic bridge, so they run in their own JVM.
 val typedBridgeTest by tasks.registering(Test::class) {

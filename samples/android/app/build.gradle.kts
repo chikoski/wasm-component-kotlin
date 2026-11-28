@@ -1,5 +1,3 @@
-import wasm2kt.gradle.Wasm2KtBackend
-
 plugins {
     id("com.android.application")
     id("androidx.baselineprofile")
@@ -49,16 +47,6 @@ wasm2kt {
         register("counter") {
             source.set(file("src/main/wasm/counter.wasm"))
             packageName.set("com.example.wasm2kt.sample.counter")
-        }
-        register("roundtrip-aot") {
-            source.set(file("src/main/wasm/roundtrip.wasm"))
-            packageName.set("com.example.wasm2kt.sample.roundtrip_aot")
-            backend.set(Wasm2KtBackend.AOT)
-        }
-        register("counter-aot") {
-            source.set(file("src/main/wasm/counter.wasm"))
-            packageName.set("com.example.wasm2kt.sample.counter_aot")
-            backend.set(Wasm2KtBackend.AOT)
         }
     }
 }

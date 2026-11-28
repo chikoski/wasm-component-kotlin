@@ -146,7 +146,7 @@ object ComponentBuild {
         worldName: String? = null,
         interfaceMappings: Map<String, String> = emptyMap(),
         libraryClasspath: List<Path> = emptyList(),
-        backend: BuildBackend = BuildBackend.CHICORY,
+        backend: BuildBackend = BuildBackend.AOT,
     ): Output {
         if (backend == BuildBackend.AOT) {
             val aot = wasm2kt.tooling.aot.AotComponentBuild.run(

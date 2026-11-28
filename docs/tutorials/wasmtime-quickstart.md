@@ -64,7 +64,7 @@ plugins {
 }
 
 dependencies {
-    implementation("io.github.wasm2kt:runtime-wasmtime:0.1.0-SNAPSHOT")
+    implementation("io.github.wasm2kt:runtime-wasmtime:0.2.0-SNAPSHOT")
 }
 
 kotlin {

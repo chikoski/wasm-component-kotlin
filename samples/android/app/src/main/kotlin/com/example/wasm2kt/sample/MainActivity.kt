@@ -40,7 +40,7 @@ class MainActivity : Activity() {
             insets
         }
 
-        text.text = "Running WebAssembly components on Chicory…"
+        text.text = "Running WebAssembly components on AOT…"
         // First use instantiates the components; keep it off the main thread.
         Thread {
             val started = System.nanoTime()

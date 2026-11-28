@@ -26,7 +26,7 @@ Usage: wasm2kt generate [<options>] [<input-path>]
 | `-p`, `--package=<text>` | 必須 | 生成される Kotlin コードのベースパッケージ名 |
 | `-w`, `--world=<text>` | 任意 | 生成対象の WIT `world` 名。WIT に複数の world がある場合に指定します |
 | `--from-json` | 任意 | 入力を `wasm-tools component wit --json` の出力として直接読み込みます（`wasm-tools` を呼び出しません） |
-| `--no-wasmtime` | 任意 | Wasmtime（FFM / JNI）セッション実装の出力を省略します（Chicory バックエンドのみを使う場合） |
+| `--no-wasmtime` | 任意 | Wasmtime の FFM と JNI セッション実装の出力を省略します。 |
 | `--with=<interface=package>` | 任意（複数可） | import した完全修飾 interface（例: `wasi:filesystem/types@0.3.0=wasm2kt.wasi.wasi.filesystem.types`）を生成せず、指定した既存パッケージの型と `Linker.add` を使います（[ADR-0014](../adr/0014-interface-mappings.md)） |
 | `--library=<path>` | 任意（複数可） | `--interfaces-only` で生成したライブラリの jar またはリソースディレクトリ。マニフェストに記載された interface を world が同じバージョンで import していれば、生成せずにそのパッケージを使います |
 | `--no-library-interfaces` | 任意 | `--library` のマニフェストによる自動対応付けを無効にし、`--with` の明示指定のみを適用します |

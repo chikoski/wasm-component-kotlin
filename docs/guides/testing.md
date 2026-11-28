@@ -4,7 +4,7 @@
 
 ## 1. Gradle プラグインの生成物をそのまま単体テストで動かす（推奨）
 
-Chicory バックエンドは純 JVM で動作するため、Android プロジェクトのローカルユニットテスト（`testDebugUnitTest`）でも、エミュレーターや実機なしで実際のコンポーネントをそのまま実行できます。
+Gradle プラグインの生成物は既定で `AOT` バックエンドを使用する純 JVM コードであり、Android プロジェクトのローカルユニットテスト（`testDebugUnitTest`）でも、エミュレーターや実機なしで実際のコンポーネントをそのまま実行できます。
 
 ```kotlin
 // app/src/test/kotlin/com/example/app/CounterTest.kt
@@ -78,7 +78,7 @@ class MockArithmeticTest {
 
 ## 3. `ChicoryComponent.fromDirectory` で分解結果をインタプリタ実行する
 
-AOT コンパイルを経ずに、`Decomposer` が出力したディレクトリ（`plan.json` と `core*.wasm`）を Chicory のインタプリタで直接読み込んで実行できます。`wasm2kt` 自身の統合テストや、分解結果の検証に使います。
+AOT コンパイルを経ずに、`Decomposer` が出力したディレクトリ（`plan.json` と `core*.wasm`）を Chicory のインタプリタで直接読み込んで実行できます。`wasm2kt` 自身の統合テストや、分解結果の検証に使います。なお、同期コンポーネントの生成エントリーポイントを既定の `AOT` のまま生成している場合、`<Name>Component` 向けヘルパーは `AotComponentFactory` を受け取るため、`ChicoryComponent.fromDirectory` を渡すコンポーネントでは `backend.set(Wasm2KtBackend.CHICORY)` を指定してください。
 
 ```kotlin
 import wasm2kt.runtime.chicory.ChicoryComponent

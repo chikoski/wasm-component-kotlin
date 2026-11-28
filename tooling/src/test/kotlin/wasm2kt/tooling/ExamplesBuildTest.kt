@@ -98,19 +98,19 @@ class ExamplesBuildTest {
             assertTrue("Session closed properly: true" in output, "04 output:\n$output")
         }
 
-        // 05: Chicory + Gradle plugin example
-        val output05 = runChicoryExample(tempDir, "05-chicory-gradle-plugin", "roundtrip.wasm", "roundtrip", "com.example.chicory")
+        // 05: Gradle plugin example on default AOT backend
+        val output05 = runPluginExample(tempDir, "05-chicory-gradle-plugin", "roundtrip.wasm", "roundtrip", "com.example.chicory")
         assertTrue("scaled = 42, tag = ERR#404, count = 15" in output05, "05 output:\n$output05")
 
-        // 06: Async streams, futures, and suspending host imports on Chicory
-        val output06 = runChicoryExample(tempDir, "06-async-streams", "async-pipeline.wasm", "async-pipeline", "com.example.asyncpipeline")
+        // 06: Async streams, futures, and suspending host imports on default AOT backend
+        val output06 = runPluginExample(tempDir, "06-async-streams", "async-pipeline.wasm", "async-pipeline", "com.example.asyncpipeline")
         assertTrue(
             "numbers = [10, 11, 12, 13], doubledSum = 92, count = 3, formatted = [#1:ALPHA, #2:BETA, #3:GAMMA]" in output06,
             "06 output:\n$output06",
         )
 
-        // 07: Standard WASI 0.3 CLI export (`wasi:cli/run`) with mounted directory read/write on Chicory
-        val output07 = runChicoryExample(
+        // 07: Standard WASI 0.3 CLI export (`wasi:cli/run`) with mounted directory read/write on default AOT backend
+        val output07 = runPluginExample(
             tempDir = tempDir,
             dirName = "07-wasi-cli",
             wasmFile = "wasi-cli.wasm",
@@ -406,7 +406,7 @@ class ExamplesBuildTest {
         )
     }
 
-    private fun runChicoryExample(
+    private fun runPluginExample(
         tempDir: Path,
         dirName: String,
         wasmFile: String,

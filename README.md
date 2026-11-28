@@ -2,13 +2,14 @@
 
 [![CI](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/chikoski/wasm-component-kotlin/actions/workflows/ci.yml)
 
-WebAssembly コンポーネント（`.wasm` / `.wit`）から、Kotlin のホストバインディングを生成するツールとランタイムです。
-生成される Kotlin の呼び出しコード（ワールド DSL）は共通で、用途に応じて 2 つの実行バックエンドを使い分けられます。
+WebAssembly コンポーネントから Kotlin のホストバインディングを生成するツールとランタイムです。
+生成される呼び出しコードのワールド DSL は共通で、用途に応じて純 JVM 実行バックエンドの `AOT` と `CHICORY`、およびネイティブ実行の `Wasmtime` を利用できます。
 
 | バックエンド | 実行方式 | 主な対象環境 | 入口 |
 | :--- | :--- | :--- | :--- |
-| **Chicory** | Gradle プラグインでビルド時に core モジュールを JVM バイトコードへコンパイルし、純 JVM で実行 | **Android（minSdk 26+）**、ネイティブライブラリを使わない JVM | `withSession(XxxComponent)` |
-| **Wasmtime** | CLI でバインディングを生成し、Rust 製ブリッジ（Java 21 FFM / JNI）でネイティブ実行 | デスクトップ / サーバー JVM（JDK 21+） | `withSession(wasmPath)` |
+| AOT | Gradle プラグインでビルド時に core モジュールを静的 JVM バイトコードへ直接コンパイルする既定バックエンド | Android minSdk 26 以上、純 JVM | `withSession(XxxComponent)` |
+| CHICORY | Gradle プラグインで Chicory バイトコードコンパイルを実行するオプトアウト用バックエンド | 未対応 Core Wasm 機能や大規模関数のフォールバック対象 | `withSession(XxxComponent)` |
+| Wasmtime | CLI でバインディングを生成し、Rust 製ブリッジでネイティブ実行 | デスクトップ JVM およびサーバー JVM | `withSession(wasmPath)` |
 
 選択の目安は [バックエンドの選び方](docs/guides/choosing-a-backend.md) を参照してください。
 
@@ -40,7 +41,7 @@ world arithmetic {
 ```kotlin
 import com.example.arithmetic.*
 
-// Chicory バックエンド（Gradle プラグインで生成された ArithmeticComponent を渡す）
+// Gradle プラグインで生成された ArithmeticComponent を渡す
 withSession(ArithmeticComponent) {
     val sum = add(20, 7)   // 27
     val diff = sub(50, 8)  // 42
@@ -98,7 +99,7 @@ withSession(CounterComponent) {
 
 要件は使う経路によって異なります。詳細は [互換性とバージョン要件](docs/reference/compatibility.md) にまとめています。
 
-| 項目 | Chicory + Gradle プラグイン | Wasmtime + CLI |
+| 項目 | AOT と CHICORY の Gradle プラグイン | Wasmtime + CLI |
 | :--- | :--- | :--- |
 | ビルド時の JDK | JDK 21 以上（Gradle デーモン） | JDK 21 以上 |
 | 実行時の環境 | JVM 17 以上 / Android `minSdk 26` 以上 | JVM 21 以上（FFM は `--enable-preview --enable-native-access=ALL-UNNAMED`） |

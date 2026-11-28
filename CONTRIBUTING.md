@@ -23,10 +23,11 @@ cargo build --release --manifest-path rust-bridge/Cargo.toml
 
 # テストの実行
 ./gradlew test                                  # 全モジュールのユニットテスト + integration-tests
-./gradlew check                                 # 上記 + animalsniffer + gradle-plugin の functionalTest
+./gradlew check -x :integration-tests:test      # integration-tests 以外の全体検査（animalsniffer と functionalTest を含む）
+./gradlew :integration-tests:prTest             # PR 向けの既定統合テスト（AOT 全体 + Chicory async/fromDirectory）
+./gradlew :integration-tests:chicorySyncTest    # Chicory 同期スイート（ChicoryDifferential と Conformance sync）
+./gradlew :runtime-aot:test                     # AOT ランタイム単体テスト
 ./gradlew :runtime-chicory:test                 # Chicory バックエンド単体テスト
-./gradlew :integration-tests:test --tests 'wasm2kt.ChicoryDifferentialTest'       # Wasmtime との差分テスト
-./gradlew :integration-tests:test --tests 'wasm2kt.conformance.ConformanceTest'   # Component Model 公式テストスイート
 ./gradlew :integration-tests:typedBridgeTest    # 型付きブリッジでの差分テスト（cargo でビルドして別 JVM で実行）
 
 # Android サンプルのテスト・ビルド
@@ -60,6 +61,12 @@ WASM2KT_FIXTURES="$(pwd)/fixtures" cargo mutants --manifest-path decomposer/Carg
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decomposer`・`native`・`android`・`emulator` の 5 ジョブで構成されています。`decomposer` ジョブは、同梱の `dist/wasm2kt-decompose.wasm` とテスト用の分解結果が最新でない場合に失敗します。
 
+### CI の Chicory スイート分岐と週次実行の失敗対処
+
+`native` ジョブでは、PR ごとに `:integration-tests:prTest` と `:integration-tests:typedBridgeTest` を必須で実行します。`prTest` には AOT バックエンドのテスト全般に加えて、`Chicory` の非同期実行と `ChicoryComponent.fromDirectory` 経路の最小検証を含めています。一方、`ChicoryDifferentialTest`、`ChicoryDifferentialJniTest`、および `ConformanceTest` の `values` と `resources` スイートは `:integration-tests:chicorySyncTest` へ分離しました。これらは `runtime-chicory/`、`runtime-canonical/`、`decomposer/`、および `integration-tests/` などに変更がある PR でのみ実行し、あわせて `main` への push と週次スケジュールで全件実行します。
+
+週次スケジュール実行などで `chicorySyncTest` が失敗した場合は、まず直近に `main` へ統合された PR の差分を確認し、`runtime-canonical`、`decomposer`、`runtime-wasmtime`、および公式適合スイートのどの変更に起因するか切り分けます。ローカルでは汎用ブリッジをビルドした上で `./gradlew :integration-tests:chicorySyncTest` を単体実行して再現します。修正は切り分けた原因に対する独立のパッチまたは差し戻し PR として提出し、`test` や `prTest` を緩和して回避しません。
+
 ## 3. 守ること（設計・実装の不変条件）
 
 * **JVM 17 と Android API 26 の維持**: `runtime-api`、`runtime-canonical`、`runtime-aot`、および `runtime-chicory` には JVM 17 を超える API や `java.lang.foreign` を持ち込まないでください。また Android API 26 に存在しない API も使えません（`./gradlew check` の `animalsnifferMain` で検査されます）
@@ -67,10 +74,10 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）は `jvm`・`decom
 * **Wasmtime の LTS 固定**: `decomposer` の `wasmtime-environ` と `rust-bridge` の `wasmtime` は、同じ LTS の同じパッチ版（現在は `=48.0.10`）に揃えます（[ADR-0010](docs/adr/0010-wasmtime-lts.md)）
 * **Gradle プラグインのクラスローダー分離**: `gradle-plugin` では設定時（configuration time）に `tooling` のクラスや Kotlin Gradle Plugin の型を直接参照しないでください（[ADR-0004](docs/adr/0004-isolated-tooling-classloader.md)）
 * **両バックエンドの整合性**:
-  * 値のバイナリ形式（`WitWriter` / `WitReader`）、関数名の解決、ホスト import のキーは Chicory と Wasmtime で揃えます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)、[ADR-0015](docs/adr/0015-binary-value-boundary.md)）。Chicory 側の挙動を変えたら `ChicoryDifferentialTest` と `ConformanceTest` を通してください。例外として、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づく `AOT` バックエンドの同期コンポーネントでは、エクスポートとワールドローカルなホスト import に `DirectCanonicalAbi` と静的直接結合を使用し、`with` 指定の外部ライブラリ interface のみ `AotMappedImportBridge` で `Linker` へ中継します。非同期コンポーネントでは `AotComponentBackend` と `:runtime-canonical` の共有 `AsyncAbi` を使用します。いずれの経路でも ADR-0011 のキー規則、ADR-0007 のトラップと poison、および ADR-0008 の資源寿命規則は維持します
+  * 値のバイナリ形式（`WitWriter` / `WitReader`）、関数名の解決、ホスト import のキーは `AOT`、`CHICORY`、および `Wasmtime` で揃えます（[ADR-0011](docs/adr/0011-qualified-interface-keys.md)、[ADR-0015](docs/adr/0015-binary-value-boundary.md)）。Chicory 側の挙動を変えたら `chicorySyncTest` と `prTest` を通してください。[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) に基づく既定 `AOT` バックエンドの同期コンポーネントでは、エクスポートとワールドローカルなホスト import に `DirectCanonicalAbi` と静的直接結合を使用し、`with` 指定の外部ライブラリ interface のみ `AotMappedImportBridge` で `Linker` へ中継します。非同期コンポーネントでは `AotComponentBackend` と `:runtime-canonical` の共有 `AsyncAbi` を使用します。いずれの経路でも ADR-0011 のキー規則、ADR-0007 のトラップと poison、および ADR-0008 の資源寿命規則は維持します
   * 汎用ブリッジと型付きブリッジは `rust-bridge/core` の `export_bridge!` で同じ C ABI / JNI を公開します。`core` または `TypedBridge.kt` を変更したら `typedBridgeTest` を通してください（[ADR-0016](docs/adr/0016-typed-bridge-from-wit-json.md)）
   * Canonical ABI の検査は仕様の `trap_if` に従います。ゲスト起因の違反は `ComponentTrapException`（インスタンスを poison）、ホスト側の引数エラーは `IllegalArgumentException` / `IllegalStateException`（poison しない）とし、ゲストのコードを動かす箇所は `guest { }` で囲みます（[ADR-0007](docs/adr/0007-canonical-abi-validation.md)）
-  * async と WASI 0.3 は Chicory バックエンドおよびオプトイン `AOT` バックエンドで実装し、Wasmtime バックエンドは同期機能の参照実装として維持します（[ADR-0005](docs/adr/0005-async-and-wasi03-chicory-only.md)、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) Phase 3）
+  * async と WASI 0.3 は既定の `AOT` バックエンドおよびオプトアウト用の `CHICORY` バックエンドでサポートし、Wasmtime バックエンドは同期機能の参照実装として維持します（[ADR-0005](docs/adr/0005-async-and-wasi03-chicory-only.md)、[ADR-0023](docs/adr/0023-custom-wasm-compiler-and-static-jvm-backend.md) Phase 3、[ADR-0024](docs/adr/0024-default-backend-and-chicory-role.md)）
 
 ## 4. コミット・PR・ドキュメントの更新
 

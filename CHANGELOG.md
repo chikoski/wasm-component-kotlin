@@ -4,7 +4,23 @@
 
 ## Unreleased (`main`)
 
-### 破壊的変更 (Breaking Changes)
+### 破壊的変更
+
+* バージョンの `0.2.0-SNAPSHOT` への更新
+* Gradle プラグイン `io.github.wasm2kt` の既定バックエンド変更
+* `ComponentBuild.run` の既定バックエンド変更
+* 同期 `AOT` コンポーネントの生成エントリーポイント分離
+* 未対応 Core Wasm 機能検出時の `AOT` ビルド停止
+
+[ADR-0024](docs/adr/0024-default-backend-and-chicory-role.md) と [#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) に基づき、バージョンを `0.1.0-SNAPSHOT` から `0.2.0-SNAPSHOT` へ更新しました。この変更に伴い、`io.github.wasm2kt` Gradle プラグインおよび `ComponentBuild.run` の既定バックエンドは同期コンポーネントと非同期コンポーネントの双方で `AOT` へ切り替わりました。従来の Chicory バックエンドは `Wasm2KtBackend.CHICORY` または `BuildBackend.CHICORY` による明示的オプトアウトとして維持しています。
+
+同期コンポーネントの既定が `AOT` となったため、`openSession`、`withSession`、および `withSessionBlocking` は `ComponentBackendFactory` ではなく `AotComponentFactory` を受け取るシグネチャに変わりました。`ComponentBackendFactory` を渡していた呼び出し元や、テストで `ChicoryComponent.fromDirectory` を直接渡していたコードでは、対象コンポーネントに `Wasm2KtBackend.CHICORY` を明示するか、生成 `Session` の呼び出しへ移行する必要があります。なお、`with` 指定による外部ライブラリ境界には引き続き `AotMappedImportBridge` を使用し、非同期コンポーネントおよび WASI 0.3 コンポーネントのエントリーポイントも引き続き `ComponentBackendFactory` を実装しています。
+
+既定の `AOT` バックエンドでサポート外の Core Wasm 機能が検出された場合は、`UnsupportedWasmFeatureException` によりビルドが停止します。エラーメッセージには `wasm2kt` ブロックまたは対象コンポーネント設定へ `backend.set(Wasm2KtBackend.CHICORY)` を指定する回避策が表示されます。また、`addRuntimeDependency.set(false)` を指定して依存関係を手動管理する場合は、`runtime-chicory` の代わりに `runtime-aot` を指定する必要があります。
+
+* `gradle-plugin` 内部ヘルパー型の非公開化
+
+[#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) に伴い、`wasm2kt.gradle.ComponentTasks` を `internal` へ変更しました。プラグイン内部の配線補助型であり、通常のビルドスクリプト DSL には影響しません。
 
 * `runtime-api`、`runtime-chicory`、`runtime-wasi` のターゲット JVM を 17 へ引き上げ
 
@@ -49,6 +65,7 @@
 
 ### 主な追加・改善
 
+* [#208](https://github.com/chikoski/wasm-component-kotlin/issues/208) に伴う CI・サンプル・ドキュメントの既定 `AOT` バックエンド追従
 * 自作 AOT バックエンドの Component Model Async および WASI 0.3 対応
 * World DSL と自作 AOT バックエンドの静的 Canonical ABI 直結
 * Gradle プラグインの AOT バックエンド切替と R8・ART 比較の追加

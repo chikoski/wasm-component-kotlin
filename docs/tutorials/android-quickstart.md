@@ -1,7 +1,7 @@
 # Android クイックスタート
 
 このガイドでは、Gradle プラグイン `io.github.wasm2kt` を使って `.wasm` コンポーネントをビルド時に JVM バイトコードへコンパイルし、Android アプリから呼び出す手順を説明します。
-実行には純 JVM の WebAssembly ランタイムである [Chicory](https://github.com/dylibso/chicory) を使うため、JNI やネイティブライブラリ（`.so`）は不要です。
+実行には純 JVM で動作する既定の `AOT` バックエンドを使うため、JNI やネイティブライブラリは不要です。未対応の Core Wasm 機能を含むコンポーネントでは、`Wasm2KtBackend.CHICORY` を選択して `Chicory` ランタイムへ切り替えられます。
 
 動くサンプル一式は [`samples/android`](../../samples/android/README.md) にあります。`png-glitch-component.wasm` を使ったカメラアプリの実例は、独立リポジトリ [chikoski/pixelfray](https://github.com/chikoski/pixelfray) で公開しています。
 
@@ -35,7 +35,7 @@ dependencyResolutionManagement {
     }
 }
 
-// io.github.wasm2kt:runtime-chicory などの依存関係をこのリポジトリのサブプロジェクトに置き換える
+// io.github.wasm2kt:runtime-aot などの依存関係をこのリポジトリのサブプロジェクトに置き換える
 includeBuild("/path/to/wasm-component-kotlin")
 include(":app")
 ```
@@ -86,7 +86,7 @@ wasm2kt {
 
 プラグインは以下を自動で行います。
 
-* `io.github.wasm2kt:runtime-chicory` を `implementation` に追加します
+* `io.github.wasm2kt:runtime-aot` を `implementation` に追加します
 * `.wasm` を分解して core モジュールを JVM バイトコードにコンパイルし、生成した jar を依存関係に追加します
 * Kotlin のバインディングと、セッションの入口となる `CounterComponent` オブジェクトを生成し、各 Android バリアントのソースセットに登録します
 
@@ -113,7 +113,7 @@ fun runCounter(): Int =
     }
 ```
 
-> 初回の `openSession` / `withSession` では、コンパイル済みクラスのロードと `.meta` の解析が行われます（コンポーネントの大きさにより数十〜数百 ms）。Android アプリでは、初回の呼び出しをメインスレッドの外（`Dispatchers.Default` など）で行うことを推奨します（[性能とサイズ](../explanation/performance.md#4-初回のインスタンス化)）。
+> 初回の `openSession` / `withSession` では、コンパイル済みクラスと静的データセグメントのロードが行われます。コンポーネントの大きさに応じて初期化時間が変わるため、Android アプリでは初回の呼び出しをメインスレッドの外、たとえば `Dispatchers.Default` 上で行うことを推奨します（[性能とサイズ](../explanation/performance.md#4-初回のインスタンス化)）。
 
 ## 次のステップ
 

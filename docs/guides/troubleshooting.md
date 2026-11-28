@@ -52,7 +52,11 @@
 
 ---
 
-## Chicory バックエンド（ビルド時・実行時）
+## AOT バックエンド（既定）と CHICORY バックエンド（ビルド時・実行時）
+
+### 既定の AOT バックエンドで `UnsupportedWasmFeatureException` が発生する
+
+ビルド時にコンポーネントが `AOT` バックエンド未対応の Core Wasm 機能や命令を含んでいると、コンパイルタスクが `UnsupportedWasmFeatureException` を送出して失敗します。メッセージには対象のコアモジュール番号、関数番号、機能名または命令名に加えて、回避策として `Wasm2KtBackend.CHICORY` への切り替え手順が表示されます。対象コンポーネント、またはプロジェクト全体の `wasm2kt` 拡張ブロックで `backend.set(Wasm2KtBackend.CHICORY)` を指定してください。
 
 ### ビルド時に `uses features the Chicory backend does not support yet` と警告が出る
 

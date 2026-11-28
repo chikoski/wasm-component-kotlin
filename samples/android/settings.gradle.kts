@@ -19,7 +19,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "wasm2kt-android-sample"
 
-// Substitutes io.github.wasm2kt:runtime-chicory with the project in this repository.
+// Substitutes io.github.wasm2kt:runtime-* with the project in this repository.
 includeBuild("../..")
 include(":app")
 include(":benchmark")

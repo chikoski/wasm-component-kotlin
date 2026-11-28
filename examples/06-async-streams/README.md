@@ -1,6 +1,6 @@
 # Example 06: 非同期処理とストリームのパイプライン実行
 
-WIT の `async func`、`stream`、`future` を組み合わせたコンポーネントを Pure JVM 上の Chicory で実行するサンプルです。ホスト側で中断可能な関数を提供し、双方向のストリームと結果の future を Kotlin Coroutines として扱います。
+WIT の `async func`、`stream`、`future` を組み合わせたコンポーネントを Pure JVM 上で実行するサンプルです。ホスト側で中断可能な関数を提供し、双方向のストリームと結果の future を Kotlin Coroutines として扱います。
 
 ## 対象となる WIT 定義
 
@@ -24,7 +24,7 @@ world async-pipeline {
 
 ## Gradle の設定
 
-[build.gradle.kts](build.gradle.kts) では `io.github.wasm2kt` プラグインを適用し、`async-pipeline` コンポーネントを登録しています。プラグインが `wasm2ktCompileAsyncPipeline` タスクとバインディング生成タスクを自動構成します。生成された `AsyncPipelineComponent` とサポートコードは `runtime-chicory` 上で動作するため、ネイティブライブラリは不要です。
+[build.gradle.kts](build.gradle.kts) では `io.github.wasm2kt` プラグインを適用し、`async-pipeline` コンポーネントを登録しています。プラグインが `wasm2ktCompileAsyncPipeline` タスクとバインディング生成タスクを自動構成します。生成された `AsyncPipelineComponent` とサポートコードは既定の `AOT` バックエンドである `runtime-aot` 上で動作するため、ネイティブライブラリは不要です。
 
 このプロジェクトに含まれる主要な機能は次のとおりです。
 

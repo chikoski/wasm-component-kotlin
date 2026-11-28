@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   jvm:
-    name: JVM (Chicory, Wasmtime)
+    name: JVM (AOT, Chicory, Wasmtime)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -29,7 +29,7 @@ jobs:
         with:
           workspaces: rust-bridge
       - run: cargo build --locked --release --manifest-path rust-bridge/Cargo.toml
-      - run: ./gradlew -Pwasm2kt.bench :benchmarks:bench :benchmarks:coldStart
+      - run: ./gradlew -Pwasm2kt.bench :benchmarks:bench :benchmarks:coldStart :benchmarks:benchAsync :benchmarks:coldStartAsync
       # Wasmtime's typed bridge (ADR-0016), built with cargo; its own JVM loads only that library.
       - run: ./gradlew -Pwasm2kt.bench :benchmarks:benchTyped
       # HotSpot does not JIT methods over 8000 bytes of bytecode; large wasm functions compile to such
@@ -44,6 +44,9 @@ jobs:
           path: |
             benchmarks/build/results/
             benchmarks/build/bench-gen/build-stats.tsv
+            benchmarks/build/bench-gen/aot-build-stats.tsv
+            benchmarks/build/bench-async-gen/async-build-stats.tsv
+            benchmarks/build/bench-async-gen/async-aot-build-stats.tsv
 
   art:
     name: ART (emulator)

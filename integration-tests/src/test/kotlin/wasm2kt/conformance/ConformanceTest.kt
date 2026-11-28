@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.DynamicContainer
 import org.junit.jupiter.api.DynamicNode
 import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestFactory
 import org.opentest4j.TestAbortedException
 import wasm2kt.runtime.ComponentBackend
@@ -48,8 +49,10 @@ class ConformanceTest {
         ?: Paths.get(System.getProperty("user.home"), ".cargo", "bin", "wasm-tools").takeIf { Files.isExecutable(it) }?.toString()
         ?: "wasm-tools"
 
-    /** The directories of the suite run so far; validation and linking later. */
-    private val directories = listOf("values", "resources", "async")
+    private val asyncDirectories = listOf("async")
+
+    /** Sync reference suites run via `:integration-tests:chicorySyncTest` (tagged `chicory-sync`). */
+    private val syncDirectories = listOf("values", "resources")
 
     private val skips: Map<String, String> = buildMap {
         Files.readAllLines(suite.resolve("nyi.txt")).map { it.trim() }.filter { it.startsWith("./") }
@@ -68,8 +71,17 @@ class ConformanceTest {
         snapshot.forEach { it.close() }
     }
 
+    @Tag("chicory-async")
     @TestFactory
-    fun `component model reference tests on Chicory`(): List<DynamicNode> = directories.flatMap { dir ->
+    fun `component model async reference tests on Chicory`(): List<DynamicNode> =
+        runDirectories(asyncDirectories)
+
+    @Tag("chicory-sync")
+    @TestFactory
+    fun `component model sync reference tests on Chicory`(): List<DynamicNode> =
+        runDirectories(syncDirectories)
+
+    private fun runDirectories(directories: List<String>): List<DynamicNode> = directories.flatMap { dir ->
         Files.list(suite.resolve(dir)).use { s -> s.filter { it.name.endsWith(".wast") }.sorted().toList() }.map { wast ->
             val rel = suite.relativize(wast).invariantSeparatorsPathString
             val fileSkip = skips[rel]

@@ -1,23 +1,27 @@
 # アーキテクチャ
 
-このドキュメントでは、`wasm2kt` のモジュール構成と、コード生成・Chicory バックエンド・Wasmtime ブリッジの全体構造を説明します。
+このドキュメントでは、`wasm2kt` のモジュール構成と、コード生成、`AOT` と `CHICORY` の純 JVM バックエンド、および `Wasmtime` ブリッジの全体構造を説明します。
 ビルド順序の詳細は [ビルドの順序](build-pipeline.md)、関数呼び出し時の処理は [呼び出しの経路](call-path.md)、個別の設計判断は [ADR](../adr/README.md) を参照してください。
 
 ## 1. 全体像
 
-`wasm2kt` は、**ビルド時のパイプライン**（WIT 解析・コンポーネント分解・AOT コンパイル・コード生成）と、**実行時のランタイム**（共通のバイナリ境界 + Chicory または Wasmtime）に分かれています。
+`wasm2kt` は、ビルド時のパイプラインと実行時のランタイムに分かれています。Gradle プラグインでは既定の `AOT` バックエンドにより、同期コンポーネントは直接結合経路、非同期コンポーネントは共有 `AsyncAbi` 経路で実行されます。オプトアウトで `CHICORY` を選択した場合や、CLI で `Wasmtime` を選択した場合は、共通のバイナリ境界 `WitWriter` と `WitReader` を通じて各バックエンドへ接続されます。
 
 ```mermaid
 flowchart TD
     subgraph Build["ビルド時"]
         WASM[".wasm / .wit"] -->|"decomposer (wasm) または wasm-tools"| WIT["wit.json + plan.json + coreN.wasm"]
-        WIT -->|"ast + generator"| KT["生成 Kotlin コード (World DSL)"]
-        WIT -->|"tooling (CoreModuleCompiler)"| JAR["AOT コンパイル済み jar (Chicory 用)"]
+        WIT -->|"ast + generator / tooling"| KT["生成 Kotlin コード (World DSL)"]
+        WIT -->|"tooling (AotComponentCompiler)"| AOTJAR["静的 JVM クラス + .data (既定 AOT 用)"]
+        WIT -->|"tooling (CoreModuleCompiler)"| JAR["Chicory AOT jar + .meta + plan.json (CHICORY 用)"]
         WIT -->|"tooling (TypedBridge) + cargo"| TB["型付きブリッジ cdylib (任意)"]
     end
 
     subgraph Runtime["実行時"]
+        KT -->|"DirectCanonicalAbi (AOT 同期)"| AOTRT["runtime-aot (既定)"]
+        AOTRT --> AOTJAR
         KT -->|"WitWriter / WitReader (バイナリ境界)"| API["runtime-api"]
+        API -->|"ComponentBackend (AOT 非同期)"| AOTRT
         API -->|"ComponentBackend"| CH["runtime-chicory (Chicory JVM / Android)"]
         CH --> JAR
         API -->|"FFM / JNI"| WT["runtime-wasmtime"]
@@ -36,8 +40,8 @@ flowchart TD
 | `gradle-plugin` | `io.github.wasm2kt` プラグイン。Gradle Worker の独立クラスローダーで `tooling` を実行（[ADR-0004](../adr/0004-isolated-tooling-classloader.md)） | 21 |
 | `runtime-api` | 生成コードと各バックエンドの契約（`ComponentBackend`、`Linker`、`HostResourceTable`、バイナリ形式の `WitWriter` / `WitReader`） | 17（Android API 26 互換） |
 | `runtime-canonical` | バックエンド間で共有する Canonical ABI と Async ABI の共通層で、`DirectCanonicalAbi`、`CanonicalAbi`、`AsyncAbi`、`ComponentGuard`、`HandleTable` を提供します | 17（Android API 26 互換） |
-| `runtime-aot` | 自作 `AOT` バックエンド向けの実行時基盤で、`AotComponentFactory`、`AotComponentRuntime`、`AotMappedImportBridge`、`LinearMemory`、`AotComponentBackend` を提供します | 17（Android API 26 互換） |
-| `runtime-chicory` | `plan.json` を再生して Canonical ABI の lift / lower を行う純 JVM バックエンド（`ChicoryComponent`） | 17（Android API 26 互換） |
+| `runtime-aot` | 既定の `AOT` バックエンド向けの実行時基盤で、`AotComponentFactory`、`AotComponentRuntime`、`AotMappedImportBridge`、`LinearMemory`、`AotComponentBackend` を提供します | 17（Android API 26 互換） |
+| `runtime-chicory` | `CHICORY` オプトアウト経路およびテスト用の `plan.json` 再生バックエンドで、`ChicoryComponent` を提供します | 17（Android API 26 互換） |
 | `runtime-wasmtime` | Wasmtime ブリッジの Kotlin 側（`FfmWasmtimeBridge`、`JniWasmtimeBridge`、`BridgeLibrary`） | 21（`--enable-preview`） |
 | `decomposer/` | `wasmtime-environ` を使って `.wasm` を core モジュールと `plan.json`・`wit.json` に分解する Rust ツール。`wasm32-wasip1` にビルドしたバイナリを `tooling` に同梱（[ADR-0002](../adr/0002-wasmtime-environ-decomposer.md)） | — |
 | `rust-bridge/` | Wasmtime ブリッジの Rust ワークスペース。共通部 `core/`（`wasm2kt-bridge-core`）と汎用ブリッジの `cdylib` | — |
@@ -49,9 +53,9 @@ flowchart TD
 * **パッケージと World の配置**: world の関数・`Session`・`withSession`・`imports(...)` は指定パッケージのトップレベルに生成し（[ADR-0012](../adr/0012-world-at-package-top-level.md)）、import / export した interface は `<base>.<ns>.<pkg>.<iface>` および `<base>.exports.<ns>.<pkg>.<iface>` に配置します（[ADR-0011](../adr/0011-qualified-interface-keys.md)）
 * **型に沿ったバイナリ境界（[ADR-0015](../adr/0015-binary-value-boundary.md)）**: 生成コードとバックエンドの間では、リフレクションや JSON を使わず、各型に対して静的に生成された `WitWriter` / `WitReader` の読み書きコードでバイト列をやり取りします。これにより、生成コードは `runtime-api` のみに依存してコンパイルでき、`ByteArray` や `String` は要素ごとの変換なしにまとめてコピーされます
 
-## 4. Chicory バックエンド (`decomposer` + `tooling` + `runtime-chicory`)
+## 4. CHICORY バックエンド (`decomposer` + `tooling` + `runtime-chicory`)
 
-Android やネイティブライブラリを使わない環境向けのバックエンドです（[ADR-0001](../adr/0001-chicory-backend-for-android.md)）。
+`Wasm2KtBackend.CHICORY` を明示選択した場合や、`ChicoryComponent.fromDirectory` を使う場合に使用されるオプトアウト用の純 JVM バックエンドです（[ADR-0001](../adr/0001-chicory-backend-for-android.md)、[ADR-0024](../adr/0024-default-backend-and-chicory-role.md)）。`AOT` 未対応の Core Wasm 拡張機能を使うコンポーネントや、メソッド分割に依存する大規模関数を含んだコンポーネントで選択します。
 
 1. **分解 (`decomposer`)**: `wasmtime-environ`（Wasmtime 48 LTS）でコンポーネントを平坦化し、core モジュール群（`core0.wasm` …）、インスタンス化手順（`plan.json`）、WIT 定義（`wit.json`）を出力します。分解ツール自体を `wasm32-wasip1` にコンパイルして `tooling` に同梱し、ビルド時に Chicory 上で動かすため、利用者に Rust や `wasm-tools` は不要です
 2. **AOT コンパイル (`CoreModuleCompiler` + `JvmMethodSplitter`)**: Chicory の build-time compiler とメソッド分割により、各 core モジュールを JVM バイトコードの `Machine` クラスと `.meta` に変換して jar にまとめます
